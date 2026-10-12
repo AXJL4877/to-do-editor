@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "fps": 30,
+  "playhead": 0,
+  "duration": 43.8,
+  "media": [
+    {
+      "id": "b032434b-12eb-496e-9469-3c82bb26043d",
+      "name": "纯文字展示.mp4",
+      "path": "data/untitled/media/b032434b-12eb-496e-9469-3c82bb26043d_纯文字展示.mp4",
+      "duration": 43.8,
+      "width": 1920,
+      "height": 1080
+    }
+  ],
+  "tracks": [
+    {
+      "id": "v1",
+      "name": "视频1",
+      "kind": "video",
+      "muted": false,
+      "locked": false,
+      "clips": [
+        {
+          "id": "00d89624-fb24-4d05-999d-60d3c5f48412",
+          "mediaId": "b032434b-12eb-496e-9469-3c82bb26043d",
+          "start": 0,
+          "duration": 43.8,
+          "offset": 0,
+          "rate": 1
+        }
+      ]
+    },
+    {
+      "id": "a1",
+      "name": "对白",
+      "kind": "audio",
+      "muted": false,
+      "locked": false,
+      "clips": []
+    },
+    {
+      "id": "sfx1",
+      "name": "音效",
+      "kind": "sfx",
+      "muted": false,
+      "locked": false,
+      "clips": []
+    }
+  ]
+}

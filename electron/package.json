@@ -1,0 +1,15 @@
+{
+  "name": "to-do-electron",
+  "private": true,
+  "version": "0.0.0",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "desktop": "tsc -p tsconfig.json && electron . --no-sandbox --disable-gpu"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "electron": "^33.4.11",
+    "typescript": "~5.8.2"
+  }
+}

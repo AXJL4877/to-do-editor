@@ -1,0 +1,15 @@
+node_modules/
+dist/
+
+# 本机 FFmpeg 二进制，体积大，不入库
+backend/ffmpeg/
+
+# 工程里的媒体文件
+data/**/media/
+*.mp4
+
+# Electron 本地排查日志
+electron/*.log
+electron/ver*.txt
+electron/ver*.err
+electron/electron-run*.log
