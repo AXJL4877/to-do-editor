@@ -1,7 +1,7 @@
 mod process;
 #[cfg(test)]
 mod tests;
-pub(crate) use process::{capture, execute};
+pub(crate) use process::{capture, capture_cancellable, execute};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]

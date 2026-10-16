@@ -9,7 +9,10 @@ mod widgets;
 pub use peaks::{PeakStrip, PeaksCache};
 pub use theme::{button, install as install_theme, Btn, BG, COLORS, MUTED, TEXT};
 pub use thumbs::ThumbCache;
-pub use widgets::{draw_close_prompt, draw_editor, draw_projects, MonitorHole};
+pub use widgets::{
+    close_project_settings, draw_close_prompt, draw_editor, draw_projects, project_settings_open,
+    MonitorHole,
+};
 
 #[cfg(test)]
 pub(crate) fn test_view(

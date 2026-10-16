@@ -51,6 +51,22 @@ impl EditorController {
         if let Some(editor) = workspace.editor() {
             let project = editor.project();
             self.timeline.reconcile(project);
+            if self
+                .library
+                .selected
+                .as_ref()
+                .is_some_and(|id| !project.media.iter().any(|media| &media.id == id))
+            {
+                self.library.selected = None;
+            }
+            if self
+                .library
+                .selected_folder
+                .as_ref()
+                .is_some_and(|id| !project.folders.iter().any(|folder| &folder.id == id))
+            {
+                self.library.selected_folder = None;
+            }
             self.sync_output_frame(project.width, project.height);
         }
     }
@@ -120,12 +136,125 @@ impl EditorController {
                 AppUpdate::default()
             }
             Intent::LibrarySelect(id) => {
+                let folder_id = workspace.editor().and_then(|editor| {
+                    editor
+                        .project()
+                        .media
+                        .iter()
+                        .find(|media| media.id == id)
+                        .and_then(|media| media.folder_id.clone())
+                });
+                if let Some(editor) = workspace.editor() {
+                    if let Some(folder_id) = &folder_id {
+                        expand_ancestors(&mut self.library.expanded, editor.project(), folder_id);
+                        self.library.expanded.insert(folder_id.clone());
+                    }
+                }
+                self.library.selected_folder = folder_id;
                 self.library.selected = Some(id);
                 self.focus = EditorFocus::Library;
                 AppUpdate::default()
             }
             Intent::LibraryQuery(query) => {
                 self.library.query = query;
+                AppUpdate::default()
+            }
+            Intent::LibrarySelectFolder(id) => {
+                if let Some(folder_id) = &id {
+                    if let Some(editor) = workspace.editor() {
+                        expand_ancestors(&mut self.library.expanded, editor.project(), folder_id);
+                    }
+                }
+                self.library.selected_folder = id;
+                self.library.selected = None;
+                self.focus = EditorFocus::Library;
+                AppUpdate::default()
+            }
+            Intent::LibraryToggleFolder(id) => {
+                if !self.library.expanded.remove(&id) {
+                    self.library.expanded.insert(id);
+                }
+                self.focus = EditorFocus::Library;
+                AppUpdate::default()
+            }
+            Intent::LibraryCreateFolder { name } => {
+                self.focus = EditorFocus::Library;
+                let parent_id = self.library.selected_folder.clone();
+                if let Some(parent) = &parent_id {
+                    self.library.expanded.insert(parent.clone());
+                }
+                let id = format!("f{}", uuid::Uuid::new_v4().as_simple());
+                self.library.selected = None;
+                self.library.selected_folder = Some(id.clone());
+                workspace.dispatch(AppAction::Editor(EditorCommand::Edit(
+                    EditCommand::CreateFolder {
+                        id,
+                        name,
+                        parent_id,
+                    },
+                )))
+            }
+            Intent::LibraryRenameFolder { id, name } => {
+                self.focus = EditorFocus::Library;
+                workspace.dispatch(AppAction::Editor(EditorCommand::Edit(
+                    EditCommand::RenameFolder { id, name },
+                )))
+            }
+            Intent::LibraryDeleteFolder { id } => {
+                self.focus = EditorFocus::Library;
+                if self.library.selected_folder.as_deref() == Some(id.as_str()) {
+                    let parent = workspace.editor().and_then(|editor| {
+                        editor
+                            .project()
+                            .folders
+                            .iter()
+                            .find(|folder| folder.id == id)
+                            .and_then(|folder| folder.parent_id.clone())
+                    });
+                    self.library.selected_folder = parent;
+                }
+                self.library.expanded.remove(&id);
+                workspace.dispatch(AppAction::Editor(EditorCommand::Edit(
+                    EditCommand::DeleteFolder { id },
+                )))
+            }
+            Intent::LibraryMoveFolder { id, parent_id } => {
+                self.focus = EditorFocus::Library;
+                if let Some(parent) = &parent_id {
+                    self.library.expanded.insert(parent.clone());
+                }
+                workspace.dispatch(AppAction::Editor(EditorCommand::Edit(
+                    EditCommand::MoveFolder { id, parent_id },
+                )))
+            }
+            Intent::LibraryMoveMedia {
+                media_id,
+                folder_id,
+            } => {
+                self.focus = EditorFocus::Library;
+                if let Some(folder) = &folder_id {
+                    self.library.expanded.insert(folder.clone());
+                }
+                workspace.dispatch(AppAction::Editor(EditorCommand::Edit(
+                    EditCommand::MoveMedia {
+                        media_id,
+                        folder_id,
+                    },
+                )))
+            }
+            Intent::OpenSourceMonitor { media_id } => {
+                self.focus = EditorFocus::Library;
+                workspace.dispatch(AppAction::Editor(EditorCommand::OpenSourceMonitor {
+                    media_id,
+                }))
+            }
+            Intent::ShowProgramMonitor => {
+                workspace.dispatch(AppAction::Editor(EditorCommand::ShowProgramMonitor))
+            }
+            Intent::ShowSourceMonitor => {
+                workspace.dispatch(AppAction::Editor(EditorCommand::ShowSourceMonitor))
+            }
+            Intent::DeleteSelection { .. } if self.focus == EditorFocus::Library => {
                 AppUpdate::default()
             }
             Intent::DeleteSelection { ripple } => workspace.dispatch(AppAction::Editor(
@@ -282,7 +411,13 @@ impl EditorController {
             Intent::SetProjectFps { fps } => workspace.dispatch(AppAction::Editor(
                 EditorCommand::Edit(EditCommand::SetFps { fps }),
             )),
-            Intent::ImportPressed => workspace.dispatch(AppAction::ChooseImport),
+            Intent::SetMediaScaleMode { mode } => workspace.dispatch(AppAction::Editor(
+                EditorCommand::Edit(EditCommand::SetMediaScaleMode { mode }),
+            )),
+            Intent::ImportPressed => {
+                workspace.set_import_folder(self.library.selected_folder.clone());
+                workspace.dispatch(AppAction::ChooseImport)
+            }
             Intent::Save => workspace.dispatch(AppAction::Save),
             Intent::Back => workspace.dispatch(AppAction::Back),
             Intent::RequestClose => workspace.dispatch(AppAction::RequestClose),
@@ -309,7 +444,27 @@ impl EditorController {
             | Intent::DeleteTrack { .. }
             | Intent::Key { .. }
             | Intent::Wheel { .. }
-            | Intent::Viewport { .. }) => self.timeline_input(workspace, other),
+            | Intent::Viewport { .. }) => {
+                let mut update = AppUpdate::default();
+                if matches!(
+                    &other,
+                    Intent::SelectClip { .. }
+                        | Intent::BoardPointerDown { .. }
+                        | Intent::LanePointerDown { .. }
+                        | Intent::MarqueePointerDown { .. }
+                        | Intent::ClipPointerDown { .. }
+                ) {
+                    update.effects.extend(
+                        workspace
+                            .dispatch(AppAction::Editor(EditorCommand::ShowProgramMonitor))
+                            .effects,
+                    );
+                }
+                let timeline = self.timeline_input(workspace, other);
+                update.effects.extend(timeline.effects);
+                update.new_clips.extend(timeline.new_clips);
+                update
+            }
             Intent::PreviewPointer { .. }
             | Intent::PreviewViewport { .. }
             | Intent::PreviewSourceAspect { .. }
@@ -325,6 +480,34 @@ impl EditorController {
         self.select_inserted(workspace, &update.new_clips);
         update
     }
+}
+
+fn expand_ancestors(
+    expanded: &mut std::collections::HashSet<String>,
+    project: &todo_core::Project,
+    folder_id: &str,
+) {
+    let mut current = Some(folder_id);
+    let mut guard = 0;
+    while let Some(id) = current {
+        if let Some(folder) = project.folders.iter().find(|folder| folder.id == id) {
+            if let Some(parent) = &folder.parent_id {
+                expanded.insert(parent.clone());
+                current = Some(parent.as_str());
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+        guard += 1;
+        if guard > project.folders.len() + 1 {
+            break;
+        }
+    }
+}
+
+impl EditorController {
     fn snapped_placement(
         &self,
         editor: &todo_application::EditorSession,

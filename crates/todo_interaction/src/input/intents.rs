@@ -1,5 +1,5 @@
 use todo_application::CloseChoice;
-use todo_core::{ClipTransform, TextContent, TrackKind};
+use todo_core::{ClipTransform, MediaScaleMode, TextContent, TrackKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EditorFocus {
@@ -60,6 +60,33 @@ pub enum Intent {
     },
     LibrarySelect(String),
     LibraryQuery(String),
+    /// `None` selects the library root.
+    LibrarySelectFolder(Option<String>),
+    LibraryToggleFolder(String),
+    LibraryCreateFolder {
+        name: String,
+    },
+    LibraryRenameFolder {
+        id: String,
+        name: String,
+    },
+    LibraryDeleteFolder {
+        id: String,
+    },
+    LibraryMoveFolder {
+        id: String,
+        parent_id: Option<String>,
+    },
+    LibraryMoveMedia {
+        media_id: String,
+        folder_id: Option<String>,
+    },
+    /// Open library media in the source monitor (double-click).
+    OpenSourceMonitor {
+        media_id: String,
+    },
+    ShowProgramMonitor,
+    ShowSourceMonitor,
     PlaceMedia {
         media_id: String,
         track_id: Option<String>,
@@ -186,6 +213,9 @@ pub enum Intent {
     },
     SetProjectFps {
         fps: f64,
+    },
+    SetMediaScaleMode {
+        mode: MediaScaleMode,
     },
     ImportPressed,
     Save,

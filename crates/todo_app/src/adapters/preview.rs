@@ -3,13 +3,18 @@ use super::{
     paths::{preview_host_exe, resolve_media_path},
 };
 use eframe::egui;
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Instant,
+};
 use todo_application::{AudioClockSample, PreviewCommand};
 use todo_preview::{
     AlignGuide, AudioClip, HostEvent, PreviewHost, PreviewLayer as HostLayer, ScreenSlot,
     TransformGizmo, VisualTransform,
 };
 use todo_ui::MonitorHole;
+
+mod proxies;
 
 pub struct PreviewBridge {
     host: Option<PreviewHost>,
@@ -21,6 +26,12 @@ pub struct PreviewBridge {
     viewport: Option<todo_preview::PreviewViewport>,
     source_generation: u64,
     source_path: Option<String>,
+    /// Parent is (or was) minimized; keep the popup hidden until we can track the hole again.
+    iconic: bool,
+    /// Remaining frames of forced repaint so the popup tracks the restore animation.
+    restore_repaints: u8,
+    sources: proxies::PreviewSources,
+    started: Instant,
 }
 impl PreviewBridge {
     pub fn new(repo: &Path) -> Self {
@@ -34,6 +45,10 @@ impl PreviewBridge {
             viewport: None,
             source_generation: 0,
             source_path: None,
+            iconic: false,
+            restore_repaints: 0,
+            sources: Default::default(),
+            started: Instant::now(),
         }
     }
     pub fn ensure(&mut self) -> Result<bool, String> {
@@ -49,7 +64,15 @@ impl PreviewBridge {
         self.guides = None;
         self.viewport = None;
         self.source_path = None;
+        self.source_generation = 0;
+        self.iconic = false;
+        self.restore_repaints = 0;
+        self.sources.reset_presentation();
         Ok(true)
+    }
+    /// True while the parent is restoring from minimize — paint every frame with the UI.
+    pub fn syncing_restore(&self) -> bool {
+        self.iconic || self.restore_repaints > 0
     }
     pub fn poll(&self) -> Option<HostEvent> {
         self.host.as_ref()?.try_recv()
@@ -75,6 +98,10 @@ impl PreviewBridge {
         for command in commands {
             let result = match command {
                 PreviewCommand::Path(path) => {
+                    self.sources.reset_presentation();
+                    let _ = self
+                        .sources
+                        .take_changed(self.started.elapsed().as_secs_f64());
                     self.gizmo = None;
                     self.guides = None;
                     let generation = self.source_generation.wrapping_add(1);
@@ -102,31 +129,17 @@ impl PreviewBridge {
                     opacity: t.opacity,
                 }),
                 PreviewCommand::Layers(layers) => {
-                    self.gizmo = None;
-                    self.guides = None;
-                    let generation = self.source_generation.wrapping_add(1);
-                    self.source_generation = generation;
-                    self.source_path = layers.last().map(|layer| layer.path.clone());
-                    let host_layers: Vec<HostLayer> = layers
-                        .into_iter()
-                        .map(|layer| HostLayer {
-                            path: resolve_media_path(&self.repo, &layer.path)
-                                .to_string_lossy()
-                                .into_owned(),
-                            media_time: layer.media_time,
-                            transform: VisualTransform {
-                                x: layer.transform.x,
-                                y: layer.transform.y,
-                                scale: layer.transform.scale,
-                                scale_x: layer.transform.scale_x,
-                                scale_y: layer.transform.scale_y,
-                                opacity: layer.transform.opacity,
-                            },
-                        })
-                        .collect();
-                    host.set_layers(&host_layers)
+                    self.sources
+                        .layers(layers, self.started.elapsed().as_secs_f64());
+                    // Flush after the loop so transport and picture in one
+                    // application update select one consistent representation.
+                    Ok(())
                 }
-                PreviewCommand::Transport { time, playing } => host.transport(time, playing),
+                PreviewCommand::Transport { time, playing } => {
+                    self.sources
+                        .transport(time, playing, self.started.elapsed().as_secs_f64());
+                    host.transport(time, playing)
+                }
                 PreviewCommand::Audio(clips) => host.set_audio(
                     &clips
                         .into_iter()
@@ -146,7 +159,56 @@ impl PreviewBridge {
             };
             result.map_err(|e| e.to_string())?;
         }
-        Ok(())
+        self.refresh_edit_sources()
+    }
+
+    pub fn install_edit_proxy(&mut self, source: String, proxy: PathBuf) {
+        self.sources.install(source, proxy);
+    }
+
+    pub fn clear_edit_sources(&mut self) {
+        self.sources = Default::default();
+    }
+
+    pub fn finish_scrub(&mut self) -> Result<(), String> {
+        self.sources.finish_scrub();
+        self.refresh_edit_sources()
+    }
+
+    /// Settling must also run without new UI input, so the precise original
+    /// replaces an editing proxy after the user pauses on a time.
+    pub fn refresh_edit_sources(&mut self) -> Result<(), String> {
+        let Some(host) = &self.host else {
+            return Ok(());
+        };
+        let Some(layers) = self
+            .sources
+            .take_changed(self.started.elapsed().as_secs_f64())
+        else {
+            return Ok(());
+        };
+        self.gizmo = None;
+        self.guides = None;
+        self.source_generation = self.source_generation.wrapping_add(1);
+        self.source_path = self.sources.top_source().map(str::to_owned);
+        let host_layers: Vec<HostLayer> = layers
+            .into_iter()
+            .map(|layer| HostLayer {
+                path: resolve_media_path(&self.repo, &layer.path)
+                    .to_string_lossy()
+                    .into_owned(),
+                media_time: layer.media_time,
+                transform: VisualTransform {
+                    x: layer.transform.x,
+                    y: layer.transform.y,
+                    scale: layer.transform.scale,
+                    scale_x: layer.transform.scale_x,
+                    scale_y: layer.transform.scale_y,
+                    opacity: layer.transform.opacity,
+                },
+            })
+            .collect();
+        host.set_layers(&host_layers).map_err(|e| e.to_string())
     }
     pub fn sync_popup(
         &mut self,
@@ -162,6 +224,22 @@ impl PreviewBridge {
         if self.hwnd != Some(id) && host.hwnd(id).is_ok() {
             self.hwnd = Some(id);
             self.slot = None;
+        }
+        let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        if minimized {
+            // Hide in place — do not shrink to the iconic client rect, or restore
+            // will grow the popup from a center stub out of sync with the UI.
+            self.iconic = true;
+            self.restore_repaints = 0;
+            Self::hide_keeping_geometry(host, &mut self.slot);
+            return;
+        }
+        if self.iconic {
+            self.iconic = false;
+            // Follow the window restore animation frame-for-frame with egui layout.
+            self.restore_repaints = 45;
+        } else if self.restore_repaints > 0 {
+            self.restore_repaints -= 1;
         }
         let (rect, visible) = match hole {
             Some(h) => (
@@ -183,6 +261,22 @@ impl PreviewBridge {
         };
         if self.slot != Some(slot) && host.size_screen(slot).is_ok() {
             self.slot = Some(slot);
+        }
+    }
+
+    fn hide_keeping_geometry(host: &PreviewHost, slot: &mut Option<ScreenSlot>) {
+        let Some(previous) = *slot else {
+            return;
+        };
+        if !previous.visible {
+            return;
+        }
+        let hidden = ScreenSlot {
+            visible: false,
+            ..previous
+        };
+        if host.size_screen(hidden).is_ok() {
+            *slot = Some(hidden);
         }
     }
     /// Transient selection decoration is projected after viewport inputs have been
@@ -262,5 +356,18 @@ mod tests {
         assert_eq!(bridge.source_path(8), Some("data/media/source.mp4"));
         bridge.source_path = None;
         assert_eq!(bridge.source_path(8), None);
+    }
+
+    #[test]
+    fn restore_tracking_requests_fast_repaints_with_the_ui() {
+        let mut bridge = PreviewBridge::new(Path::new("."));
+        assert!(!bridge.syncing_restore());
+        bridge.iconic = true;
+        assert!(bridge.syncing_restore());
+        bridge.iconic = false;
+        bridge.restore_repaints = 3;
+        assert!(bridge.syncing_restore());
+        bridge.restore_repaints = 0;
+        assert!(!bridge.syncing_restore());
     }
 }

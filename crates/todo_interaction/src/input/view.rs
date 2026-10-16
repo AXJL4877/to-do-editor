@@ -73,6 +73,23 @@ impl EditorController {
         }
         let properties = crate::inspector::project_properties(project, self.timeline.selected_id());
         let duration = project_duration(project);
+        let source = editor.source_monitor();
+        let source_duration = source
+            .and_then(|s| project.media.iter().find(|m| m.id == s.media_id))
+            .map(|m| m.duration.max(0.0))
+            .unwrap_or(0.0);
+        let showing_source = editor.monitor_pane() == todo_application::MonitorPane::Source
+            && source.is_some();
+        let current_time = if showing_source {
+            source.map(|s| s.time).unwrap_or(0.0)
+        } else {
+            editor.playhead()
+        };
+        let shown_duration = if showing_source {
+            source_duration
+        } else {
+            duration
+        };
         EditorViewModel {
             library: self.library.view(project),
             focus: self.focus,
@@ -83,17 +100,20 @@ impl EditorController {
             status: editor.status().map(status_text),
             project_name: editor.project_name().into(),
             clip_name: picture.name,
-            current_time: editor.playhead(),
-            duration,
+            current_time,
+            duration: shown_duration,
             sequence_duration: project.duration,
             output_width: project.width,
             output_height: project.height,
-            time_label: fmt_clock(editor.playhead()),
-            duration_label: fmt_clock(duration),
+            media_scale: project.media_scale,
+            time_label: fmt_clock(current_time),
+            duration_label: fmt_clock(shown_duration),
             playing: editor.playing(),
             can_play: editor.can_play(),
             importing: editor.importing(),
             monitor_active: picture.active,
+            monitor_pane: editor.monitor_pane(),
+            source_available: source.is_some(),
             poll_clock: editor.playing(),
             clock_epoch: editor.clock_epoch(),
             timeline,
@@ -106,6 +126,23 @@ impl EditorController {
     /// changes, without rebuilding timeline capabilities each frame.
     pub fn preview_view(&self, editor: &EditorSession) -> PreviewView {
         let picture = editor.picture();
+        if editor.monitor_pane() == todo_application::MonitorPane::Source
+            && editor.source_monitor().is_some()
+        {
+            let projection = self
+                .preview_viewport
+                .projection(self.preview_size, self.output_frame);
+            return PreviewView {
+                clip_id: None,
+                transform: picture.transform,
+                aspect: picture.aspect,
+                editable: false,
+                selection: None,
+                projection,
+                viewport: self.preview_viewport,
+                align_guides: Vec::new(),
+            };
+        }
         let layers = resolve_layers(editor.project(), editor.playhead());
         // Prefer a selected layer so lower-track video stays a movable element.
         let focus = self

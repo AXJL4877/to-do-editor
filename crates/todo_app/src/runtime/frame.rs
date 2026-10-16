@@ -5,13 +5,21 @@ use todo_application::{EditorCommand, Route, CLOCK_POLL_SECS};
 use todo_interaction::{status_text, Intent, PreviewPointerKind};
 use todo_preview::PreviewNavigationKind as Navigation;
 use todo_preview::{HostEvent, PreviewPointerKind as HostPointer};
-use todo_ui::{draw_close_prompt, draw_editor, draw_projects, BG};
+use todo_ui::{
+    close_project_settings, draw_close_prompt, draw_editor, draw_projects, project_settings_open,
+    BG,
+};
 
 impl eframe::App for App {
     fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {
         BG.to_normalized_gamma_f32()
     }
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let pixels_per_point = ctx.pixels_per_point();
+        ctx.input(|input| {
+            self.window_state
+                .observe(input.viewport(), pixels_per_point)
+        });
         if let Some(hwnd) = window::viewport_hwnd(frame) {
             window::apply_dark_frame(hwnd);
         }
@@ -26,6 +34,10 @@ impl eframe::App for App {
             let update = self.workspace.on_event(event);
             self.handle(update, ctx);
         }
+        self.sync_edit_proxies(ctx);
+        if self.workspace.route() != Route::Editor || self.workspace.close_prompt() {
+            close_project_settings(ctx);
+        }
         let now = self.now();
         if self.workspace.route() == Route::Editor && now - self.last_preview_attempt >= 2.0 {
             self.last_preview_attempt = now;
@@ -38,9 +50,10 @@ impl eframe::App for App {
                 Err(e) => self.notice(format!("预览：{e}")),
             }
         }
+        let preview_input_blocked = self.workspace.close_prompt() || project_settings_open(ctx);
         while let Some(event) = self.preview.poll() {
             if let HostEvent::PreviewNavigation(input) = event {
-                if self.workspace.close_prompt() {
+                if preview_input_blocked {
                     continue;
                 }
                 let intent = match input.kind {
@@ -73,7 +86,7 @@ impl eframe::App for App {
                 }
             }
             if let HostEvent::PreviewPointer { kind, x, y } = event {
-                if self.workspace.close_prompt() {
+                if preview_input_blocked {
                     continue;
                 }
                 if kind == HostPointer::Down {
@@ -103,9 +116,7 @@ impl eframe::App for App {
                 .filter_map(|f| f.path.clone())
                 .collect::<Vec<_>>()
         });
-        if !self.workspace.close_prompt()
-            && !dropped.is_empty()
-            && self.workspace.route() == Route::Editor
+        if !preview_input_blocked && !dropped.is_empty() && self.workspace.route() == Route::Editor
         {
             self.dispatch(AppAction::ImportFiles(dropped), ctx);
         }
@@ -117,7 +128,10 @@ impl eframe::App for App {
             .frame(egui::Frame::NONE.fill(BG))
             .show(ctx, |ui| {
                 if let Some(editor) = self.workspace.editor() {
-                    let view = self.controller.view(editor);
+                    let mut view = self.controller.view(editor);
+                    if view.status.is_none() {
+                        view.status = self.proxies.summary();
+                    }
                     active = view.monitor_active;
                     requests = self.controller.asset_requests(&view);
                     let (output, slot) =
@@ -144,12 +158,19 @@ impl eframe::App for App {
             self.workspace.saving(),
         ));
         for intent in intents {
+            let released_scrub = matches!(intent, Intent::PointerUp);
             let update = self.controller.apply(&mut self.workspace, intent);
             self.handle(update, ctx);
+            if released_scrub {
+                if let Err(error) = self.preview.finish_scrub() {
+                    self.notice(format!("预览：{error}"));
+                }
+            }
         }
         if self.workspace.route() == Route::Editor {
             self.dispatch(AppAction::RequestAssets { now, requests }, ctx);
         }
+        self.sync_edit_proxies(ctx);
         if let Some(editor) = self.workspace.editor() {
             if editor.playing() {
                 if now - self.last_clock_poll >= CLOCK_POLL_SECS {
@@ -164,13 +185,15 @@ impl eframe::App for App {
                 self.dispatch(AppAction::Editor(EditorCommand::Frame { now }), ctx);
             }
         }
+        // Re-read after UI so a settings modal opened this frame hides the native popup.
+        let overlay_blocks_preview = self.workspace.close_prompt() || project_settings_open(ctx);
         self.preview.sync_popup(
             ctx,
             frame,
             hole.filter(|_| self.workspace.route() == Route::Editor),
-            active && !self.workspace.close_prompt(),
+            active && !overlay_blocks_preview,
         );
-        let preview_view = if self.workspace.close_prompt() {
+        let preview_view = if overlay_blocks_preview {
             None
         } else {
             self.workspace
@@ -180,7 +203,8 @@ impl eframe::App for App {
         if let Err(error) = self.preview.sync_view(preview_view) {
             self.notice(format!("预览控制框：{error}"));
         }
-        if self.workspace.editor().is_some_and(|e| e.playing())
+        if self.preview.syncing_restore()
+            || self.workspace.editor().is_some_and(|e| e.playing())
             || self.workspace.busy()
             || self.controller.preview_gesture_active()
         {
@@ -190,6 +214,11 @@ impl eframe::App for App {
         }
     }
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
+        self.proxies.shutdown();
         self.preview.shutdown();
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.window_state.save(storage);
     }
 }

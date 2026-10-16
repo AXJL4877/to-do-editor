@@ -35,7 +35,8 @@ fn sample_project() -> Project {
         width: Some(1920),
         height: Some(1080),
         kind: Some(MediaKind::Video),
-    });
+        folder_id: None,
+});
     add_clip(
         project,
         "v1",
@@ -298,4 +299,79 @@ fn bounds_handle_matching_extreme_canvas_sizes_without_intermediate_overflow() {
             [0.0, 0.0, 1.0, 1.0],
         );
     }
+}
+
+#[test]
+fn pixel_placement_maps_source_pixels_onto_the_canvas() {
+    // 1080p on a 4K canvas should land at half scale (not aspect-fit fill).
+    let transform = Transform::for_pixel_placement((1920, 1080), (3840, 2160));
+    assert!((transform.scale - 0.5).abs() < 1e-12, "{transform:?}");
+    assert_eq!(transform.x, 0.0);
+    assert_eq!(transform.y, 0.0);
+    // Matching canvas keeps identity.
+    assert_eq!(
+        Transform::for_pixel_placement((1920, 1080), (1920, 1080)).scale,
+        1.0
+    );
+    // Unknown sizes fall back to aspect-fit fill.
+    assert!(Transform::for_pixel_placement((0, 1080), (1920, 1080)).is_default());
+}
+
+#[test]
+fn place_media_defaults_to_pixel_scale_when_dimensions_are_known() {
+    let mut project = create_project(None, None, None, None, None);
+    project.width = 3840;
+    project.height = 2160;
+    project.media.push(MediaItem {
+        id: "m".into(),
+        name: "A.mp4".into(),
+        path: Some("A.mp4".into()),
+        duration: 5.0,
+        has_audio: Some(false),
+        width: Some(1920),
+        height: Some(1080),
+        kind: Some(MediaKind::Video),
+        folder_id: None,
+});
+    let next = place_media(project, "m", Some("v1"), 0.0).unwrap();
+    let clip = &next.tracks.iter().find(|t| t.id == "v1").unwrap().clips[0];
+    assert!((clip.transform.scale - 0.5).abs() < 1e-12, "{:?}", clip.transform);
+}
+
+#[test]
+fn match_frame_placement_fills_the_program_canvas() {
+    let mut project = create_project(None, None, None, None, None);
+    project.width = 3840;
+    project.height = 2160;
+    project.media_scale = MediaScaleMode::MatchFrame;
+    project.media.push(MediaItem {
+        id: "m".into(),
+        name: "A.mp4".into(),
+        path: Some("A.mp4".into()),
+        duration: 5.0,
+        has_audio: Some(false),
+        width: Some(1920),
+        height: Some(1080),
+        kind: Some(MediaKind::Video),
+        folder_id: None,
+});
+    let next = place_media(project, "m", Some("v1"), 0.0).unwrap();
+    let clip = &next.tracks.iter().find(|t| t.id == "v1").unwrap().clips[0];
+    assert!(clip.transform.is_default(), "{:?}", clip.transform);
+}
+
+#[test]
+fn media_scale_mode_survives_json_and_edits() {
+    let project = execute_edit(
+        create_project(None, None, None, None, None),
+        EditCommand::SetMediaScaleMode {
+            mode: MediaScaleMode::MatchFrame,
+        },
+    )
+    .unwrap();
+    assert_eq!(project.media_scale, MediaScaleMode::MatchFrame);
+    let json = serde_json::to_value(&project).unwrap();
+    assert_eq!(json["mediaScale"], "matchFrame");
+    let back: Project = serde_json::from_value(json).unwrap();
+    assert_eq!(back.media_scale, MediaScaleMode::MatchFrame);
 }

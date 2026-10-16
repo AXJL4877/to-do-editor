@@ -25,7 +25,8 @@ fn pairs() -> Project {
         width: Some(1920),
         height: Some(1080),
         kind: Some(MediaKind::Video),
-    });
+        folder_id: None,
+});
     for (track, id, start, link) in [
         ("v1", "picture_a", 0.0, "a"),
         ("a1", "sound_a", 0.0, "a"),

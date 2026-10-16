@@ -19,6 +19,12 @@ pub enum EditorCommand {
         cascade: bool,
     },
     Seek(f64),
+    /// Load library media into the source monitor and show that pane.
+    OpenSourceMonitor {
+        media_id: String,
+    },
+    ShowProgramMonitor,
+    ShowSourceMonitor,
     TogglePlay,
     Frame {
         now: f64,

@@ -65,9 +65,56 @@ pub(crate) struct TextRasters {
     requested: HashMap<String, String>,
     wanted: Vec<TextRaster>,
     blocks: HashMap<String, BaseSize>,
+    /// Last exact raster actually selected for each visible clip. Worker
+    /// completion order must not move a pending reveal back to an older frame.
+    shown: HashMap<String, ShownRaster>,
+}
+
+#[derive(Debug)]
+struct ShownRaster {
+    layout: String,
+    path: String,
 }
 
 impl TextRasters {
+    /// Only the current program stack may supply a temporary text fallback.
+    pub fn retain_shown(&mut self, keep: impl Fn(&str) -> bool) {
+        self.shown.retain(|clip_id, _| keep(clip_id));
+    }
+
+    /// A pending reveal may retain this clip's last shown compatible image.
+    /// Exact images always win, including when scrubbing backwards.
+    pub fn preview_state(&mut self, clip_id: &str, raster: TextRaster) -> RasterState {
+        let layout = raster.layout_digest();
+        match self.state(raster) {
+            RasterState::Ready(path) => {
+                self.shown.insert(
+                    clip_id.to_owned(),
+                    ShownRaster {
+                        layout,
+                        path: path.clone(),
+                    },
+                );
+                RasterState::Ready(path)
+            }
+            RasterState::Pending => {
+                if let Some(shown) = self
+                    .shown
+                    .get(clip_id)
+                    .filter(|shown| shown.layout == layout)
+                {
+                    return RasterState::Ready(shown.path.clone());
+                }
+                self.shown.remove(clip_id);
+                RasterState::Pending
+            }
+            RasterState::Failed => {
+                self.shown.remove(clip_id);
+                RasterState::Failed
+            }
+        }
+    }
+
     /// Current state; an unknown raster is queued for [`TextRasters::take_wanted`].
     pub fn state(&mut self, raster: TextRaster) -> RasterState {
         if let Some(path) = self.ready.get(&raster.digest) {

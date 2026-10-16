@@ -82,10 +82,10 @@ pub fn timeline_scale(axis_secs: f64, board_view_w: f64, zoom: f64) -> TimelineS
     }
 }
 
-/// Alt+wheel zoom that keeps the time under the cursor fixed.
+/// Wheel zoom that keeps the time under the cursor fixed.
 ///
 /// `view_x` is the pointer x minus the board's left edge. Returns `None` when
-/// alt is up or the step does not change zoom.
+/// `alt` is false (UI passes true for Alt/Ctrl+wheel) or the step does not change zoom.
 ///
 /// Sign convention (DOM / product): `delta_y > 0` = scroll down = zoom out;
 /// `delta_y < 0` = scroll up = zoom in. The UI should normalize egui's scroll
@@ -176,6 +176,23 @@ mod tests {
             timeline_scale(axis, view_w, hit.zoom).px_per_sec,
         );
         assert!((before - after).abs() < 1e-9);
+    }
+
+    #[test]
+    fn zoom_keeps_time_under_cursor_while_scrolled() {
+        let view_w = LABEL_W + 800.0;
+        let axis = 120.0;
+        let view_x = 420.0;
+        let scroll = 180.0;
+        let before = time_at(view_x, scroll, timeline_scale(axis, view_w, 2.0).px_per_sec);
+        let hit = wheel_zoom(2.0, -1.0, view_x, scroll, true, axis, view_w).unwrap();
+        let after = time_at(
+            view_x,
+            hit.scroll_left,
+            timeline_scale(axis, view_w, hit.zoom).px_per_sec,
+        );
+        assert!((before - after).abs() < 1e-9, "{before} → {after}");
+        assert!(hit.scroll_left > scroll, "zoom-in should pan to hold the cursor");
     }
 
     #[test]

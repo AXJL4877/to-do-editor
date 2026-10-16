@@ -23,10 +23,27 @@ pub fn draw(ui: &mut Ui, vm: &TimelineViewModel, peaks: &PeaksCache) -> Vec<Inte
         .unwrap_or(false);
     let has_media_drag = egui::DragAndDrop::payload::<MediaDrag>(ui.ctx()).is_some();
 
+    // Capture Alt/Ctrl+wheel before ScrollArea consumes it, so zoom keeps the
+    // time under the cursor instead of also panning the board.
+    let zoom_mods = ui.input(|input| input.modifiers.alt || input.modifiers.ctrl);
+    let zoom_pointer = ui
+        .input(|input| input.pointer.hover_pos())
+        .filter(|&pos| viewport.contains(pos));
+    let mut zoom_delta_y = 0.0_f32;
+    if zoom_mods && zoom_pointer.is_some() {
+        zoom_delta_y = ui.input(|input| input.raw_scroll_delta.y);
+        ui.ctx().input_mut(|input| {
+            input.raw_scroll_delta = egui::Vec2::ZERO;
+            input.smooth_scroll_delta = egui::Vec2::ZERO;
+        });
+    }
+
     let output = egui::ScrollArea::both()
-        .id_salt(Id::new(SCROLL_ID))
+        // id_salt hashes its argument; use the same salt as the State lookup.
+        .id_salt(SCROLL_ID)
         .auto_shrink([false, false])
         .drag_to_scroll(false)
+        .enable_scrolling(!(zoom_mods && zoom_pointer.is_some()))
         .show(ui, |ui| {
             paint(
                 ui,
@@ -102,22 +119,17 @@ pub fn draw(ui: &mut Ui, vm: &TimelineViewModel, peaks: &PeaksCache) -> Vec<Inte
     ui.ctx()
         .data_mut(|d| d.insert_temp(scrub_id, scrubbing && primary_down));
 
-    if ui.input(|input| input.modifiers.alt) {
-        // raw_scroll_delta is one notch per event; smooth_scroll_delta spans many
-        // frames and made Alt+wheel feel far too sensitive.
-        let delta_y = f64::from(ui.input(|input| input.raw_scroll_delta.y));
-        if delta_y.abs() >= 1.0 {
-            if let Some(pointer) = ui.input(|input| input.pointer.hover_pos()) {
-                if viewport.contains(pointer) {
-                    // egui scroll down is often negative; wheel_zoom treats positive as zoom-out.
-                    intents.push(Intent::Wheel {
-                        delta_y: -delta_y.signum(),
-                        view_x: f64::from(pointer.x - viewport.left()),
-                        scroll_left,
-                        alt: true,
-                    });
-                }
-            }
+    // raw_scroll_delta is one notch per event; smooth_scroll_delta spans many
+    // frames and made wheel zoom feel far too sensitive.
+    if zoom_delta_y.abs() >= 1.0 {
+        if let Some(pointer) = zoom_pointer {
+            // egui scroll down is often negative; wheel_zoom treats positive as zoom-out.
+            intents.push(Intent::Wheel {
+                delta_y: -f64::from(zoom_delta_y.signum()),
+                view_x: f64::from(pointer.x - viewport.left()),
+                scroll_left,
+                alt: true,
+            });
         }
     }
 
@@ -541,10 +553,15 @@ fn track_index_at(content_y: f64, track_count: usize) -> Option<usize> {
 }
 
 fn sync_zoom_scroll(ui: &Ui, vm: &TimelineViewModel, scroll_id: Id) {
-    let key = Id::new("todo_ui_zoom_px");
+    let key = scroll_id.with("px_per_sec");
     let previous = ui.data(|data| data.get_temp::<f64>(key));
-    if previous.is_some_and(|px| (px - vm.px_per_sec).abs() > 0.01) {
-        let mut state = egui::scroll_area::State::load(ui.ctx(), scroll_id).unwrap_or_default();
+    // Long sequences have a small density, but their anchored offset still
+    // needs applying for every zoom step, regardless of absolute scale.
+    let density_changed = previous.is_some_and(|px| px != vm.px_per_sec);
+    let mut state = egui::scroll_area::State::load(ui.ctx(), scroll_id).unwrap_or_default();
+    // After wheel zoom, force the ScrollArea offset to the cursor-anchored value
+    // from the interaction layer — density change alone is the zoom signal.
+    if density_changed {
         state.offset.x = vm.scroll_left.max(0.0) as f32;
         state.store(ui.ctx(), scroll_id);
     }
@@ -556,6 +573,7 @@ mod tests {
     use super::*;
     use todo_core::Project;
     use todo_interaction::DragKind;
+    mod zoom;
 
     #[test]
     fn overflow_marks_the_configured_workspace_end_instead_of_the_content_end() {
@@ -624,9 +642,11 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 duration: Some(10.0),
+                media_scale: Default::default(),
                 media: vec![],
                 tracks: vec![],
                 text_styles: Vec::new(),
+                folders: Vec::new(),
             },
             "test",
         )
@@ -838,9 +858,11 @@ mod tests {
             width: 1920,
             height: 1080,
             duration: Some(10.0),
+            media_scale: Default::default(),
             media: Vec::new(),
             tracks: Vec::new(),
             text_styles: Vec::new(),
+            folders: Vec::new(),
         };
         let mut timeline = crate::test_view(project, "test").timeline;
         timeline.drag = Some(DragKind::Seek);
@@ -914,9 +936,11 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 duration: Some(10.0),
+                media_scale: Default::default(),
                 media: Vec::new(),
                 tracks: Vec::new(),
                 text_styles: Vec::new(),
+                folders: Vec::new(),
             },
             "test",
         )

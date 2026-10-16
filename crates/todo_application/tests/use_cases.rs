@@ -12,7 +12,8 @@ fn project() -> Project {
         width: Some(1920),
         height: Some(1080),
         kind: Some(MediaKind::Video),
-    });
+        folder_id: None,
+});
     place_media(project, "m", Some("v1"), 0.0).unwrap()
 }
 fn effect_ticket(update: &AppUpdate) -> Ticket {
@@ -24,6 +25,59 @@ fn effect_ticket(update: &AppUpdate) -> Ticket {
             _ => None,
         })
         .unwrap()
+}
+
+#[test]
+fn open_source_monitor_shows_library_media_instead_of_the_program_stack() {
+    let mut project = create_project(None, None, Some(60.0), None, None);
+    project.media.push(MediaItem {
+        id: "src".into(),
+        name: "source.mp4".into(),
+        path: Some("source.mp4".into()),
+        duration: 8.0,
+        has_audio: Some(false),
+        width: Some(1280),
+        height: Some(720),
+        kind: Some(MediaKind::Video),
+        folder_id: None,
+});
+    project.media.push(MediaItem {
+        id: "prog".into(),
+        name: "program.mp4".into(),
+        path: Some("program.mp4".into()),
+        duration: 4.0,
+        has_audio: Some(false),
+        width: Some(1920),
+        height: Some(1080),
+        kind: Some(MediaKind::Video),
+        folder_id: None,
+});
+    let project = place_media(project, "prog", Some("v1"), 0.0).unwrap();
+    let mut editor = EditorSession::new(project, "test");
+    let _ = editor.sync();
+    let update = editor.apply(EditorCommand::OpenSourceMonitor {
+        media_id: "src".into(),
+    });
+    assert_eq!(editor.monitor_pane(), MonitorPane::Source);
+    assert_eq!(
+        editor.source_monitor().map(|s| s.media_id.as_str()),
+        Some("src")
+    );
+    assert!(update.commands.iter().any(|c| matches!(
+        c,
+        PreviewCommand::Layers(layers)
+            if layers.len() == 1
+                && layers[0].path == "source.mp4"
+                && layers[0].media_time == 0.0
+    )));
+    assert_eq!(editor.picture().path.as_deref(), Some("source.mp4"));
+    let _ = editor.apply(EditorCommand::ShowProgramMonitor);
+    assert_eq!(editor.monitor_pane(), MonitorPane::Program);
+    assert!(editor
+        .picture()
+        .path
+        .as_deref()
+        .is_some_and(|p| p == "program.mp4"));
 }
 
 #[test]

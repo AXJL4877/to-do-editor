@@ -54,7 +54,12 @@ impl EditorSession {
         let mut transport = want.transport;
         let mut force_transport = false;
         if want.audio {
-            let audio = resolve_audio_clips(&self.project);
+            // Source pane is visual-only; mute the program mix while previewing library media.
+            let audio = if self.showing_source() {
+                Vec::new()
+            } else {
+                resolve_audio_clips(&self.project)
+            };
             if self.last_audio.as_ref() != Some(&audio) {
                 commands.push(PreviewCommand::Audio(audio.clone()));
                 self.last_audio = Some(audio);
@@ -63,10 +68,11 @@ impl EditorSession {
             }
         }
         if transport {
-            let key = ((self.playhead * 1000.0).round() as i64, self.playing);
+            let time = self.preview_time();
+            let key = ((time * 1000.0).round() as i64, self.playing);
             if force_transport || self.last_transport != Some(key) {
                 commands.push(PreviewCommand::Transport {
-                    time: self.playhead.max(0.0),
+                    time: time.max(0.0),
                     playing: self.playing,
                 });
                 self.last_transport = Some(key);
@@ -74,17 +80,14 @@ impl EditorSession {
             }
         }
         if want.picture {
-            // A stack waiting for text rasters is not sent; the host keeps showing
-            // the previous complete stack until the rasters arrive.
-            if let Some(layers) = self.preview_layers() {
-                if self.last_layers.as_ref() != Some(&layers) {
-                    commands.push(PreviewCommand::Layers(layers.clone()));
-                    self.last_layers = Some(layers);
-                    // Legacy single-source caches are superseded by the stack.
-                    self.last_path = None;
-                    self.last_seek_ms = None;
-                    self.last_transform = None;
-                }
+            let layers = self.preview_layers();
+            if self.last_layers.as_ref() != Some(&layers) {
+                commands.push(PreviewCommand::Layers(layers.clone()));
+                self.last_layers = Some(layers);
+                // Legacy single-source caches are superseded by the stack.
+                self.last_path = None;
+                self.last_seek_ms = None;
+                self.last_transform = None;
             }
         }
         commands
@@ -94,14 +97,28 @@ impl EditorSession {
         self.clock = None;
         self.clock_missing_at = None;
     }
-    /// The full picture stack at the playhead, or `None` while a text raster is
-    /// still being rendered.
-    fn preview_layers(&mut self) -> Option<Vec<PreviewLayer>> {
+    pub(crate) fn preview_time(&self) -> f64 {
+        if self.showing_source() {
+            self.source_monitor.as_ref().map(|s| s.time).unwrap_or(0.0)
+        } else {
+            self.playhead
+        }
+    }
+
+    /// Available picture layers at the playhead. Pending text must not hold up
+    /// video; a compatible image from the same clip can bridge reveal frames.
+    fn preview_layers(&mut self) -> Vec<PreviewLayer> {
+        if self.showing_source() {
+            self.text_rasters.retain_shown(|_| false);
+            return self.source_layers();
+        }
         let fps = self.project.fps;
         let canvas = self.project.output_size();
         let mut layers = Vec::new();
-        let mut pending = false;
-        for hit in resolve_layers(&self.project, self.playhead) {
+        let hits = resolve_layers(&self.project, self.playhead);
+        self.text_rasters
+            .retain_shown(|clip_id| hits.iter().any(|hit| hit.clip.id == clip_id));
+        for hit in hits {
             let mut transform = hit.clip.transform;
             let (path, media_time) = match hit.source {
                 HitSource::Media { media, media_time } => {
@@ -122,16 +139,13 @@ impl EditorSession {
                         }
                         reveal
                     });
-                    match self
-                        .text_rasters
-                        .state(TextRaster::new(content, style, canvas, reveal))
-                    {
+                    match self.text_rasters.preview_state(
+                        &hit.clip.id,
+                        TextRaster::new(content, style, canvas, reveal),
+                    ) {
                         // Text rasters are stills: no source time.
                         RasterState::Ready(path) => (path, 0.0),
-                        RasterState::Pending => {
-                            pending = true;
-                            continue;
-                        }
+                        RasterState::Pending => continue,
                         RasterState::Failed => continue,
                     }
                 }
@@ -143,8 +157,34 @@ impl EditorSession {
                 transform,
             });
         }
-        (!pending).then_some(layers)
+        layers
     }
+
+    fn source_layers(&self) -> Vec<PreviewLayer> {
+        let Some(source) = &self.source_monitor else {
+            return Vec::new();
+        };
+        let Some(media) = self.project.media.iter().find(|m| m.id == source.media_id) else {
+            return Vec::new();
+        };
+        if !todo_core::is_visual_media(media) {
+            return Vec::new();
+        }
+        let Some(path) = media.path.as_ref().filter(|p| !p.trim().is_empty()) else {
+            return Vec::new();
+        };
+        let aspect = match (media.width, media.height) {
+            (Some(w), Some(h)) if w > 0 && h > 0 => Some((w, h)),
+            _ => None,
+        };
+        vec![PreviewLayer {
+            path: path.clone(),
+            media_time: source.time.max(0.0),
+            aspect,
+            transform: ClipTransform::default(),
+        }]
+    }
+
     /// The stack most recently sent to the preview host.
     pub fn shown_layers(&self) -> &[PreviewLayer] {
         self.last_layers.as_deref().unwrap_or_default()
@@ -178,6 +218,9 @@ impl EditorSession {
             .block(hit.clip.text()?, style, self.project.output_size())
     }
     pub fn picture(&self) -> Picture {
+        if self.showing_source() {
+            return self.source_picture();
+        }
         let hit = resolve_preview(
             &self.project,
             self.playhead,
@@ -199,7 +242,42 @@ impl EditorSession {
                 .map_or_else(ClipTransform::default, |h| h.clip.transform),
         }
     }
+
+    fn source_picture(&self) -> Picture {
+        let Some(source) = &self.source_monitor else {
+            return Picture {
+                active: false,
+                clip_id: None,
+                name: None,
+                path: None,
+                aspect: None,
+                media_time: 0.0,
+                transform: ClipTransform::default(),
+            };
+        };
+        let media = self.project.media.iter().find(|m| m.id == source.media_id);
+        let path = media
+            .and_then(|m| m.path.clone())
+            .filter(|p| !p.trim().is_empty());
+        let aspect = media.and_then(|m| match (m.width, m.height) {
+            (Some(w), Some(h)) if w > 0 && h > 0 => Some((w, h)),
+            _ => None,
+        });
+        Picture {
+            active: path.is_some() && media.is_some_and(todo_core::is_visual_media),
+            clip_id: None,
+            name: media.map(|m| m.name.clone()),
+            path,
+            aspect,
+            media_time: source.time,
+            transform: ClipTransform::default(),
+        }
+    }
+
     pub(crate) fn can_play_at(&self, video: bool) -> bool {
+        if self.showing_source() {
+            return video;
+        }
         video
             || resolve_audio_clips(&self.project)
                 .iter()

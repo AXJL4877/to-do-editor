@@ -55,6 +55,17 @@ impl BaseSize {
         })
     }
 
+    /// Canvas fractions for a 1:1 pixel map (`source_px / canvas_px`).
+    pub fn pixel(source: (u32, u32), canvas: (u32, u32)) -> Option<Self> {
+        if source.0 == 0 || source.1 == 0 || canvas.0 == 0 || canvas.1 == 0 {
+            return None;
+        }
+        Some(Self {
+            width: f64::from(source.0) / f64::from(canvas.0),
+            height: f64::from(source.1) / f64::from(canvas.1),
+        })
+    }
+
     fn valid(&self) -> bool {
         [self.width, self.height]
             .into_iter()

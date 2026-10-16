@@ -128,12 +128,18 @@ pub struct EditorViewModel {
     /// Program-canvas pixel size (`project.width` × `project.height`).
     pub output_width: u32,
     pub output_height: u32,
+    /// How newly placed media is scaled onto the program canvas.
+    pub media_scale: todo_core::MediaScaleMode,
     pub time_label: String,
     pub duration_label: String,
     pub playing: bool,
     pub can_play: bool,
     pub importing: bool,
     pub monitor_active: bool,
+    /// Program vs source monitor pane.
+    pub monitor_pane: todo_application::MonitorPane,
+    /// True when library media is loaded into the source monitor.
+    pub source_available: bool,
     pub poll_clock: bool,
     pub clock_epoch: u64,
     pub timeline: TimelineViewModel,
@@ -147,13 +153,63 @@ pub struct LibraryItemView {
     pub uses: usize,
     pub selected: bool,
     pub locked_references: bool,
+    /// Set when the right pane is showing cross-folder search hits.
+    pub folder_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LibraryFolderView {
+    pub id: String,
+    pub name: String,
+    pub child_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LibraryEntryView {
+    Folder(LibraryFolderView),
+    Media(LibraryItemView),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FolderNodeView {
+    pub id: String,
+    pub name: String,
+    pub depth: usize,
+    pub expanded: bool,
+    pub has_children: bool,
+    pub selected: bool,
+    pub children: Vec<FolderNodeView>,
+}
+
+/// VS Code–style explorer row: folders and media share one indented tree.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExplorerNode {
+    Folder {
+        id: String,
+        name: String,
+        depth: usize,
+        expanded: bool,
+        selected: bool,
+        children: Vec<ExplorerNode>,
+    },
+    Media {
+        depth: usize,
+        item: LibraryItemView,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct LibraryViewModel {
+    /// Unified explorer tree (folders + nested media).
+    pub explorer: Vec<ExplorerNode>,
+    pub tree: Vec<FolderNodeView>,
+    pub entries: Vec<LibraryEntryView>,
+    /// Media rows only (current folder or search). Kept for drag/list helpers.
     pub items: Vec<LibraryItemView>,
     pub selected_id: Option<String>,
+    pub selected_folder_id: Option<String>,
     pub query: String,
+    pub searching: bool,
 }
 
 impl TimelineViewModel {

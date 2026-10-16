@@ -7,6 +7,7 @@ use todo_core::{
 };
 
 mod gestures;
+mod library_folders;
 mod text;
 mod timeline_moves;
 mod transform;
@@ -86,7 +87,8 @@ fn with_clip() -> Project {
         width: Some(16),
         height: Some(9),
         kind: None,
-    });
+        folder_id: None,
+});
     project = add_clip(
         project,
         "v1",
@@ -149,7 +151,8 @@ fn ctrl_marquee_selects_multiple_clips_for_move_and_delete() {
         width: Some(16),
         height: Some(9),
         kind: None,
-    });
+        folder_id: None,
+});
     project = add_clip(
         project,
         "v1",

@@ -4,6 +4,7 @@ mod error;
 mod files;
 mod imports;
 mod metadata;
+mod proxies;
 mod service;
 mod text;
 mod thumbnails;
@@ -12,6 +13,7 @@ mod waveforms;
 
 pub use error::MediaError;
 pub use metadata::MediaMetadata;
+pub use proxies::EditProxy;
 pub use service::MediaService;
 pub use text::{font_dirs, TextRasterizer};
 pub use todo_text::RasterRequest;

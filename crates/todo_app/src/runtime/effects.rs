@@ -51,6 +51,11 @@ impl App {
                     }
                 }
                 Effect::ResetPresentation => {
+                    self.proxies
+                        .set_sources(self.workspace.generation(), Vec::new());
+                    self.preview.clear_edit_sources();
+                    self.proxy_project = None;
+                    todo_ui::close_project_settings(ctx);
                     self.controller.reset();
                     self.thumbs = ThumbCache::default();
                 }

@@ -76,7 +76,8 @@ mod tests {
             width: Some(16),
             height: Some(9),
             kind: None,
-        });
+            folder_id: None,
+});
         project = add_clip(
             project,
             "v1",

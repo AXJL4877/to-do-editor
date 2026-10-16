@@ -1,5 +1,5 @@
 use crate::editor::*;
-use todo_core::{project_duration, seek};
+use todo_core::project_duration;
 
 impl EditorSession {
     pub(crate) fn toggle_play(&mut self) -> Vec<PreviewCommand> {
@@ -18,17 +18,28 @@ impl EditorSession {
     }
 
     pub(crate) fn scrub(&mut self, time: f64) -> Vec<PreviewCommand> {
+        // Timeline seeks always drive the program monitor.
+        let left_source = self.showing_source();
+        self.monitor_pane = MonitorPane::Program;
         let was_playing = self.playing;
         self.playing = false;
         self.last_tick = None;
-        let next = seek(self.project.clone(), time);
-        let moved = playhead_changed(next.playhead, self.playhead);
-        self.project = next;
+        // Seeking changes no project content; keep media and timeline storage in
+        // place on the pointer-event hot path. Match the domain seek's clamp and
+        // epsilon behavior, including NaN mapping to the start of the timeline.
+        let clamped = time.max(0.0).min(project_duration(&self.project));
+        let next = if (clamped - self.project.playhead).abs() < f64::EPSILON {
+            self.project.playhead
+        } else {
+            clamped
+        };
+        let moved = playhead_changed(next, self.playhead);
+        self.project.playhead = next;
         self.playhead = self.project.playhead;
         self.synced_playhead = self.playhead;
         self.emit(Want {
-            audio: false,
-            transport: was_playing || moved,
+            audio: left_source,
+            transport: was_playing || moved || left_source,
             picture: true,
         })
     }
@@ -43,6 +54,9 @@ impl EditorSession {
         };
         let dt = (now - last).max(0.0);
         self.last_tick = Some(now);
+        if self.showing_source() {
+            return self.frame_source(now, dt);
+        }
         let next = self.integrated_time(now, dt);
         let end = project_duration(&self.project);
         if next >= end {
@@ -61,6 +75,46 @@ impl EditorSession {
         })
     }
 
+    fn frame_source(&mut self, _now: f64, dt: f64) -> Vec<PreviewCommand> {
+        let media_id = self
+            .source_monitor
+            .as_ref()
+            .map(|s| s.media_id.clone())
+            .unwrap_or_default();
+        let end = self
+            .project
+            .media
+            .iter()
+            .find(|m| m.id == media_id)
+            .map(|m| m.duration.max(0.0))
+            .unwrap_or(0.0);
+        let next = self.integrated_source_time(dt);
+        let previous = self.source_monitor.as_ref().map(|s| s.time).unwrap_or(0.0);
+        if next >= end {
+            if let Some(source) = self.source_monitor.as_mut() {
+                source.time = end;
+            }
+            self.playing = false;
+            self.last_tick = None;
+            return self.emit(Want {
+                audio: false,
+                transport: true,
+                picture: true,
+            });
+        }
+        if let Some(source) = self.source_monitor.as_mut() {
+            source.time = next;
+        }
+        if !playhead_changed(next, previous) {
+            return Vec::new();
+        }
+        self.emit(Want {
+            audio: false,
+            transport: false,
+            picture: true,
+        })
+    }
+
     pub(crate) fn integrated_time(&mut self, now: f64, dt: f64) -> f64 {
         if let Some(clock) = self.clock {
             let age = now - clock.received_at;
@@ -70,6 +124,11 @@ impl EditorSession {
             }
         }
         self.playhead + dt
+    }
+
+    fn integrated_source_time(&self, dt: f64) -> f64 {
+        // Source playback is wall-clock; program audio clock does not apply.
+        self.source_monitor.as_ref().map(|s| s.time).unwrap_or(0.0) + dt
     }
 
     pub(crate) fn on_clock(

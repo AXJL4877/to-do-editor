@@ -122,7 +122,7 @@ impl Workspace {
                 })?;
                 Ok((ControlResult::ImportJob { job }, AppUpdate::default()))
             }
-            ControlCommand::ImportMedia { paths } => {
+            ControlCommand::ImportMedia { paths, folder_id } => {
                 if paths.is_empty()
                     || paths.len() > 256
                     || paths.iter().any(|path| path.as_os_str().is_empty())
@@ -132,6 +132,19 @@ impl Workspace {
                         "Import requires 1..256 nonempty file paths",
                     ));
                 }
+                if let Some(id) = folder_id {
+                    if self
+                        .editor
+                        .as_ref()
+                        .is_none_or(|editor| !editor.project().folders.iter().any(|f| f.id == *id))
+                    {
+                        return Err(ControlError::new(
+                            "folder_not_found",
+                            "Import folder_id must refer to an existing library folder",
+                        ));
+                    }
+                }
+                self.set_import_folder(folder_id.clone());
                 let update = self.start_import(paths.clone(), false);
                 let ticket = self.jobs.import.unwrap();
                 let job = self.control.job(ticket.id).unwrap();

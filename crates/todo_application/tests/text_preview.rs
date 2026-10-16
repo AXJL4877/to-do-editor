@@ -12,6 +12,7 @@ fn workspace() -> Workspace {
         width: Some(1280),
         height: Some(720),
         kind: Some(MediaKind::Video),
+        folder_id: None,
     });
     let project = place_media(project, "m", Some("v1"), 0.0).unwrap();
     let mut workspace = Workspace::with_project(project, "test");
@@ -64,10 +65,10 @@ fn layers(update: &AppUpdate) -> Option<Vec<PreviewLayer>> {
 }
 
 #[test]
-fn text_waits_for_its_raster_then_composites_above_video() {
+fn pending_text_allows_video_to_progress_then_composites_above_video() {
     let mut workspace = workspace();
     let update = add_text(&mut workspace, None);
-    // The stack is held back until the text image exists.
+    // The unchanged video stack need not be sent again while text is pending.
     assert_eq!(layers(&update), None);
     let jobs = raster_jobs(&update);
     assert_eq!(jobs.len(), 1);
@@ -75,6 +76,12 @@ fn text_waits_for_its_raster_then_composites_above_video() {
     assert_eq!(raster.canvas, (1920, 1080));
     assert!(raster.reveal.is_none());
     assert!(workspace.busy());
+
+    let seek = workspace.dispatch(AppAction::Editor(EditorCommand::Seek(0.5)));
+    let stack = layers(&seek).expect("video must advance before the first text raster exists");
+    assert_eq!(stack.len(), 1);
+    assert_eq!(stack[0].path, "clip.mp4");
+    assert_eq!(stack[0].media_time, 0.5);
 
     let done = workspace.on_event(AppEvent::Media {
         ticket: *ticket,
@@ -98,6 +105,201 @@ fn text_waits_for_its_raster_then_composites_above_video() {
     let refresh = workspace.dispatch(AppAction::Editor(EditorCommand::RefreshPicture));
     assert!(raster_jobs(&refresh).is_empty());
     assert_eq!(layers(&refresh).unwrap()[1].path, "cache/text.png");
+}
+
+fn reveal_intro() -> Option<TextIntro> {
+    Some(TextIntro::PerChar {
+        duration: 1.0,
+        char_duration: 0.2,
+    })
+}
+
+fn complete_raster(workspace: &mut Workspace, ticket: Ticket, path: &str) -> AppUpdate {
+    workspace.on_event(AppEvent::Media {
+        ticket,
+        result: Ok(MediaOutput::TextRaster {
+            path: path.into(),
+            block: BLOCK,
+        }),
+    })
+}
+
+fn text_clip(workspace: &Workspace) -> (String, TextContent) {
+    workspace
+        .editor()
+        .unwrap()
+        .project()
+        .tracks
+        .iter()
+        .flat_map(|track| &track.clips)
+        .find_map(|clip| {
+            clip.text()
+                .map(|content| (clip.id.clone(), content.clone()))
+        })
+        .unwrap()
+}
+
+#[test]
+fn pending_reveal_reuses_the_shown_caption_with_current_transform() {
+    let mut workspace = workspace();
+    let first = add_text(&mut workspace, reveal_intro());
+    complete_raster(&mut workspace, raster_jobs(&first)[0].0, "frame-0.png");
+    let pending = workspace.dispatch(AppAction::Editor(EditorCommand::Seek(0.5)));
+    let stack = layers(&pending).expect("pending reveal must not freeze video");
+    assert_eq!(stack.len(), 2);
+    assert_eq!(stack[0].media_time, 0.5);
+    assert_eq!(stack[1].path, "frame-0.png");
+
+    let (clip_id, _) = text_clip(&workspace);
+    let transform = ClipTransform {
+        opacity: 0.4,
+        x: 0.2,
+        ..Default::default()
+    };
+    let moved = workspace.dispatch(AppAction::Editor(EditorCommand::Edit(
+        EditCommand::SetTransform { clip_id, transform },
+    )));
+    let stack = layers(&moved).expect("fallback uses the current transform");
+    assert_eq!(stack[1].path, "frame-0.png");
+    assert_eq!(stack[1].transform, transform);
+    let done = complete_raster(&mut workspace, raster_jobs(&pending)[0].0, "frame-15.png");
+    assert_eq!(layers(&done).unwrap()[1].path, "frame-15.png");
+}
+
+#[test]
+fn late_reveal_completions_do_not_regress_the_shown_caption() {
+    let mut workspace = workspace();
+    let first = add_text(&mut workspace, reveal_intro());
+    complete_raster(&mut workspace, raster_jobs(&first)[0].0, "frame-0.png");
+    let old = workspace.dispatch(AppAction::Editor(EditorCommand::Seek(0.25)));
+    let newer = workspace.dispatch(AppAction::Editor(EditorCommand::Seek(0.5)));
+    complete_raster(&mut workspace, raster_jobs(&newer)[0].0, "frame-15.png");
+    let pending = workspace.dispatch(AppAction::Editor(EditorCommand::Seek(0.75)));
+    assert_eq!(layers(&pending).unwrap()[1].path, "frame-15.png");
+    let late = complete_raster(&mut workspace, raster_jobs(&old)[0].0, "frame-7.png");
+    assert!(layers(&late).is_none());
+    assert_eq!(
+        workspace.editor().unwrap().shown_layers()[0].media_time,
+        0.75
+    );
+    assert_eq!(
+        workspace.editor().unwrap().shown_layers()[1].path,
+        "frame-15.png"
+    );
+    let exact = complete_raster(&mut workspace, raster_jobs(&pending)[0].0, "frame-22.png");
+    assert_eq!(layers(&exact).unwrap()[1].path, "frame-22.png");
+    // Reverse seeks may select an older ready frame when it is the current request.
+    let reverse = workspace.dispatch(AppAction::Editor(EditorCommand::Seek(0.25)));
+    assert_eq!(layers(&reverse).unwrap()[1].path, "frame-7.png");
+}
+
+#[test]
+fn incompatible_text_edits_clear_the_old_caption_while_rendering() {
+    for change in ["content", "layout", "style", "canvas"] {
+        let mut workspace = workspace();
+        let first = add_text(&mut workspace, reveal_intro());
+        complete_raster(&mut workspace, raster_jobs(&first)[0].0, "old-caption.png");
+        let (clip_id, mut content) = text_clip(&workspace);
+        let edit = match change {
+            "content" => {
+                content.text = "new caption".into();
+                EditCommand::SetText { clip_id, content }
+            }
+            "layout" => {
+                content.layout.font_size = 0.2;
+                EditCommand::SetText { clip_id, content }
+            }
+            "style" => {
+                content.style_id = "clean-white-outline".into();
+                EditCommand::SetText { clip_id, content }
+            }
+            "canvas" => EditCommand::SetOutputSize {
+                width: 1280,
+                height: 720,
+            },
+            _ => unreachable!(),
+        };
+        let update = workspace.dispatch(AppAction::Editor(EditorCommand::Edit(edit)));
+        let stack =
+            layers(&update).unwrap_or_else(|| panic!("{change} must clear the old caption"));
+        assert_eq!(stack.len(), 1, "{change}");
+        assert_eq!(stack[0].path, "clip.mp4");
+        assert_eq!(raster_jobs(&update).len(), 1, "{change}");
+    }
+}
+
+#[test]
+fn a_new_clip_cannot_borrow_another_clips_reveal_frame() {
+    let mut workspace = workspace();
+    let first = add_text(&mut workspace, reveal_intro());
+    complete_raster(&mut workspace, raster_jobs(&first)[0].0, "old-clip.png");
+    let (old_id, content) = text_clip(&workspace);
+    workspace.dispatch(AppAction::Editor(EditorCommand::Edit(
+        EditCommand::AddText {
+            track_id: None,
+            time: 3.0,
+            duration: 3.0,
+            content,
+        },
+    )));
+    let next = workspace.dispatch(AppAction::Editor(EditorCommand::Seek(3.5)));
+    let stack =
+        layers(&next).expect("the new caption's pending raster must not retain the old clip");
+    assert_eq!(stack.len(), 1);
+    assert_eq!(stack[0].media_time, 3.5);
+    assert_ne!(
+        workspace.editor().unwrap().picture().clip_id.as_deref(),
+        Some(old_id.as_str())
+    );
+}
+
+#[test]
+fn switching_to_source_clears_caption_fallback_before_returning_to_program() {
+    let mut workspace = workspace();
+    let first = add_text(&mut workspace, reveal_intro());
+    complete_raster(
+        &mut workspace,
+        raster_jobs(&first)[0].0,
+        "before-source.png",
+    );
+    workspace.dispatch(AppAction::Editor(EditorCommand::OpenSourceMonitor {
+        media_id: "m".into(),
+    }));
+    let program = workspace.dispatch(AppAction::Editor(EditorCommand::Seek(0.5)));
+    let stack = layers(&program).expect("program video must replace the source immediately");
+    assert_eq!(stack.len(), 1);
+    assert_eq!(stack[0].media_time, 0.5);
+}
+
+#[test]
+fn opening_another_project_cannot_receive_a_previous_projects_caption() {
+    let mut workspace = workspace();
+    let first = add_text(&mut workspace, reveal_intro());
+    let previous_ticket = raster_jobs(&first)[0].0;
+    let next_project = workspace.editor().unwrap().project().clone();
+    let open = workspace.dispatch(AppAction::OpenProject("next".into()));
+    let ticket = open
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::Project { ticket, .. } => Some(*ticket),
+            _ => None,
+        })
+        .unwrap();
+    let opened = workspace.on_event(AppEvent::Project {
+        ticket,
+        result: Ok(ProjectOutput::Opened {
+            name: "next".into(),
+            project: next_project,
+        }),
+    });
+    let current_ticket = raster_jobs(&opened)[0].0;
+    assert_eq!(workspace.editor().unwrap().shown_layers().len(), 1);
+    let stale = complete_raster(&mut workspace, previous_ticket, "previous-project.png");
+    assert!(stale.effects.is_empty());
+    assert_eq!(workspace.editor().unwrap().shown_layers().len(), 1);
+    let current = complete_raster(&mut workspace, current_ticket, "current-project.png");
+    assert_eq!(layers(&current).unwrap()[1].path, "current-project.png");
 }
 
 #[test]

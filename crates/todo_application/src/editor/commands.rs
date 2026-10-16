@@ -61,7 +61,17 @@ impl EditorSession {
             }
             EditorCommand::RemoveMedia { media_id, cascade } => {
                 match todo_core::remove_media(self.project.clone(), &media_id, cascade) {
-                    Ok(project) => self.note_edit(project),
+                    Ok(project) => {
+                        if self
+                            .source_monitor
+                            .as_ref()
+                            .is_some_and(|s| s.media_id == media_id)
+                        {
+                            self.source_monitor = None;
+                            self.monitor_pane = MonitorPane::Program;
+                        }
+                        self.note_edit(project)
+                    }
                     Err(error) => {
                         update.error = Some(error.clone());
                         self.status = Some(Status::Domain(error));
@@ -70,6 +80,9 @@ impl EditorSession {
                 }
             }
             EditorCommand::Seek(time) => self.scrub(time),
+            EditorCommand::OpenSourceMonitor { media_id } => self.open_source_monitor(media_id),
+            EditorCommand::ShowProgramMonitor => self.show_program_monitor(),
+            EditorCommand::ShowSourceMonitor => self.show_source_monitor(),
             EditorCommand::TogglePlay => self.toggle_play(),
             EditorCommand::Frame { now } => self.frame(now),
             EditorCommand::Clock { epoch, now, sample } => self.on_clock(epoch, now, sample),
@@ -195,5 +208,67 @@ impl EditorSession {
         self.synced_playhead = self.playhead;
         self.last_tick = None;
         self.sync()
+    }
+
+    fn open_source_monitor(&mut self, media_id: String) -> Vec<PreviewCommand> {
+        let Some(media) = self.project.media.iter().find(|m| m.id == media_id) else {
+            return Vec::new();
+        };
+        if !todo_core::is_visual_media(media) {
+            return Vec::new();
+        }
+        let path_ok = media
+            .path
+            .as_ref()
+            .is_some_and(|p| !p.trim().is_empty());
+        if !path_ok {
+            return Vec::new();
+        }
+        self.playing = false;
+        self.last_tick = None;
+        self.source_monitor = Some(SourceMonitor {
+            media_id,
+            time: 0.0,
+        });
+        self.monitor_pane = MonitorPane::Source;
+        self.last_layers = None;
+        self.emit(Want {
+            audio: true,
+            transport: true,
+            picture: true,
+        })
+    }
+
+    fn show_program_monitor(&mut self) -> Vec<PreviewCommand> {
+        if self.monitor_pane == MonitorPane::Program {
+            return Vec::new();
+        }
+        self.playing = false;
+        self.last_tick = None;
+        self.monitor_pane = MonitorPane::Program;
+        self.last_layers = None;
+        self.emit(Want {
+            audio: true,
+            transport: true,
+            picture: true,
+        })
+    }
+
+    fn show_source_monitor(&mut self) -> Vec<PreviewCommand> {
+        if self.source_monitor.is_none() {
+            return Vec::new();
+        }
+        if self.monitor_pane == MonitorPane::Source {
+            return Vec::new();
+        }
+        self.playing = false;
+        self.last_tick = None;
+        self.monitor_pane = MonitorPane::Source;
+        self.last_layers = None;
+        self.emit(Want {
+            audio: true,
+            transport: true,
+            picture: true,
+        })
     }
 }

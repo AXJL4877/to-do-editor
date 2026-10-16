@@ -17,7 +17,10 @@ fn workspace_production_dependencies_respect_layer_boundaries() {
     let rules: &[(&str, &[&str])] = &[
         ("todo_core", &["serde", "serde_json"]),
         ("todo_application", &["todo_core", "serde"]),
-        ("todo_interaction", &["todo_core", "todo_application"]),
+        (
+            "todo_interaction",
+            &["todo_core", "todo_application", "uuid"],
+        ),
         ("todo_ui", &["todo_interaction", "egui", "image"]),
         (
             "todo_storage",
@@ -54,6 +57,7 @@ fn workspace_production_dependencies_respect_layer_boundaries() {
                 "egui",
                 "raw-window-handle",
                 "rfd",
+                "serde",
             ],
         ),
     ];

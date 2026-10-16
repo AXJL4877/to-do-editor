@@ -31,6 +31,43 @@ impl Transform {
         *self == Self::default()
     }
 
+    /// Place media so one source pixel maps to one canvas pixel (PR-style default).
+    /// Falls back to identity (aspect-fit fill) when sizes are unknown.
+    pub fn for_pixel_placement(source: (u32, u32), canvas: (u32, u32)) -> Self {
+        let Some(pixel) = super::BaseSize::pixel(source, canvas) else {
+            return Self::default();
+        };
+        let Some(fit) = super::BaseSize::fit(
+            f64::from(source.0) / f64::from(source.1),
+            (f64::from(canvas.0), f64::from(canvas.1)),
+        ) else {
+            return Self::default();
+        };
+        if fit.width <= 0.0 || !fit.width.is_finite() {
+            return Self::default();
+        }
+        let scale = pixel.width / fit.width;
+        if !scale.is_finite() || scale <= 0.0 {
+            return Self::default();
+        }
+        Self {
+            scale,
+            ..Self::default()
+        }
+    }
+
+    /// Placement transform for known source pixels under the project media-scale mode.
+    pub fn for_media_placement(
+        source: (u32, u32),
+        canvas: (u32, u32),
+        mode: crate::MediaScaleMode,
+    ) -> Self {
+        match mode {
+            crate::MediaScaleMode::Pixel => Self::for_pixel_placement(source, canvas),
+            crate::MediaScaleMode::MatchFrame => Self::default(),
+        }
+    }
+
     pub fn is_valid(&self) -> bool {
         self.x.is_finite()
             && self.y.is_finite()

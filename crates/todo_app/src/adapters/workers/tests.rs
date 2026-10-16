@@ -190,10 +190,12 @@ fn stopped_import_queue_returns_a_terminal_event_that_releases_the_workspace() {
         height: 1080,
         playhead: 0.0,
         duration: Some(60.0),
+        media_scale: Default::default(),
         media: Vec::new(),
         tracks: Vec::new(),
         text_styles: Vec::new(),
-    };
+        folders: Vec::new(),
+};
     let mut workspace = Workspace::with_project(project, "queue-test");
     let context = workspace.control_context().unwrap();
     let outcome = workspace.control(ControlRequest {
@@ -202,6 +204,7 @@ fn stopped_import_queue_returns_a_terminal_event_that_releases_the_workspace() {
         expected_revision: Some(context.revision),
         command: ControlCommand::ImportMedia {
             paths: vec!["A.mp4".into()],
+                    folder_id: None,
         },
     });
     let (ticket, task) = outcome

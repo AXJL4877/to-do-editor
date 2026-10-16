@@ -26,6 +26,9 @@ pub enum ControlCommand {
     },
     ImportMedia {
         paths: Vec<PathBuf>,
+        /// Virtual library folder; omit or null for root.
+        #[serde(default)]
+        folder_id: Option<String>,
     },
     ApplyEdits {
         edits: Vec<ControlEdit>,
@@ -121,6 +124,26 @@ pub enum ControlEdit {
     SetText {
         clip: ClipRef,
         content: TextContent,
+    },
+    CreateFolder {
+        id: String,
+        name: String,
+        parent_id: Option<String>,
+    },
+    RenameFolder {
+        id: String,
+        name: String,
+    },
+    DeleteFolder {
+        id: String,
+    },
+    MoveFolder {
+        id: String,
+        parent_id: Option<String>,
+    },
+    MoveMedia {
+        media_id: String,
+        folder_id: Option<String>,
     },
 }
 

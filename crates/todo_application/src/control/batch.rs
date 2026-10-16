@@ -198,6 +198,31 @@ fn command(
             clip_id: primary(project, steps, clip)?,
             content: content.clone(),
         },
+        ControlEdit::CreateFolder {
+            id,
+            name,
+            parent_id,
+        } => EditCommand::CreateFolder {
+            id: id.clone(),
+            name: name.clone(),
+            parent_id: parent_id.clone(),
+        },
+        ControlEdit::RenameFolder { id, name } => EditCommand::RenameFolder {
+            id: id.clone(),
+            name: name.clone(),
+        },
+        ControlEdit::DeleteFolder { id } => EditCommand::DeleteFolder { id: id.clone() },
+        ControlEdit::MoveFolder { id, parent_id } => EditCommand::MoveFolder {
+            id: id.clone(),
+            parent_id: parent_id.clone(),
+        },
+        ControlEdit::MoveMedia {
+            media_id,
+            folder_id,
+        } => EditCommand::MoveMedia {
+            media_id: media_id.clone(),
+            folder_id: folder_id.clone(),
+        },
     })
 }
 

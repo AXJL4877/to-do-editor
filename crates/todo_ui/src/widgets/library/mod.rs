@@ -1,65 +1,78 @@
-//! Project media UI and its typed drag payload. Source files are never changed here.
+//! VS Code–style media explorer: one indented tree for bins and media.
+
+mod icons;
 
 use egui::{Color32, Sense, Ui};
-use todo_interaction::{EditorFocus, EditorViewModel, Intent};
+use todo_interaction::{EditorFocus, EditorViewModel, ExplorerNode, Intent, LibraryItemView};
 
 use crate::format::clock;
-use crate::theme::{button, Btn, BORDER, BRAND, DIM, FIELD, MUTED, PANEL, PANEL_2, TEXT};
+use crate::theme::{button, Btn, BRAND, DIM, FIELD, MUTED, PANEL, PANEL_2, TEXT};
 use crate::thumbs::ThumbCache;
+
+const ROW_H: f32 = 22.0;
+const INDENT: f32 = 16.0;
+const GUIDE: Color32 = Color32::from_rgb(0x3a, 0x3d, 0x44);
 
 #[derive(Debug, Clone)]
 pub(super) struct MediaDrag {
     pub media_id: String,
 }
 
+#[derive(Debug, Clone)]
+struct FolderDrag {
+    folder_id: String,
+}
+
 pub(super) fn draw(ui: &mut Ui, vm: &EditorViewModel, thumbs: &mut ThumbCache) -> Vec<Intent> {
     egui::Frame::NONE
         .fill(PANEL)
-        .inner_margin(10)
+        .inner_margin(egui::Margin::symmetric(6, 6))
         .show(ui, |ui| draw_contents(ui, vm, thumbs))
         .inner
 }
 
 fn draw_contents(ui: &mut Ui, vm: &EditorViewModel, thumbs: &mut ThumbCache) -> Vec<Intent> {
     let mut intents = Vec::new();
-    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-    ui.spacing_mut().button_padding = egui::vec2(7.0, 4.0);
+    let background = ui.interact(
+        ui.max_rect(),
+        ui.id().with("library_background"),
+        Sense::click(),
+    );
+    ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+    ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
+
     ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new("媒体库")
-                .strong()
-                .size(11.0)
-                .color(TEXT),
-        );
-        ui.label(
-            egui::RichText::new(format!("{:02}", vm.library.items.len()))
-                .small()
-                .color(MUTED),
-        );
+        ui.label(egui::RichText::new("媒体库").size(11.0).color(MUTED));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if button(
                 ui,
-                if vm.importing {
-                    "导入中..."
-                } else {
-                    "+ 导入"
-                },
+                if vm.importing { "…" } else { "+" },
                 Btn::Ghost,
                 !vm.importing,
             )
-            .on_hover_text("导入视频、音频或图片 (Ctrl+I)")
+            .on_hover_text("导入到当前料箱 (Ctrl+I)")
             .clicked()
             {
                 intents.push(Intent::Focus(EditorFocus::Library));
                 intents.push(Intent::ImportPressed);
             }
+            if button(ui, "新料箱", Btn::Ghost, true)
+                .on_hover_text("在当前料箱下新建")
+                .clicked()
+            {
+                intents.push(Intent::Focus(EditorFocus::Library));
+                intents.push(Intent::LibraryCreateFolder {
+                    name: next_folder_name(vm),
+                });
+            }
         });
     });
+
     let mut query = vm.library.query.clone();
     let search = ui.add(
         egui::TextEdit::singleline(&mut query)
-            .hint_text("搜索素材...")
-            .margin(egui::Margin::symmetric(9, 7))
+            .hint_text("搜索…")
+            .margin(egui::Margin::symmetric(6, 4))
             .background_color(FIELD)
             .desired_width(f32::INFINITY),
     );
@@ -69,287 +82,365 @@ fn draw_contents(ui: &mut Ui, vm: &EditorViewModel, thumbs: &mut ThumbCache) -> 
     if search.changed() {
         intents.push(Intent::LibraryQuery(query));
     }
+    ui.add_space(4.0);
 
-    let selected = vm
-        .library
-        .items
-        .iter()
-        .find(|entry| Some(&entry.item.id) == vm.library.selected_id.as_ref());
-    ui.horizontal_wrapped(|ui| {
-        if button(ui, "追加", Btn::Ghost, selected.is_some())
-            .on_hover_text("将所选素材追加到序列末尾")
-            .clicked()
-        {
-            if let Some(entry) = selected {
-                intents.push(Intent::PlaceMedia {
-                    media_id: entry.item.id.clone(),
-                    track_id: None,
-                    time: None,
-                });
-            }
-        }
-        if button(ui, "放到播放头", Btn::Ghost, selected.is_some())
-            .on_hover_text("放到播放头处的空白区间")
-            .clicked()
-        {
-            if let Some(entry) = selected {
-                intents.push(Intent::PlaceMedia {
-                    media_id: entry.item.id.clone(),
-                    track_id: None,
-                    time: Some(vm.current_time),
-                });
-            }
-        }
-    });
-    ui.separator();
-    let list_height = (ui.available_height() - 24.0).max(0.0);
+    let list_h = (ui.available_height() - 4.0).max(40.0);
     egui::ScrollArea::vertical()
-        .id_salt("project_media_list")
+        .id_salt("media_explorer")
         .auto_shrink([false, false])
-        .max_height(list_height)
+        .max_height(list_h)
         .show(ui, |ui| {
-            let mut visible = 0;
-            for entry in &vm.library.items {
-                let item = &entry.item;
-                visible += 1;
-                let (rect, response) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), 64.0),
-                    Sense::click_and_drag(),
-                );
-                ui.painter().rect_filled(
-                    rect,
-                    0.0,
-                    if entry.selected {
-                        Color32::from_rgb(0x2c, 0x3c, 0x46)
-                    } else if response.hovered() {
-                        PANEL_2
-                    } else {
-                        PANEL
-                    },
-                );
-                if entry.selected {
-                    ui.painter().rect_filled(
-                        egui::Rect::from_min_size(rect.min, egui::vec2(2.0, rect.height())),
-                        0.0,
-                        BRAND,
-                    );
-                }
-                ui.painter().line_segment(
-                    [rect.left_bottom(), rect.right_bottom()],
-                    egui::Stroke::new(1.0_f32, BORDER),
-                );
-                let visual = item.visual;
-                let (kind_label, glyph, glyph_color) = match item.kind {
-                    todo_interaction::MediaKind::Video => ("视频", "V", BRAND),
-                    todo_interaction::MediaKind::Audio => ("音频", "A", crate::theme::AUDIO_TEXT),
-                    todo_interaction::MediaKind::Image => ("图片", "图", BRAND),
-                };
-                let thumb = egui::Rect::from_min_size(
-                    rect.min + egui::vec2(8.0, 8.0),
-                    egui::vec2(72.0, 48.0),
-                );
-                ui.painter().rect_filled(thumb, 0.0, FIELD);
-                let showed = visual
-                    .then_some(item.path.as_deref())
-                    .flatten()
-                    .is_some_and(|path| thumbs.paint(ui, path, thumb.shrink(1.0)));
-                if !showed {
-                    ui.painter().text(
-                        thumb.center(),
-                        egui::Align2::CENTER_CENTER,
-                        glyph,
-                        egui::FontId::monospace(12.0),
-                        glyph_color,
-                    );
-                }
-                let text_x = 90.0_f32;
-                let mut name = egui::text::LayoutJob::simple(
-                    item.name.clone(),
-                    egui::FontId::proportional(12.0),
-                    TEXT,
-                    (rect.width() - text_x - 12.0).max(10.0),
-                );
-                name.wrap.max_rows = 1;
-                name.wrap.break_anywhere = true;
-                let name = ui.painter().layout_job(name);
-                ui.painter()
-                    .galley(rect.min + egui::vec2(text_x, 12.0), name, TEXT);
-                let size = match (item.width, item.height) {
-                    (Some(w), Some(h)) if visual => format!("{w}×{h}"),
-                    _ => kind_label.into(),
-                };
-                ui.painter().text(
-                    rect.min + egui::vec2(text_x, 42.0),
-                    egui::Align2::LEFT_CENTER,
-                    format!("{size}  ·  引用 {}", entry.uses),
-                    egui::FontId::proportional(10.0),
-                    MUTED,
-                );
-                ui.painter().text(
-                    rect.right_bottom() + egui::vec2(-8.0, -19.0),
-                    egui::Align2::RIGHT_CENTER,
-                    clock(item.duration),
-                    egui::FontId::monospace(10.0),
-                    DIM,
-                );
-                response.dnd_set_drag_payload(MediaDrag {
-                    media_id: item.id.clone(),
-                });
-                if response.clicked() || response.drag_started() || response.secondary_clicked() {
-                    intents.push(Intent::Focus(EditorFocus::Library));
-                    intents.push(Intent::LibrarySelect(item.id.clone()));
-                }
-                if response.double_clicked() {
-                    intents.push(Intent::PlaceMedia {
-                        media_id: item.id.clone(),
-                        track_id: None,
-                        time: None,
-                    });
-                }
-                response.clone().on_hover_text(format!(
-                    "{}\n时间线引用 {}\n拖入空白轨道，或双击追加。",
-                    item.path.as_deref().unwrap_or("源文件不可用"),
-                    entry.uses
-                ));
-                response.context_menu(|ui| {
-                    if ui.button("追加到序列").clicked() {
-                        intents.push(Intent::PlaceMedia {
-                            media_id: item.id.clone(),
-                            track_id: None,
-                            time: None,
-                        });
-                        ui.close_menu();
-                    }
-                    if ui
-                        .add_enabled(entry.uses == 0, egui::Button::new("移除未使用素材"))
-                        .on_hover_text("从媒体库移除条目，保留源文件")
-                        .clicked()
-                    {
-                        intents.push(Intent::RemoveMedia {
-                            media_id: item.id.clone(),
-                            cascade: false,
-                        });
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if ui
-                        .add_enabled(
-                            entry.uses > 0 && !entry.locked_references,
-                            egui::Button::new("移除素材及全部时间线引用..."),
-                        )
-                        .on_hover_text("移除媒体库条目及所有时间线引用，可撤销；源文件保留。")
-                        .clicked()
-                    {
-                        intents.push(Intent::RemoveMedia {
-                            media_id: item.id.clone(),
-                            cascade: true,
-                        });
-                        ui.close_menu();
-                    }
-                    if entry.locked_references {
-                        ui.weak("请先解锁被引用的轨道，再移除引用。");
-                    }
-                });
-            }
-            if visible == 0 {
-                ui.add_space(16.0);
-                ui.weak(if vm.library.items.is_empty() {
-                    "导入文件以建立媒体库。"
+            intents.extend(draw_root(ui, vm));
+            if vm.library.explorer.is_empty() {
+                ui.add_space(8.0);
+                ui.weak(if vm.library.searching {
+                    "无匹配"
                 } else {
-                    "没有匹配的素材。"
+                    "空 — 导入或新建料箱"
                 });
+            } else {
+                for node in &vm.library.explorer {
+                    intents.extend(draw_node(ui, vm, node, thumbs, &[]));
+                }
             }
         });
-    ui.add(
-        egui::Label::new(
-            egui::RichText::new("拖入时间线 · 双击追加")
-                .small()
-                .color(MUTED),
-        )
-        .truncate(),
-    )
-    .on_hover_text("将素材拖入时间线，或双击追加");
+
+    if background.clicked() {
+        intents.push(Intent::Focus(EditorFocus::Library));
+        intents.push(Intent::LibrarySelectFolder(None));
+    }
     intents
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use todo_core::{MediaItem, Project};
+/// A permanent destination for importing or moving items back out of a bin.
+fn draw_root(ui: &mut Ui, vm: &EditorViewModel) -> Vec<Intent> {
+    let mut intents = Vec::new();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), Sense::hover());
+    let response = ui.interact(rect, ui.id().with("library_root"), Sense::click());
+    let selected = vm.library.selected_id.is_none() && vm.library.selected_folder_id.is_none();
+    paint_row(ui, rect, selected, response.hovered());
+    let x0 = rect.left() + 4.0;
+    icons::folder(ui.painter(), icon_rect(rect, x0 + 14.0), true);
+    paint_name(ui, rect, x0 + 34.0, "项目根目录", MUTED, rect.right() - 6.0);
+    if response.clicked() {
+        intents.push(Intent::LibrarySelectFolder(None));
+    }
+    if let Some(intent) = drop_on_folder(ui, &response, None) {
+        intents.push(intent);
+    }
+    response.on_hover_text("导入到根目录 · 拖入素材或料箱可移回根目录");
+    intents
+}
 
-    #[test]
-    fn media_row_drag_carries_the_identifier() {
-        let mut vm = crate::test_view(
-            Project {
-                version: 1,
-                fps: 30.0,
-                playhead: 0.0,
-                width: 1920,
-                height: 1080,
-                duration: None,
-                tracks: Vec::new(),
-                text_styles: Vec::new(),
-                media: vec![MediaItem {
-                    id: "legacy".into(),
-                    name: "legacy.mp4".into(),
-                    path: Some("D:/media/legacy.mp4".into()),
-                    duration: 8.0,
-                    has_audio: Some(false),
-                    width: None,
-                    height: None,
-                    kind: None,
-                }],
-            },
-            "test",
-        );
-        // The presentation layer owns filtering. Paint each supplied result
-        // even when its label does not contain the displayed search query.
-        vm.library.query = "provided search results".into();
-        let ctx = egui::Context::default();
-        let mut pointer = egui::pos2(40.0, 160.0);
-        for step in 0..3 {
-            let events = match step {
-                1 => vec![
-                    egui::Event::PointerMoved(pointer),
-                    egui::Event::PointerButton {
-                        pos: pointer,
-                        button: egui::PointerButton::Primary,
-                        pressed: true,
-                        modifiers: Default::default(),
-                    },
-                ],
-                2 => vec![egui::Event::PointerMoved(pointer + egui::vec2(20.0, 0.0))],
-                _ => Vec::new(),
-            };
-            let output = ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(350.0, 400.0),
-                    )),
-                    events,
-                    ..Default::default()
-                },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        draw(ui, &vm, &mut ThumbCache::default());
-                    });
-                },
-            );
-            if step == 0 {
-                pointer = output
-                    .shapes
-                    .iter()
-                    .find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == "legacy.mp4" => {
-                            Some(text.pos + egui::vec2(5.0, 5.0))
-                        }
-                        _ => None,
-                    })
-                    .expect("media row was painted");
-            }
+fn next_folder_name(vm: &EditorViewModel) -> String {
+    let base = "新建料箱";
+    let names: Vec<String> = collect_folder_names(&vm.library.explorer);
+    if !names.iter().any(|n| n == base) {
+        return base.into();
+    }
+    for index in 2..100 {
+        let candidate = format!("{base} {index}");
+        if !names.contains(&candidate) {
+            return candidate;
         }
-        let payload = egui::DragAndDrop::payload::<MediaDrag>(&ctx).expect("media drag payload");
-        assert_eq!(payload.media_id, "legacy");
+    }
+    base.into()
+}
+
+fn collect_folder_names(nodes: &[ExplorerNode]) -> Vec<String> {
+    let mut out = Vec::new();
+    for node in nodes {
+        if let ExplorerNode::Folder { name, children, .. } = node {
+            out.push(name.clone());
+            out.extend(collect_folder_names(children));
+        }
+    }
+    out
+}
+
+fn draw_node(
+    ui: &mut Ui,
+    vm: &EditorViewModel,
+    node: &ExplorerNode,
+    thumbs: &mut ThumbCache,
+    guides: &[f32],
+) -> Vec<Intent> {
+    match node {
+        ExplorerNode::Folder {
+            id,
+            name,
+            depth,
+            expanded,
+            selected,
+            children,
+        } => {
+            let mut intents = Vec::new();
+            let (rect, _) =
+                ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), Sense::hover());
+            let response = ui.interact(rect, ui.id().with(("folder", id)), Sense::click_and_drag());
+            paint_row(ui, rect, *selected, response.hovered());
+            paint_guides(ui, rect, guides);
+
+            let x0 = rect.left() + 4.0 + *depth as f32 * INDENT;
+            icons::chevron(
+                ui.painter(),
+                egui::Rect::from_min_max(
+                    egui::pos2(x0, rect.top()),
+                    egui::pos2(x0 + 14.0, rect.bottom()),
+                ),
+                *expanded,
+                MUTED,
+            );
+            icons::folder(ui.painter(), icon_rect(rect, x0 + 14.0), *expanded);
+            paint_name(ui, rect, x0 + 34.0, name, TEXT, rect.right() - 6.0);
+
+            response.dnd_set_drag_payload(FolderDrag {
+                folder_id: id.clone(),
+            });
+            if let Some(intent) = drop_on_folder(ui, &response, Some(id.as_str())) {
+                intents.push(intent);
+            }
+
+            if response.clicked() {
+                intents.push(Intent::Focus(EditorFocus::Library));
+                intents.push(Intent::LibrarySelectFolder(Some(id.clone())));
+                let on_chevron = response
+                    .interact_pointer_pos()
+                    .is_some_and(|pos| (x0..x0 + 14.0).contains(&pos.x));
+                if on_chevron || !expanded {
+                    intents.push(Intent::LibraryToggleFolder(id.clone()));
+                }
+            }
+            if response.secondary_clicked() || response.drag_started() {
+                intents.push(Intent::Focus(EditorFocus::Library));
+                intents.push(Intent::LibrarySelectFolder(Some(id.clone())));
+            }
+
+            response.context_menu(|ui| {
+                let mut rename = name.clone();
+                ui.add(
+                    egui::TextEdit::singleline(&mut rename)
+                        .desired_width(130.0)
+                        .hint_text("名称"),
+                );
+                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    let trimmed = rename.trim();
+                    if !trimmed.is_empty() && trimmed != name {
+                        intents.push(Intent::LibraryRenameFolder {
+                            id: id.clone(),
+                            name: trimmed.to_owned(),
+                        });
+                    }
+                    ui.close_menu();
+                }
+                if ui
+                    .button("删除料箱 (Del)")
+                    .on_hover_text("只删除料箱；其子料箱和素材移到上一级，源文件与时间线保持不变")
+                    .clicked()
+                {
+                    intents.push(Intent::LibraryDeleteFolder { id: id.clone() });
+                    ui.close_menu();
+                }
+            });
+
+            if *expanded {
+                let mut next_guides = guides.to_vec();
+                next_guides.push(x0 + 5.0);
+                for child in children {
+                    intents.extend(draw_node(ui, vm, child, thumbs, &next_guides));
+                }
+            }
+            intents
+        }
+        ExplorerNode::Media { depth, item } => {
+            draw_media_leaf(ui, vm, item, *depth, guides, thumbs)
+        }
     }
 }
+
+fn paint_row(ui: &Ui, rect: egui::Rect, selected: bool, hovered: bool) {
+    if selected {
+        ui.painter()
+            .rect_filled(rect, 0.0, Color32::from_rgb(0x2b, 0x3c, 0x49));
+    } else if hovered {
+        ui.painter().rect_filled(rect, 0.0, PANEL_2);
+    }
+}
+
+fn icon_rect(row: egui::Rect, left: f32) -> egui::Rect {
+    egui::Rect::from_center_size(
+        egui::pos2(left + 8.0, row.center().y),
+        egui::vec2(16.0, 16.0),
+    )
+}
+
+fn paint_name(ui: &Ui, rect: egui::Rect, x: f32, name: &str, color: Color32, right: f32) {
+    let mut job = egui::text::LayoutJob::simple(
+        name.to_owned(),
+        egui::FontId::proportional(12.0),
+        color,
+        (right - x).max(0.0),
+    );
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    let galley = ui.painter().layout_job(job);
+    let y = rect.center().y - galley.size().y / 2.0;
+    ui.painter().galley(egui::pos2(x, y), galley, color);
+}
+
+fn paint_guides(ui: &Ui, rect: egui::Rect, guides: &[f32]) {
+    for &x in guides {
+        ui.painter().line_segment(
+            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+            egui::Stroke::new(1.0_f32, GUIDE),
+        );
+    }
+}
+
+fn draw_media_leaf(
+    ui: &mut Ui,
+    vm: &EditorViewModel,
+    entry: &LibraryItemView,
+    depth: usize,
+    guides: &[f32],
+    thumbs: &mut ThumbCache,
+) -> Vec<Intent> {
+    let mut intents = Vec::new();
+    let item = &entry.item;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), Sense::hover());
+    let response = ui.interact(
+        rect,
+        ui.id().with(("media", &item.id)),
+        Sense::click_and_drag(),
+    );
+    paint_row(ui, rect, entry.selected, response.hovered());
+    paint_guides(ui, rect, guides);
+
+    let x0 = rect.left() + 4.0 + depth as f32 * INDENT;
+    icons::media(ui.painter(), icon_rect(rect, x0 + 14.0), item.kind);
+
+    let name_x = x0 + 34.0;
+    let dur = if matches!(item.kind, todo_interaction::MediaKind::Image) {
+        clock(item.place_duration)
+    } else {
+        clock(item.duration)
+    };
+    let dur_w = 36.0_f32;
+    paint_name(
+        ui,
+        rect,
+        name_x,
+        &item.name,
+        TEXT,
+        rect.right() - dur_w - 8.0,
+    );
+
+    ui.painter().text(
+        egui::pos2(rect.right() - 6.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        dur,
+        egui::FontId::monospace(10.0),
+        DIM,
+    );
+
+    // Tiny hover thumb preview only — keep row compact.
+    let _ = thumbs;
+
+    response.dnd_set_drag_payload(MediaDrag {
+        media_id: item.id.clone(),
+    });
+    if response.clicked() || response.drag_started() {
+        intents.push(Intent::Focus(EditorFocus::Library));
+        intents.push(Intent::LibrarySelect(item.id.clone()));
+    }
+    if response.double_clicked() {
+        intents.push(Intent::OpenSourceMonitor {
+            media_id: item.id.clone(),
+        });
+    }
+    if response.secondary_clicked() {
+        intents.push(Intent::Focus(EditorFocus::Library));
+        intents.push(Intent::LibrarySelect(item.id.clone()));
+    }
+    response.clone().on_hover_text(format!(
+        "{}\n拖到时间线 · 双击源监视器",
+        item.path.as_deref().unwrap_or("源文件不可用")
+    ));
+    response.context_menu(|ui| {
+        if ui.button("追加到序列").clicked() {
+            intents.push(Intent::PlaceMedia {
+                media_id: item.id.clone(),
+                track_id: None,
+                time: None,
+            });
+            ui.close_menu();
+        }
+        if ui.button("放到播放头").clicked() {
+            intents.push(Intent::PlaceMedia {
+                media_id: item.id.clone(),
+                track_id: None,
+                time: Some(vm.current_time),
+            });
+            ui.close_menu();
+        }
+        ui.separator();
+        if ui
+            .add_enabled(entry.uses == 0, egui::Button::new("从项目中清除"))
+            .clicked()
+        {
+            intents.push(Intent::RemoveMedia {
+                media_id: item.id.clone(),
+                cascade: false,
+            });
+            ui.close_menu();
+        }
+        if ui
+            .add_enabled(
+                entry.uses > 0 && !entry.locked_references,
+                egui::Button::new("清除并删除时间线引用…"),
+            )
+            .clicked()
+        {
+            intents.push(Intent::RemoveMedia {
+                media_id: item.id.clone(),
+                cascade: true,
+            });
+            ui.close_menu();
+        }
+    });
+    intents
+}
+
+fn drop_on_folder(ui: &Ui, response: &egui::Response, folder_id: Option<&str>) -> Option<Intent> {
+    if response.dnd_hover_payload::<MediaDrag>().is_none()
+        && response.dnd_hover_payload::<FolderDrag>().is_none()
+    {
+        return None;
+    }
+    if response.hovered() {
+        ui.painter().rect_stroke(
+            response.rect,
+            0.0,
+            egui::Stroke::new(1.0_f32, BRAND),
+            egui::StrokeKind::Inside,
+        );
+    }
+    if let Some(media) = response.dnd_release_payload::<MediaDrag>() {
+        return Some(Intent::LibraryMoveMedia {
+            media_id: media.media_id.clone(),
+            folder_id: folder_id.map(str::to_owned),
+        });
+    }
+    if let Some(folder) = response.dnd_release_payload::<FolderDrag>() {
+        if folder_id != Some(folder.folder_id.as_str()) {
+            return Some(Intent::LibraryMoveFolder {
+                id: folder.folder_id.clone(),
+                parent_id: folder_id.map(str::to_owned),
+            });
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests;

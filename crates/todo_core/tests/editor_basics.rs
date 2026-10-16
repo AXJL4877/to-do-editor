@@ -11,7 +11,8 @@ fn project() -> Project {
         width: Some(1920),
         height: Some(1080),
         kind: None,
-    });
+        folder_id: None,
+});
     p
 }
 
@@ -213,7 +214,8 @@ fn still_image_places_on_video_track_with_hold_duration_and_no_audio_link() {
         width: Some(1920),
         height: Some(1080),
         kind: Some(MediaKind::Image),
-    });
+        folder_id: None,
+});
     assert!(is_image_media(&p.media[0]));
     assert!(!is_video_media(&p.media[0]));
     assert!(is_visual_media(&p.media[0]));
@@ -247,7 +249,8 @@ fn still_image_without_duration_uses_default_hold() {
         width: Some(100),
         height: Some(100),
         kind: Some(MediaKind::Image),
-    });
+        folder_id: None,
+});
     let p = place_media(p, "img", None, 0.0).unwrap();
     let clip = &p
         .tracks

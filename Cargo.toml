@@ -30,8 +30,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
-eframe = { version = "0.31", default-features = true, features = ["default_fonts", "glow"] }
-egui = "0.31"
+eframe = { version = "0.31", default-features = true, features = ["default_fonts", "glow", "persistence"] }
+egui = { version = "0.31", features = ["persistence"] }
 raw-window-handle = "0.6"
 rfd = "0.15"
 tiny-skia = "0.12"

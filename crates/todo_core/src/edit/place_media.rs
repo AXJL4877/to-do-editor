@@ -136,6 +136,14 @@ fn place_span(
         source_in,
         1.0,
     );
+    // Unknown dimensions keep aspect-fit fill; known sizes follow project media_scale.
+    if let (Some(w), Some(h)) = (media.width, media.height) {
+        picture.transform = crate::Transform::for_media_placement(
+            (w, h),
+            next.output_size(),
+            next.media_scale,
+        );
+    }
     let link_audio = !audio_only
         && !is_image_media(&media)
         && media.has_audio == Some(true)

@@ -1,7 +1,11 @@
 //! Desktop composition root: render, collect input, and execute application effects.
 mod effects;
 mod frame;
-use crate::adapters::{paths, preview::PreviewBridge, workers::Workers};
+mod proxies;
+mod window_state;
+use crate::adapters::{
+    editing_proxies::EditingProxies, paths, preview::PreviewBridge, workers::Workers,
+};
 use eframe::egui;
 use std::time::Instant;
 use todo_application::{AppAction, Workspace};
@@ -19,6 +23,9 @@ pub struct App {
     last_clock_poll: f64,
     last_preview_attempt: f64,
     close_approved: bool,
+    window_state: window_state::WindowState,
+    proxies: EditingProxies,
+    proxy_project: Option<(u64, u64)>,
 }
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -35,6 +42,9 @@ impl App {
             last_clock_poll: f64::NEG_INFINITY,
             last_preview_attempt: f64::NEG_INFINITY,
             close_approved: false,
+            window_state: window_state::WindowState::load(cc.storage),
+            proxies: EditingProxies::start(repo),
+            proxy_project: None,
         };
         let update = app.workspace.dispatch(AppAction::RefreshProjects);
         app.handle(update, &cc.egui_ctx);

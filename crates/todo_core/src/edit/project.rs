@@ -1,4 +1,4 @@
-use crate::{DomainError, Project};
+use crate::{DomainError, MediaScaleMode, Project};
 
 /// Soft caps for user-editable program settings.
 pub const MAX_OUTPUT_EDGE: u32 = 8192;
@@ -36,6 +36,12 @@ pub fn set_project_fps(mut project: Project, fps: f64) -> Result<Project, Domain
     }
     project.fps = fps;
     Ok(project)
+}
+
+/// Set how newly placed media is scaled onto the program canvas.
+pub fn set_media_scale_mode(mut project: Project, mode: MediaScaleMode) -> Project {
+    project.media_scale = mode;
+    project
 }
 
 #[cfg(test)]

@@ -3,7 +3,9 @@
 #include <mferror.h>
 #include <wincodec.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <iterator>
 #include <cstring>
 #include <vector>
 
@@ -109,12 +111,18 @@ bool HwDecoder::IsImagePath(const wchar_t* path) {
 
 HwDecoder::HwDecoder() = default;
 
+std::shared_ptr<MfRuntime> MfRuntime::acquire() {
+  if (FAILED(MFStartup(MF_VERSION))) return {};
+  return std::shared_ptr<MfRuntime>(new MfRuntime());
+}
+
+MfRuntime::~MfRuntime() { MFShutdown(); }
+
 HwDecoder::~HwDecoder() {
   close();
   SafeRelease(&dxgi_manager_);
   SafeRelease(&context_);
   SafeRelease(&device_);
-  if (mf_started_) MFShutdown();
 }
 
 bool HwDecoder::attachDevice(ID3D11Device* device, ID3D11DeviceContext* context,
@@ -128,9 +136,9 @@ bool HwDecoder::attachDevice(ID3D11Device* device, ID3D11DeviceContext* context,
   SafeRelease(&dxgi_manager_);
   SafeRelease(&context_);
   SafeRelease(&device_);
-  if (!mf_started_) {
-    if (FAILED(MFStartup(MF_VERSION))) return false;
-    mf_started_ = true;
+  if (!mf_runtime_) {
+    mf_runtime_ = MfRuntime::acquire();
+    if (!mf_runtime_) return false;
   }
   device_ = device;
   context_ = context;
@@ -145,9 +153,9 @@ bool HwDecoder::attachDevice(ID3D11Device* device, ID3D11DeviceContext* context,
 bool HwDecoder::EnsureDevice() {
   if (device_) return true;
 
-  if (!mf_started_) {
-    if (FAILED(MFStartup(MF_VERSION))) return false;
-    mf_started_ = true;
+  if (!mf_runtime_) {
+    mf_runtime_ = MfRuntime::acquire();
+    if (!mf_runtime_) return false;
   }
 
   D3D_FEATURE_LEVEL levels[] = {
@@ -263,16 +271,31 @@ void HwDecoder::ReleaseFrame() {
 }
 
 void HwDecoder::ClearCache() {
-  for (auto& entry : cache_) SafeRelease(&entry.frame.texture);
-  cache_.clear();
-  cache_bytes_ = 0;
+  while (!cache_.empty()) EvictCachedFrame();
+}
+
+void HwDecoder::EvictCachedFrame() {
+  const uint64_t bytes = cache_.front().bytes;
+  SafeRelease(&cache_.front().frame.texture);
+  cache_.pop_front();
+  cache_bytes_ -= bytes;
+  cache_budget_->release(bytes);
+}
+
+void HwDecoder::setCacheBudget(std::shared_ptr<DecoderCacheBudget> shared, uint64_t limit) {
+  if (!shared) return;
+  if (cache_budget_ != shared) {
+    ClearCache();
+    cache_budget_ = std::move(shared);
+  }
+  cache_limit_ = limit;
+  while (!cache_.empty() && cache_bytes_ > cache_limit_) EvictCachedFrame();
 }
 
 void HwDecoder::CacheFrame() {
   // Cache independent GPU allocations, never decoder samples/surface leases.
   // Both limits bound memory for 4K and history for small videos.
-  constexpr uint64_t budget = 128ull * 1024 * 1024;
-  constexpr size_t frame_limit = 120;
+  constexpr size_t frame_limit = 240;
   for (const auto& entry : cache_) {
     if (std::abs(entry.frame.timestamp - frame_.timestamp) < 1e-7) return;
   }
@@ -280,12 +303,14 @@ void HwDecoder::CacheFrame() {
   frame_.texture->GetDesc(&desc);
   const uint64_t bytes = static_cast<uint64_t>(desc.Width) * desc.Height *
       (desc.Format == DXGI_FORMAT_NV12 ? 3 : 6) / 2;
-  if (bytes > budget || (desc.Format != DXGI_FORMAT_NV12 && desc.Format != DXGI_FORMAT_P010 &&
+  if (bytes > cache_limit_ || (desc.Format != DXGI_FORMAT_NV12 && desc.Format != DXGI_FORMAT_P010 &&
                          desc.Format != DXGI_FORMAT_P016)) return;
-  while (!cache_.empty() && (cache_bytes_ + bytes > budget || cache_.size() >= frame_limit)) {
-    cache_bytes_ -= cache_.front().bytes;
-    SafeRelease(&cache_.front().frame.texture);
-    cache_.pop_front();
+  while (!cache_.empty() && (cache_bytes_ + bytes > cache_limit_ || cache_.size() >= frame_limit)) {
+    EvictCachedFrame();
+  }
+  while (!cache_budget_->tryAcquire(bytes)) {
+    if (cache_.empty()) return;
+    EvictCachedFrame();
   }
   desc.ArraySize = 1;
   desc.MipLevels = 1;
@@ -294,7 +319,10 @@ void HwDecoder::CacheFrame() {
   desc.CPUAccessFlags = 0;
   desc.MiscFlags = 0;
   ID3D11Texture2D* copy = nullptr;
-  if (FAILED(device_->CreateTexture2D(&desc, nullptr, &copy))) return;
+  if (FAILED(device_->CreateTexture2D(&desc, nullptr, &copy))) {
+    cache_budget_->release(bytes);
+    return;
+  }
   context_->CopySubresourceRegion(copy, 0, 0, 0, 0, frame_.texture, frame_.array_slice, nullptr);
   DecoderFrame cached = frame_;  // Preserve crop, padding, duration and colour metadata.
   cached.texture = copy;
@@ -570,71 +598,151 @@ bool HwDecoder::open(const wchar_t* path) {
   return true;
 }
 
-bool HwDecoder::seek(double seconds, const std::function<bool()>& cancelled) {
-  if (!opened_ || !std::isfinite(seconds)) return false;
-  // Stills always show frame 0; ignore scrub time and never re-decode.
-  if (is_still_) {
-    return frame_.texture != nullptr && !(cancelled && cancelled());
+namespace {
+
+// Without a learned keyframe spacing, follow a moving target at most this far
+// before repositioning. Decoding 2 s forward costs about as much as a typical
+// keyframe preroll, so a short-GOP source never decodes much more than needed.
+constexpr double kDefaultForwardReach = 2.0;
+// Landing points can skip keyframes, so a learned spacing may overestimate.
+constexpr double kMaxForwardReach = 10.0;
+// While chasing a moving target, hand back progress at least this often.
+constexpr auto kChaseBudget = std::chrono::milliseconds(40);
+constexpr size_t kMaxKeyframes = 4096;
+
+}  // namespace
+
+void HwDecoder::NoteKeyframe(double seconds) {
+  if (!std::isfinite(seconds) || seconds < 0) return;
+  // Timestamps are 100 ns ticks; treat values within half a millisecond as one keyframe.
+  auto close_by = keyframes_.lower_bound(seconds - 5e-4);
+  if (close_by != keyframes_.end() && *close_by <= seconds + 5e-4) return;
+  if (keyframes_.size() >= kMaxKeyframes) return;
+  const auto it = keyframes_.insert(seconds).first;
+  // The minimum gap between neighbours never exceeds the real spacing.
+  if (it != keyframes_.begin()) {
+    const double gap = seconds - *std::prev(it);
+    if (gap > 1e-3 && (keyframe_interval_ <= 0 || gap < keyframe_interval_)) keyframe_interval_ = gap;
   }
-  if (!reader_) return false;
+  if (const auto next = std::next(it); next != keyframes_.end()) {
+    const double gap = *next - seconds;
+    if (gap > 1e-3 && (keyframe_interval_ <= 0 || gap < keyframe_interval_)) keyframe_interval_ = gap;
+  }
+}
+
+bool HwDecoder::CanDecodeForwardTo(double seconds) const {
+  // A cached display does not move Source Reader; its cursor may be elsewhere.
+  if (!frame_.texture || frame_from_cache_) return false;
+  const double position = frame_.timestamp;
+  if (seconds < position - 1e-6) return false;
+  if (seconds < position + frame_.duration - 1e-6) return true;
+  // Without a closer keyframe, decoding forward never costs more than the preroll
+  // a reposition would need (it lands at or before the cursor's keyframe).
+  const double reach = keyframe_interval_ > 0 ? (std::min)(keyframe_interval_, kMaxForwardReach)
+                                              : kDefaultForwardReach;
+  if (seconds - position > reach) return false;
+  // Repositioning would land on a known keyframe after the cursor: that is closer.
+  const auto next = keyframes_.upper_bound(position + 5e-4);
+  return next == keyframes_.end() || *next > seconds + 1e-6;
+}
+
+bool HwDecoder::Reposition(double seconds, const std::function<bool()>& cancelled) {
+  if (FAILED(SetPositionSeconds(reader_, seconds))) return false;
+  ReleaseFrame();
   if (cancelled && cancelled()) return false;
-  seconds = (std::max)(0.0, seconds);
-  if (media_duration_ > 0) seconds = (std::min)(seconds, (std::max)(0.0, media_duration_ - 1e-6));
-  if ((frame_from_cache_ || !frame_.texture || seconds < frame_.timestamp - 1e-6) &&
-      FindCachedFrame(seconds)) {
-    preroll_ = false;
-    return !(cancelled && cancelled());
-  }
-  if (end_of_stream_ && !frame_from_cache_ && frame_.texture && seconds >= frame_.timestamp) {
-    preroll_ = false;
+  if (ReadOneFrame(cancelled)) {
+    // SetCurrentPosition lands on the keyframe at or before the target.
+    NoteKeyframe(frame_.timestamp);
     return true;
   }
-  // A nearby replacement may still be ahead of partially decoded frames. Reuse
-  // that progress instead of returning to the same keyframe on every mouse move.
-  // Otherwise long-GOP scrubbing can cancel forever without publishing a frame.
-  const bool continuePreroll = preroll_ && !frame_from_cache_ && frame_.texture &&
-      seconds >= frame_.timestamp - 1e-6 && std::abs(seconds - preroll_target_) <= 0.5;
-  preroll_target_ = seconds;
-  preroll_ = true;
-  // Nearby forward requests are playback: consume the next samples without seeking again.
-  // A cached display does not move Source Reader. Reposition on a cache miss;
-  // otherwise a forward request could decode from the stale reader cursor.
-  if (frame_from_cache_ || !frame_.texture || seconds < frame_.timestamp - 1e-6 ||
-      (seconds > frame_.timestamp + 0.5 && !continuePreroll)) {
-    if (FAILED(SetPositionSeconds(reader_, seconds))) return false;
-    ReleaseFrame();
+  if ((cancelled && cancelled()) || !end_of_stream_) return false;
+  // Container duration can include audio after the final video frame. Seek back
+  // until a video sample is available, then advance to the final valid frame.
+  double step = (std::max)(frame_duration_, 0.5);
+  double position = seconds;
+  while (!frame_.texture && position > 0) {
     if (cancelled && cancelled()) return false;
-    if (!ReadOneFrame(cancelled)) {
-      if (cancelled && cancelled()) return false;
-      if (!end_of_stream_) return false;
-      // Container duration can include audio after the final video frame. Seek back
-      // until a video sample is available, then advance to the final valid frame.
-      double step = (std::max)(frame_duration_, 0.5);
-      double position = seconds;
-      while (!frame_.texture && position > 0) {
-        if (cancelled && cancelled()) return false;
-        position = (std::max)(0.0, seconds - step);
-        if (FAILED(SetPositionSeconds(reader_, position))) return false;
-        if (ReadOneFrame(cancelled)) break;
-        if (cancelled && cancelled()) return false;
-        if (!end_of_stream_) return false;
-        step *= 2;
-      }
-      if (!frame_.texture) return false;
+    position = (std::max)(0.0, seconds - step);
+    if (FAILED(SetPositionSeconds(reader_, position))) return false;
+    if (ReadOneFrame(cancelled)) {
+      NoteKeyframe(frame_.timestamp);
+      break;
     }
-  }
-  // SetCurrentPosition lands on a keyframe. Decode up to the frame containing the target.
-  while (seconds >= frame_.timestamp + frame_.duration - 1e-6) {
     if (cancelled && cancelled()) return false;
-    if (!ReadOneFrame(cancelled)) {
-      if (cancelled && cancelled()) return false;
-      preroll_ = false;
-      return end_of_stream_ && frame_.texture;
-    }
+    if (!end_of_stream_) return false;
+    step *= 2;
   }
-  if (cancelled && cancelled()) return false;
-  preroll_ = false;
   return frame_.texture != nullptr;
+}
+
+SeekResult HwDecoder::seek(double seconds, const SeekControl& control, double* served) {
+  const auto cancelled = [&]() { return control.cancelled && control.cancelled(); };
+  const auto clamp = [&](double value) {
+    value = (std::max)(0.0, value);
+    if (media_duration_ > 0) value = (std::min)(value, (std::max)(0.0, media_duration_ - 1e-6));
+    return value;
+  };
+  if (served) *served = seconds;
+  if (!opened_ || !std::isfinite(seconds)) return SeekResult::Failed;
+  // Stills always show frame 0; ignore scrub time and never re-decode.
+  if (is_still_) {
+    if (cancelled()) return SeekResult::Abandoned;
+    return frame_.texture ? SeekResult::Exact : SeekResult::Failed;
+  }
+  if (!reader_) return SeekResult::Failed;
+  if (cancelled()) return SeekResult::Abandoned;
+  // The request may already be stale when this layer's turn comes.
+  if (control.newer) {
+    if (const auto next = control.newer(); next && std::isfinite(*next)) seconds = *next;
+  }
+  // `served` reports the requested time (before clamping) so callers can compare
+  // it with their own request; `target` is the clamped time actually decoded.
+  double requested = seconds;
+  double target = clamp(requested);
+  if (served) *served = requested;
+  const auto started = std::chrono::steady_clock::now();
+  bool followed = false;
+  const auto superseded = [&]() { return frame_.texture ? SeekResult::Partial : SeekResult::Abandoned; };
+
+  if ((frame_from_cache_ || !frame_.texture || target < frame_.timestamp - 1e-6) &&
+      FindCachedFrame(target)) {
+    return SeekResult::Exact;
+  }
+  if (end_of_stream_ && !frame_from_cache_ && frame_.texture && target >= frame_.timestamp) {
+    return SeekResult::Exact;
+  }
+  // Playback and continuous forward scrubbing consume the next samples without
+  // seeking again; anything else repositions to the keyframe before the target.
+  if (!CanDecodeForwardTo(target)) {
+    if (!Reposition(target, cancelled)) {
+      return cancelled() ? SeekResult::Abandoned : SeekResult::Failed;
+    }
+  }
+  // Decode up to the frame containing the target, following newer targets of the
+  // same source while they stay ahead of the decoder.
+  while (target >= frame_.timestamp + frame_.duration - 1e-6) {
+    if (cancelled()) return SeekResult::Abandoned;
+    if (control.newer) {
+      if (const auto next = control.newer(); next && std::isfinite(*next) && *next != requested) {
+        followed = true;
+        requested = *next;
+        if (served) *served = requested;
+        const double candidate = clamp(requested);
+        if (!CanDecodeForwardTo(candidate)) return superseded();
+        target = candidate;
+        continue;
+      }
+      if (followed && std::chrono::steady_clock::now() - started >= kChaseBudget) {
+        return superseded();
+      }
+    }
+    if (!ReadOneFrame(cancelled)) {
+      if (cancelled()) return SeekResult::Abandoned;
+      return end_of_stream_ && frame_.texture ? SeekResult::Exact : SeekResult::Failed;
+    }
+  }
+  if (cancelled()) return SeekResult::Abandoned;
+  return frame_.texture ? SeekResult::Exact : SeekResult::Failed;
 }
 
 void HwDecoder::close() {
@@ -652,6 +760,6 @@ void HwDecoder::close() {
   yuv_matrix_ = MFVideoTransferMatrix_BT709;
   matrix_known_ = false;
   end_of_stream_ = false;
-  preroll_ = false;
-  preroll_target_ = 0;
+  keyframes_.clear();
+  keyframe_interval_ = 0;
 }

@@ -10,5 +10,6 @@ image = { workspace = true }
 todo_interaction = { workspace = true }
 
 [dev-dependencies]
+ron = "0.8"
 todo_application = { workspace = true }
 todo_core = { workspace = true }

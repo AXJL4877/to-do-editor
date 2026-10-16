@@ -63,6 +63,8 @@ pub struct Workspace {
     control: crate::control::state::ControlState,
     /// In-flight text raster jobs by ticket → raster digest.
     raster_jobs: HashMap<Ticket, String>,
+    /// Virtual folder that receives the in-flight import (`None` = library root).
+    import_folder_id: Option<String>,
 }
 
 impl Default for Workspace {
@@ -84,6 +86,7 @@ impl Default for Workspace {
             now: 0.0,
             control: Default::default(),
             raster_jobs: HashMap::new(),
+            import_folder_id: None,
         }
     }
 }
@@ -129,6 +132,10 @@ impl Workspace {
     }
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+    /// Target folder for the next / current media import (`None` = root).
+    pub fn set_import_folder(&mut self, folder_id: Option<String>) {
+        self.import_folder_id = folder_id;
     }
     fn ticket(&mut self) -> Ticket {
         self.next_id = self.next_id.wrapping_add(1);

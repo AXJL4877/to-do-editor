@@ -38,4 +38,9 @@ cl /nologo /EHsc /O2 /std:c++17 /DUNICODE /D_UNICODE /I src /Fo"%OUT_DIR%\video_
   "%OUT_DIR%\decoder.obj" "%OUT_DIR%\presenter.obj" "%OUT_DIR%\audio.obj" "%OUT_DIR%\video.obj" ^
   user32.lib gdi32.lib dxgi.lib d3d11.lib d3dcompiler.lib mfplat.lib mfreadwrite.lib mfuuid.lib ole32.lib avrt.lib windowscodecs.lib
 if errorlevel 1 exit /b 1
+cl /nologo /EHsc /O2 /std:c++17 /DUNICODE /D_UNICODE /I src /Fo"%OUT_DIR%\video_scheduler_test.obj" ^
+  /Fe"%OUT_DIR%\video_scheduler_tests.exe" tests\video_scheduler_test.cpp ^
+  "%OUT_DIR%\decoder.obj" "%OUT_DIR%\video.obj" ^
+  user32.lib dxgi.lib d3d11.lib mfplat.lib mfreadwrite.lib mfuuid.lib ole32.lib windowscodecs.lib
+if errorlevel 1 exit /b 1
 exit /b 0

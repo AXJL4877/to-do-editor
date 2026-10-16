@@ -4,10 +4,13 @@ pub mod error;
 pub mod model;
 pub mod query;
 pub mod transform;
-pub use edit::library::{add_to_library, register_media, remove_media};
+pub use edit::library::{
+    add_to_library, create_folder, delete_folder, move_folder, move_media, register_media,
+    remove_media, rename_folder,
+};
 pub use edit::project::{
-    set_project_duration, set_project_fps, set_project_output_size, MAX_FPS, MAX_OUTPUT_EDGE,
-    MIN_FPS,
+    set_media_scale_mode, set_project_duration, set_project_fps, set_project_output_size, MAX_FPS,
+    MAX_OUTPUT_EDGE, MIN_FPS,
 };
 pub use edit::tracks::{
     add_track, can_move_track_down, can_move_track_up, cleanup_empty_tracks, ensure_av_tracks,
@@ -37,9 +40,9 @@ pub use model::text::{
 };
 pub use model::track::create_default_tracks;
 pub use model::{
-    Clip, ClipSource, ClipTransform, FontRef, MediaItem, MediaKind, MediaSource, Project,
-    TextAlign, TextAnimation, TextColor, TextContent, TextErode, TextFrame, TextIntro, TextLayer,
-    TextLayerKind, TextLayout, TextPaint, TextStyle, Track, TrackKind,
+    Clip, ClipSource, ClipTransform, FontRef, MediaFolder, MediaItem, MediaKind, MediaScaleMode,
+    MediaSource, Project, TextAlign, TextAnimation, TextColor, TextContent, TextErode, TextFrame,
+    TextIntro, TextLayer, TextLayerKind, TextLayout, TextPaint, TextStyle, Track, TrackKind,
 };
 pub use query::project::{content_duration, project_duration, timeline_extent, workspace_duration};
 pub use query::{
@@ -74,7 +77,8 @@ mod tests {
             width: Some(1920),
             height: Some(1080),
             kind: None,
-        });
+            folder_id: None,
+});
         p = add_clip(
             p,
             "v1",
@@ -99,7 +103,8 @@ mod tests {
             width: Some(1920),
             height: Some(1080),
             kind: None,
-        });
+            folder_id: None,
+});
         p = add_clip(
             p,
             "v1",
@@ -124,7 +129,8 @@ mod tests {
             width: None,
             height: None,
             kind: None,
-        });
+            folder_id: None,
+});
         p = add_clip(
             p,
             "v1",
@@ -164,7 +170,8 @@ mod tests {
                 width: Some(1280),
                 height: Some(720),
                 kind: Some(MediaKind::Video),
-            });
+                folder_id: None,
+});
         }
         // tracks[0]=v1 is visually highest; insert_track_below pushes later tracks lower.
         p = insert_track_below(p, "v1").unwrap();
@@ -244,7 +251,8 @@ mod tests {
                 width: Some(64),
                 height: Some(64),
                 kind: Some(MediaKind::Video),
-            });
+                folder_id: None,
+});
             p = add_clip(
                 p,
                 track_id,
@@ -430,7 +438,8 @@ mod tests {
                 width: Some(1280),
                 height: Some(720),
                 kind: None,
-            },
+                folder_id: None,
+},
             "vc".into(),
             "ac".into(),
         );
@@ -452,7 +461,8 @@ mod tests {
                 width: None,
                 height: None,
                 kind: None,
-            },
+                folder_id: None,
+},
             "vc2".into(),
             "ac2".into(),
         );
@@ -473,7 +483,8 @@ mod tests {
             width: Some(1920),
             height: Some(1080),
             kind: None,
-        });
+            folder_id: None,
+});
         p
     }
 }

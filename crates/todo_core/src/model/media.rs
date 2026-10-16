@@ -29,6 +29,9 @@ pub struct MediaItem {
     /// Set by probe when known. Legacy projects omit it — see [`media_kind`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<MediaKind>,
+    /// Virtual library folder; `None` is the root. Legacy projects omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_id: Option<String>,
 }
 
 const IMAGE_EXTS: &[&str] = &[
@@ -130,6 +133,7 @@ mod tests {
             width: w,
             height: h,
             kind,
+            folder_id: None,
         }
     }
 

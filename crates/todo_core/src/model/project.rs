@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::clip::normalize_existing;
+use super::folder::MediaFolder;
 use super::media::MediaItem;
 use super::text::TextStyle;
 use super::track::{create_default_tracks, Track};
@@ -19,6 +20,21 @@ fn default_output_height() -> u32 {
     DEFAULT_OUTPUT_HEIGHT
 }
 
+fn is_default_media_scale(mode: &MediaScaleMode) -> bool {
+    *mode == MediaScaleMode::default()
+}
+
+/// How newly placed visual media is scaled onto the program canvas.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum MediaScaleMode {
+    /// One source pixel maps to one canvas pixel (PR “Set to Frame Size”).
+    #[default]
+    Pixel,
+    /// Aspect-fit so the media fills the program frame (PR “Scale to Frame Size”).
+    MatchFrame,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
@@ -34,8 +50,14 @@ pub struct Project {
     /// Fixed workspace length in seconds. Drives timeline axis and playback end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    /// Default scale applied when placing library media on the timeline.
+    #[serde(default, skip_serializing_if = "is_default_media_scale")]
+    pub media_scale: MediaScaleMode,
     #[serde(default)]
     pub media: Vec<MediaItem>,
+    /// Virtual library folders. Disk media paths stay flat under `media/`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folders: Vec<MediaFolder>,
     #[serde(default)]
     pub tracks: Vec<Track>,
     /// Styles referenced by text clips, copied in when first used.
@@ -70,7 +92,9 @@ pub fn create_project(
                 .filter(|d| d.is_finite() && *d > 0.0)
                 .unwrap_or(DEFAULT_WORKSPACE_SECS),
         ),
+        media_scale: MediaScaleMode::default(),
         media: media.unwrap_or_default(),
+        folders: Vec::new(),
         tracks: normalize_tracks(tracks.unwrap_or_else(create_default_tracks)),
         text_styles: Vec::new(),
     }

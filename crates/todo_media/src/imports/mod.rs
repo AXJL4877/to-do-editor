@@ -70,6 +70,7 @@ impl MediaService {
             width: metadata.width,
             height: metadata.height,
             kind: Some(metadata.kind),
+            folder_id: None,
         })
     }
 }

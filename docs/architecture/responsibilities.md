@@ -26,6 +26,8 @@
 | `crates/todo_interaction/src/preview_viewport.rs` | 编辑视口的缩放、平移、固定画框投影和鼠标坐标换算 | 临时观看状态，不进入工程、撤销历史或解码状态 |
 | `crates/todo_interaction/src/presentation/` | Editor/Library/Timeline 的 ViewModel、筛选和状态文案 | 展示哪些字段、领域错误如何显示，放这里 |
 | `crates/todo_ui/src/widgets/` | 原生 egui 控件绘制；按 `library/`、`timeline/`、`inspector/`、`layout/` 等分组 | 绘制矩形、命中控件、输出 Intent，放这里 |
+| `crates/todo_ui/src/widgets/project_settings.rs` | 工程设置弹窗与打开状态 | 分辨率、帧率、落轨缩放和固定工作区时长集中在这里，领域校验仍在 core |
+| `crates/todo_ui/src/widgets/library/` | 料箱与素材树、矢量图标、行选择和拖放 | 图标在 icons.rs、交互回归在 tests.rs，不依赖字体字符显示图标 |
 | `crates/todo_ui/src/widgets/inspector/` | 独立右侧属性板块；`mod.rs` 管理面板标题、空状态和滚动，`clip.rs` 绘制片段字段 | 属性内容不决定节目预览的大小 |
 | `crates/todo_ui/src/widgets/inspector/transform/` | 变换参数控件：位置、宽高缩放、统一缩放、不透明度和重置 | 只输出参数修改 Intent，规则不写入控件 |
 | `crates/todo_ui/src/widgets/controls/` | 多个板块共用的控件交互；当前包含数值编辑事务辅助 | 工具栏与属性栏共用的逻辑放这里，避免互相依赖 |
@@ -45,6 +47,7 @@
 | `crates/todo_preview/src/` | 原生宿主生命周期和协议 | 传输命令、接收时钟及归一化鼠标事件 |
 | `crates/todo_preview/src/viewport.rs` | 视口命令校验与导航事件协议类型 | 只传递视口矩形和输入，不计算交互或修改图层 |
 | `crates/todo_app/src/runtime/` | eframe 帧循环、绘制调用、输入/事件转交、执行 Effect | 只做装配和运行，不另写编辑规则 |
+| `crates/todo_app/src/runtime/window_state.rs` | 窗口还原几何的本地偏好适配 | 忽略最小化/无效尺寸，最大化保留普通窗口尺寸；与 eframe 版本兼容集中于此 |
 | `crates/todo_app/src/adapters/` | `workers` 执行阻塞 I/O；`preview` 桥接预览；`desktop/` 处理窗口和文件对话框 | 桌面平台能力放这里 |
 | `dependencies/ffmpeg/` | FFmpeg/FFprobe 原生工具和随附说明 | 不存放应用逻辑，不参与 Rust 链接；由打包脚本复制 |
 | `dependencies/fonts/` | 花字字体文件和授权说明 | 字体文件不入库；由打包脚本复制 |

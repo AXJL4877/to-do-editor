@@ -86,9 +86,12 @@ impl Workspace {
         }
         if self.jobs.import == Some(ticket) {
             return match result {
-                Ok(MediaOutput::Imported(item)) => {
+                Ok(MediaOutput::Imported(mut item)) => {
                     if self.control.already_imported(ticket, &item.id) {
                         return AppUpdate::default();
+                    }
+                    if item.folder_id.is_none() {
+                        item.folder_id = self.import_folder_id.clone();
                     }
                     let id = item.id.clone();
                     let command = if self.control.append_import(ticket) {
@@ -120,12 +123,14 @@ impl Workspace {
                 Ok(MediaOutput::ImportFinished) => {
                     self.control.finish_import(ticket);
                     self.jobs.import = None;
+                    self.import_folder_id = None;
                     self.dispatch(AppAction::Editor(EditorCommand::ImportFinished))
                 }
                 Ok(MediaOutput::ImportAborted { message }) => {
                     self.control.import_error(ticket, message.clone());
                     self.control.finish_import(ticket);
                     self.jobs.import = None;
+                    self.import_folder_id = None;
                     let update = self.dispatch(AppAction::Editor(EditorCommand::ImportFinished));
                     self.problem("import", message);
                     update

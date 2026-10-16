@@ -14,8 +14,8 @@ mod text_rasters;
 
 pub use action::{AppAction, CloseChoice, EditorCommand};
 pub use editor::{
-    AudioClockSample, EditorSession, EditorUpdate, Picture, PreviewCommand, PreviewLayer, Status,
-    CLOCK_FRESH_SECS, CLOCK_MISSING_SECS, CLOCK_POLL_SECS,
+    AudioClockSample, EditorSession, EditorUpdate, MonitorPane, Picture, PreviewCommand,
+    PreviewLayer, SourceMonitor, Status, CLOCK_FRESH_SECS, CLOCK_MISSING_SECS, CLOCK_POLL_SECS,
 };
 pub use effect::{Effect, MediaTask, ProjectTask, Ticket};
 pub use event::{AppEvent, MediaOutput, ProjectOutput};

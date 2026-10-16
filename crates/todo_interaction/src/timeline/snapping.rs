@@ -126,7 +126,8 @@ mod tests {
             width: Some(1),
             height: Some(1),
             kind: Some(todo_core::MediaKind::Video),
-        });
+            folder_id: None,
+});
         p = todo_core::add_clip(
             p,
             "v1",

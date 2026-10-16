@@ -5,8 +5,11 @@ use super::{
 use crate::{
     add_track, clip_end, delete_clips, delete_track, find_clip, insert_track_below,
     linked_clip_ids, move_track, place_media, place_media_range, razor_clips, set_project_duration,
-    set_project_fps, set_project_output_size, validate_project, DomainError, Project, TextContent,
-    TrackKind, Transform, TrimEdge,
+    set_media_scale_mode, set_project_fps, set_project_output_size, validate_project, DomainError,
+    MediaScaleMode, Project, TextContent, TrackKind, Transform, TrimEdge,
+};
+use super::library::{
+    create_folder, delete_folder, move_folder, move_media, rename_folder,
 };
 
 /// Semantic project edits; no input-device or layout concepts cross this boundary.
@@ -84,6 +87,9 @@ pub enum EditCommand {
     SetFps {
         fps: f64,
     },
+    SetMediaScaleMode {
+        mode: MediaScaleMode,
+    },
     SetTransform {
         clip_id: String,
         transform: Transform,
@@ -101,6 +107,26 @@ pub enum EditCommand {
     SetText {
         clip_id: String,
         content: TextContent,
+    },
+    CreateFolder {
+        id: String,
+        name: String,
+        parent_id: Option<String>,
+    },
+    RenameFolder {
+        id: String,
+        name: String,
+    },
+    DeleteFolder {
+        id: String,
+    },
+    MoveFolder {
+        id: String,
+        parent_id: Option<String>,
+    },
+    MoveMedia {
+        media_id: String,
+        folder_id: Option<String>,
     },
 }
 
@@ -238,6 +264,7 @@ pub fn execute_edit(project: Project, command: EditCommand) -> Result<Project, D
             set_project_output_size(project, width, height)?
         }
         EditCommand::SetFps { fps } => set_project_fps(project, fps)?,
+        EditCommand::SetMediaScaleMode { mode } => set_media_scale_mode(project, mode),
         EditCommand::SetTransform { clip_id, transform } => {
             set_transform(project, &clip_id, transform)?
         }
@@ -249,6 +276,18 @@ pub fn execute_edit(project: Project, command: EditCommand) -> Result<Project, D
             content,
         } => add_text(project, track_id.as_deref(), time, duration, content)?,
         EditCommand::SetText { clip_id, content } => set_text(project, &clip_id, content)?,
+        EditCommand::CreateFolder {
+            id,
+            name,
+            parent_id,
+        } => create_folder(project, id, name, parent_id)?,
+        EditCommand::RenameFolder { id, name } => rename_folder(project, &id, name)?,
+        EditCommand::DeleteFolder { id } => delete_folder(project, &id)?,
+        EditCommand::MoveFolder { id, parent_id } => move_folder(project, &id, parent_id)?,
+        EditCommand::MoveMedia {
+            media_id,
+            folder_id,
+        } => move_media(project, &media_id, folder_id)?,
     };
     validate_project(&next)?;
     Ok(next)

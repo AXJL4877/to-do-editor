@@ -4,9 +4,36 @@ use std::{
     io::{BufReader, Read},
     path::Path,
     process::{ChildStdout, Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     thread,
     time::{Duration, Instant},
 };
+
+pub(super) fn capture_command_cancellable(
+    command: Command,
+    timeout: Duration,
+    limit: usize,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Vec<u8>, MediaError> {
+    supervise(command, timeout, Some(cancelled), move |stdout| {
+        read_capture(stdout, limit)
+    })
+}
+
+pub(crate) fn capture_cancellable(
+    tool: &Path,
+    args: Vec<OsString>,
+    timeout: Duration,
+    limit: usize,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Vec<u8>, MediaError> {
+    let mut command = Command::new(tool);
+    command.args(args);
+    capture_command_cancellable(command, timeout, limit, cancelled)
+}
 
 pub(crate) fn capture(
     tool: &Path,
@@ -24,19 +51,23 @@ pub(super) fn capture_command(
     timeout: Duration,
     limit: usize,
 ) -> Result<Vec<u8>, MediaError> {
-    supervise(command, timeout, move |stdout| {
-        let mut output = Vec::new();
-        stdout
-            .take(limit as u64 + 1)
-            .read_to_end(&mut output)
-            .map_err(|error| MediaError::Invalid(format!("tool output: {error}")))?;
-        if output.len() > limit {
-            return Err(MediaError::Invalid(
-                "media tool output exceeded its limit".into(),
-            ));
-        }
-        Ok(output)
+    supervise(command, timeout, None, move |stdout| {
+        read_capture(stdout, limit)
     })
+}
+
+fn read_capture(stdout: ChildStdout, limit: usize) -> Result<Vec<u8>, MediaError> {
+    let mut output = Vec::new();
+    stdout
+        .take(limit as u64 + 1)
+        .read_to_end(&mut output)
+        .map_err(|error| MediaError::Invalid(format!("tool output: {error}")))?;
+    if output.len() > limit {
+        return Err(MediaError::Invalid(
+            "media tool output exceeded its limit".into(),
+        ));
+    }
+    Ok(output)
 }
 
 /// Drain both pipes concurrently and supervise the native child on this worker.
@@ -52,14 +83,27 @@ where
 {
     let mut command = Command::new(tool);
     command.args(args);
-    supervise(command, timeout, read)
+    supervise(command, timeout, None, read)
 }
 
-fn supervise<T, F>(mut command: Command, timeout: Duration, read: F) -> Result<T, MediaError>
+fn supervise<T, F>(
+    mut command: Command,
+    timeout: Duration,
+    cancelled: Option<Arc<AtomicBool>>,
+    read: F,
+) -> Result<T, MediaError>
 where
     T: Send + 'static,
     F: FnOnce(ChildStdout) -> Result<T, MediaError> + Send + 'static,
 {
+    let is_cancelled = || {
+        cancelled
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Acquire))
+    };
+    if is_cancelled() {
+        return Err(MediaError::Cancelled);
+    }
     let tool = std::path::PathBuf::from(command.get_program());
     command
         .stdin(Stdio::null())
@@ -92,6 +136,11 @@ where
     });
     let started = Instant::now();
     let status = loop {
+        if is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            break Err(MediaError::Cancelled);
+        }
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
             Ok(None) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(10)),
@@ -112,6 +161,9 @@ where
         .map_err(|_| MediaError::Invalid("media output reader panicked".into()))?;
     let stderr = diagnostics.join().unwrap_or_default();
     let status = status?;
+    if is_cancelled() {
+        return Err(MediaError::Cancelled);
+    }
     if !status.success() {
         return Err(MediaError::Tool {
             tool,

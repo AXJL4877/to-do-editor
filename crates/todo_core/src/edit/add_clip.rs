@@ -76,7 +76,7 @@ pub fn add_imported_video(
                 .fold(0.0_f64, |end, c| end.max(c.start + c.duration))
         })
         .unwrap_or(0.0);
-    let video_clip = normalize_clip(
+    let mut video_clip = normalize_clip(
         video_clip_id,
         media.id.clone(),
         start,
@@ -84,6 +84,13 @@ pub fn add_imported_video(
         0.0,
         1.0,
     );
+    if let (Some(w), Some(h)) = (media.width, media.height) {
+        video_clip.transform = crate::Transform::for_media_placement(
+            (w, h),
+            next.output_size(),
+            next.media_scale,
+        );
+    }
     next = add_clip(next, &video_track_id, video_clip.clone());
     if media.has_audio.unwrap_or(false) {
         if !next.tracks.iter().any(|t| t.id == "a1") {

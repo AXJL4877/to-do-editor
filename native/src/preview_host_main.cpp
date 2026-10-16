@@ -494,23 +494,26 @@ static void HandleLine(const std::string& line) {
 
 static LRESULT CALLBACK MsgWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   if (msg == WM_VIDEO_FRAME) {
-    auto stack = g_video.latest();
+    // latest() only returns frames of the currently requested sources. While
+    // scrubbing they may belong to an older time of those sources (exact = false):
+    // showing that progress beats freezing until the newest target decodes.
     // Ready messages can outlive their request. A pending replacement is not
     // an empty scene; explicit path/layers commands handle clearing the canvas.
-    if (!stack || stack->empty()) return 0;
-    if (stack->front().generation != g_source_generation ||
-        g_frames == stack)
-      return 0;
+    auto stack = g_video.latest();
+    if (!stack || stack->empty() || g_frames == stack) return 0;
     const bool decoded = !g_frames || g_frames->empty() ||
-                         g_frames->back().serial != stack->back().serial;
+                         g_frames->back().serial != stack->back().serial ||
+                         g_frames->back().exact != stack->back().exact;
     g_frames = std::move(stack);
     const auto& top = g_frames->back();
     D3D11_TEXTURE2D_DESC texture{};
     top.frame.texture->GetDesc(&texture);
     const auto geometry = DecodedFrameDisplayGeometry(top.frame, texture.Width, texture.Height);
-    if (geometry && (!g_reported_source_aspect || *g_reported_source_aspect != geometry->aspect)) {
+    if (top.topmost && geometry &&
+        (!g_reported_source_aspect || *g_reported_source_aspect != geometry->aspect)) {
       g_reported_source_aspect = geometry->aspect;
-      printf("source-aspect %llu %.17g\n", static_cast<unsigned long long>(top.generation),
+      // Same sources as the current request, so the aspect belongs to its generation.
+      printf("source-aspect %llu %.17g\n", static_cast<unsigned long long>(g_source_generation),
              geometry->aspect);
       fflush(stdout);
     }
@@ -521,9 +524,11 @@ static LRESULT CALLBACK MsgWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     }
     // Transform-only republishes redraw the same decode; keep the diagnostic
     // specific to decoding so tests can detect unnecessary decode requests.
+    // `video-approx` reports scrub progress shown before the target decoded.
     if (decoded) {
-      printf("video-frame %llu %.9f %.9f %.9f\n", static_cast<unsigned long long>(top.serial),
-             top.target, top.frame.timestamp, top.frame.duration);
+      printf("%s %llu %.9f %.9f %.9f\n", top.exact ? "video-frame" : "video-approx",
+             static_cast<unsigned long long>(top.serial), top.target, top.frame.timestamp,
+             top.frame.duration);
       fflush(stdout);
     }
     return 0;

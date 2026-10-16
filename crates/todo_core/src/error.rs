@@ -5,6 +5,9 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq)]
 pub enum DomainError {
     MediaNotFound(String),
+    FolderNotFound(String),
+    /// Moving a folder under itself or a descendant.
+    FolderCycle(String),
     TrackNotFound(String),
     ClipNotFound(String),
     TrackLocked(String),
@@ -36,6 +39,8 @@ impl DomainError {
     pub fn message_key(&self) -> &'static str {
         match self {
             Self::MediaNotFound(_) => "media_not_found",
+            Self::FolderNotFound(_) => "folder_not_found",
+            Self::FolderCycle(_) => "folder_cycle",
             Self::TrackNotFound(_) => "track_not_found",
             Self::ClipNotFound(_) => "clip_not_found",
             Self::TrackLocked(_) => "track_locked",

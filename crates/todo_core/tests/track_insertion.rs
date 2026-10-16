@@ -130,7 +130,8 @@ fn insertion_below_a_locked_track_preserves_existing_content_and_flags() {
         width: Some(1920),
         height: Some(1080),
         kind: Some(MediaKind::Video),
-    });
+        folder_id: None,
+});
     base = place_media(base, "movie", Some("v1"), 3.0).unwrap();
     base.tracks[0].locked = true;
     base.tracks[0].muted = true;

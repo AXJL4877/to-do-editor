@@ -5,6 +5,8 @@ pub fn status_text(status: &Status) -> String {
     match status {
         Status::Domain(error) => match error.message_key() {
             "media_not_found" => "素材不存在",
+            "folder_not_found" => "文件夹不存在",
+            "folder_cycle" => "不能将文件夹移入自身或其子文件夹",
             "track_not_found" => "目标轨道不存在",
             "clip_not_found" => "片段不存在",
             "track_locked" => "轨道已锁定",

@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MediaError {
+    #[error("media job cancelled")]
+    Cancelled,
     #[error("file {path}: {source}")]
     Io {
         path: PathBuf,

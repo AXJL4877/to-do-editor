@@ -12,7 +12,8 @@ fn workspace() -> Workspace {
         width: Some(1920),
         height: Some(1080),
         kind: Some(MediaKind::Video),
-    });
+        folder_id: None,
+});
     Workspace::with_project(project, "control-test")
 }
 
@@ -321,6 +322,7 @@ fn imported(id: &str) -> MediaItem {
         width: Some(1920),
         height: Some(1080),
         kind: Some(MediaKind::Video),
+        folder_id: None,
     }
 }
 
@@ -332,6 +334,7 @@ fn control_import_only_registers_library_items_and_reports_partial_failures() {
         "import",
         ControlCommand::ImportMedia {
             paths: vec!["A.mp4".into(), "bad.mp4".into()],
+                    folder_id: None,
         },
     );
     let outcome = ws.control(req.clone());
@@ -428,6 +431,7 @@ fn aborted_import_finishes_the_job_and_releases_the_editor() {
         "import",
         ControlCommand::ImportMedia {
             paths: vec!["A.mp4".into()],
+                    folder_id: None,
         },
     ));
     let ticket = import_ticket(&outcome);
@@ -464,6 +468,7 @@ fn reopening_clears_request_history_and_ignores_old_import_results() {
         "old",
         ControlCommand::ImportMedia {
             paths: vec!["A.mp4".into()],
+                    folder_id: None,
         },
     );
     let old = import_ticket(&ws.control(req.clone()));
@@ -630,6 +635,7 @@ fn import_to_library_then_place_and_cut_uses_the_returned_media_id() {
         "import",
         ControlCommand::ImportMedia {
             paths: vec!["A.mp4".into()],
+                    folder_id: None,
         },
     ));
     let ticket = import_ticket(&outcome);
@@ -694,6 +700,7 @@ fn invalid_import_metadata_does_not_corrupt_the_project_and_finishes_with_a_fail
         "import",
         ControlCommand::ImportMedia {
             paths: vec!["A.mp4".into()],
+                    folder_id: None,
         },
     ));
     let ticket = import_ticket(&outcome);

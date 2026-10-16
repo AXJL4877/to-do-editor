@@ -91,12 +91,24 @@ directly; its `data/` and `cache/` directories belong to that package directory.
 
 Drag the dividers beside the media library and the right inspector to change
 their widths. Drag above the timeline to change its height. Double-click a
-divider to restore its default; sizes are remembered during the current app
-session. Selecting a clip only updates the inspector and keeps the program
+divider to restore its default. Pane preferences and the restored window size
+are saved between sessions; temporary small or minimized windows do not replace
+the preferred layout. Selecting a clip only updates the inspector and keeps the program
 canvas geometry unchanged. Play/pause is below the program preview.
 
+Use **工程设置** in the top toolbar for output resolution, frame rate, media
+placement scaling and fixed workspace duration. These controls live in a modal;
+the native preview and editor shortcuts are blocked while it is open.
+
+The media library uses an indented explorer tree with expand/collapse arrows,
+folder icons and video/audio/image icons. Click a row to select it and press
+Delete while the library is focused to remove that item. Deleting a bin moves
+its contents to its parent; media used by timeline clips remains protected.
+Source files are retained.
+
 Import with Ctrl+I or drop files into the editor. Drag library media into a blank
-timeline range, or double-click to append. V selects, C enables the razor,
+timeline range, or use the row context menu to append. Double-click opens the
+source monitor. V selects, C enables the razor,
 Ctrl+K cuts at the playhead, Delete removes selected clips, and Shift+Delete
 closes the gap. Ctrl+Z undoes an edit. Empty editable tracks are cleaned up after
 clip deletion, retaining at least one video and one audio track.
@@ -128,10 +140,13 @@ current fit-relative percentage, **适应** (Fit, 100%, centered), and **仅输�
 keeping off-frame elements selectable and draggable. Output-only view masks
 that area and hides selection handles. Viewport navigation is session-local,
 does not alter element transforms or project history, and reuses decoded frames.
-Project output-resolution settings and exporting are not implemented yet; the
-composition aspect is currently 16:9 independently of the monitor panel shape.
+Project output resolution is configured in **工程设置** and determines the
+composition aspect independently of the monitor panel shape. Exporting is not
+implemented yet.
 Moves, edge edits, and library placement snap to neighboring boundaries and the
 playhead; one gesture creates one undo entry. Escape cancels the active gesture.
+Alt/Ctrl+wheel zooms the timeline around the time under the mouse. Ordinary
+scrolling keeps its separate horizontal/vertical scroll behavior.
 Snapped boundaries retain their exact time, including media durations between
 frames. Moving into an occupied range reuses a free track of the required kind
 or creates one; linked video and audio keep their timing together. Locked

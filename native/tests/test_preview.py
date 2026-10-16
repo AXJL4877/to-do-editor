@@ -31,6 +31,7 @@ class Host:
         )
         self.lines = queue.Queue()
         self.frames = []
+        self.approximations = []
         self.errors = []
         self.readers = [
             threading.Thread(target=self._stdout, daemon=True),
@@ -44,6 +45,8 @@ class Host:
             event = (time.perf_counter(), line.decode("utf-8", "replace").split())
             if event[1] and event[1][0] == "video-frame":
                 self.frames.append(event)
+            elif event[1] and event[1][0] == "video-approx":
+                self.approximations.append(event)
             self.lines.put(event)
 
     def _stderr(self):

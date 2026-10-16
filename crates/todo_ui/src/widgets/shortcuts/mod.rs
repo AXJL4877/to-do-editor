@@ -43,19 +43,28 @@ pub(super) fn collect(ctx: &Context, vm: &EditorViewModel) -> Vec<Intent> {
             if input.key_pressed(egui::Key::Space) {
                 intents.push(Intent::TogglePlay);
             }
-            if input.key_pressed(egui::Key::Delete) || input.key_pressed(egui::Key::Backspace) {
-                if vm.focus == EditorFocus::Library {
+            // Ignore Delete while a pointer click is changing the active panel/row.
+            // The view model still describes the selection before that click.
+            let deleting = input.key_pressed(egui::Key::Delete)
+                && !input.pointer.any_pressed()
+                && !input.pointer.any_released();
+            // Library: only Delete clears a row (Backspace is too easy after a click).
+            // Timeline: Delete / Backspace still remove clips.
+            if vm.focus == EditorFocus::Library {
+                if deleting {
                     if let Some(media_id) = &vm.library.selected_id {
                         intents.push(Intent::RemoveMedia {
                             media_id: media_id.clone(),
                             cascade: false,
                         });
+                    } else if let Some(id) = &vm.library.selected_folder_id {
+                        intents.push(Intent::LibraryDeleteFolder { id: id.clone() });
                     }
-                } else {
-                    intents.push(Intent::DeleteSelection {
-                        ripple: modifiers.shift,
-                    });
                 }
+            } else if deleting || input.key_pressed(egui::Key::Backspace) {
+                intents.push(Intent::DeleteSelection {
+                    ripple: modifiers.shift,
+                });
             }
         }
         if input.key_pressed(egui::Key::Escape) {
@@ -84,9 +93,11 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 duration: None,
+                media_scale: Default::default(),
                 media: Vec::new(),
                 tracks: Vec::new(),
                 text_styles: Vec::new(),
+                folders: Vec::new(),
             },
             "test",
         )
@@ -169,9 +180,14 @@ mod tests {
         ));
         vm.focus = EditorFocus::Library;
         vm.library.selected_id = Some("source-1".into());
+        vm.library.selected_folder_id = Some("parent-bin".into());
         assert!(
-            matches!(press(&vm, egui::Key::Delete, shift, false).as_slice(),
+            matches!(press(&vm, egui::Key::Delete, egui::Modifiers::default(), false).as_slice(),
             [Intent::RemoveMedia { media_id, cascade: false }] if media_id == "source-1")
+        );
+        assert!(
+            press(&vm, egui::Key::Backspace, egui::Modifiers::default(), false).is_empty(),
+            "Backspace must not clear library media after a click"
         );
     }
 
@@ -180,6 +196,71 @@ mod tests {
         let vm = view();
         for key in [egui::Key::V, egui::Key::Space, egui::Key::Delete] {
             assert!(press(&vm, key, egui::Modifiers::default(), true).is_empty());
+        }
+    }
+
+    #[test]
+    fn library_delete_targets_selected_folder_without_deleting_timeline_selection() {
+        let mut vm = view();
+        vm.focus = EditorFocus::Library;
+        vm.library.selected_folder_id = Some("bin".into());
+        assert!(matches!(
+            press(&vm, egui::Key::Delete, egui::Modifiers::default(), false).as_slice(),
+            [Intent::LibraryDeleteFolder { id }] if id == "bin"
+        ));
+        assert!(press(&vm, egui::Key::Delete, egui::Modifiers::default(), true).is_empty());
+        vm.library.selected_folder_id = None;
+        assert!(press(&vm, egui::Key::Delete, egui::Modifiers::default(), false).is_empty());
+    }
+
+    #[test]
+    fn pointer_selection_with_delete_cannot_delete_the_previous_library_row() {
+        for pressed in [true, false] {
+            let mut vm = view();
+            vm.focus = EditorFocus::Library;
+            vm.library.selected_id = Some("previous-row".into());
+            let ctx = Context::default();
+            let _ = ctx.run(egui::RawInput::default(), |_| {});
+            if !pressed {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        events: vec![egui::Event::PointerButton {
+                            pos: egui::pos2(40.0, 80.0),
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: Default::default(),
+                        }],
+                        ..Default::default()
+                    },
+                    |_| {},
+                );
+            }
+            let mut intents = Vec::new();
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![
+                        egui::Event::PointerButton {
+                            pos: egui::pos2(40.0, 80.0),
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Default::default(),
+                        },
+                        egui::Event::Key {
+                            key: egui::Key::Delete,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: Default::default(),
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| intents = collect(ctx, &vm),
+            );
+            assert!(
+                intents.is_empty(),
+                "selection changes on pointer pressed={pressed}: {intents:?}"
+            );
         }
     }
 }

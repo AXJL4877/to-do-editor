@@ -95,6 +95,21 @@ pub struct Picture {
     pub transform: ClipTransform,
 }
 
+/// Which monitor pane the preview host is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MonitorPane {
+    #[default]
+    Program,
+    Source,
+}
+
+/// Library media loaded into the source monitor (independent of the playhead).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceMonitor {
+    pub media_id: String,
+    pub time: f64,
+}
+
 pub struct EditorSession {
     pub(crate) history: History,
     pub(crate) gesture_before: Option<Project>,
@@ -107,6 +122,8 @@ pub struct EditorSession {
     pub(crate) playing: bool,
     pub(crate) playhead: f64,
     pub(crate) importing: bool,
+    pub(crate) monitor_pane: MonitorPane,
+    pub(crate) source_monitor: Option<SourceMonitor>,
     pub(crate) last_tick: Option<f64>,
     pub(crate) clock: Option<NativeClock>,
     pub(crate) audio_unavailable: bool,
@@ -147,6 +164,8 @@ impl EditorSession {
             playing: false,
             playhead,
             importing: false,
+            monitor_pane: MonitorPane::Program,
+            source_monitor: None,
             last_tick: None,
             clock: None,
             audio_unavailable: false,
@@ -215,6 +234,15 @@ impl EditorSession {
     }
     pub fn can_play(&self) -> bool {
         self.can_play_at(self.picture().active) && !self.importing
+    }
+    pub fn monitor_pane(&self) -> MonitorPane {
+        self.monitor_pane
+    }
+    pub fn source_monitor(&self) -> Option<&SourceMonitor> {
+        self.source_monitor.as_ref()
+    }
+    pub(crate) fn showing_source(&self) -> bool {
+        self.monitor_pane == MonitorPane::Source && self.source_monitor.is_some()
     }
 }
 

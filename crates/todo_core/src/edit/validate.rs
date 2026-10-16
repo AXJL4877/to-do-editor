@@ -140,6 +140,25 @@ pub fn validate_project(project: &Project) -> Result<(), DomainError> {
     if project.duration.is_some_and(|d| !d.is_finite() || d <= 0.0) {
         return Err(DomainError::InvalidDuration);
     }
+    let mut folder_ids = HashSet::new();
+    for folder in &project.folders {
+        if folder.id.is_empty() || folder.name.trim().is_empty() {
+            return Err(DomainError::InvalidProject("folder"));
+        }
+        if !folder_ids.insert(folder.id.as_str()) {
+            return Err(DomainError::DuplicateId(folder.id.clone()));
+        }
+    }
+    for folder in &project.folders {
+        if let Some(parent_id) = &folder.parent_id {
+            if !folder_ids.contains(parent_id.as_str()) {
+                return Err(DomainError::FolderNotFound(parent_id.clone()));
+            }
+            if folder_is_ancestor(project, &folder.id, parent_id) {
+                return Err(DomainError::FolderCycle(folder.id.clone()));
+            }
+        }
+    }
     let mut media_ids = HashSet::new();
     for media in &project.media {
         if media.id.is_empty() {
@@ -147,6 +166,11 @@ pub fn validate_project(project: &Project) -> Result<(), DomainError> {
         }
         if !media_ids.insert(&media.id) {
             return Err(DomainError::DuplicateId(media.id.clone()));
+        }
+        if let Some(folder_id) = &media.folder_id {
+            if !folder_ids.contains(folder_id.as_str()) {
+                return Err(DomainError::FolderNotFound(folder_id.clone()));
+            }
         }
         if !media.duration.is_finite()
             || media.duration < 0.0
@@ -189,4 +213,25 @@ pub fn validate_project(project: &Project) -> Result<(), DomainError> {
         }
     }
     Ok(())
+}
+
+/// True when `ancestor_id` appears on the parent chain of `node_id` (inclusive).
+pub(crate) fn folder_is_ancestor(project: &Project, ancestor_id: &str, node_id: &str) -> bool {
+    let mut current = Some(node_id);
+    let mut steps = 0usize;
+    while let Some(id) = current {
+        if id == ancestor_id {
+            return true;
+        }
+        current = project
+            .folders
+            .iter()
+            .find(|folder| folder.id == id)
+            .and_then(|folder| folder.parent_id.as_deref());
+        steps += 1;
+        if steps > project.folders.len() + 1 {
+            return true;
+        }
+    }
+    false
 }

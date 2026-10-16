@@ -11,6 +11,7 @@ fn media(id: &str) -> MediaItem {
         width: Some(1920),
         height: Some(1080),
         kind: Some(MediaKind::Video),
+        folder_id: None,
     }
 }
 
