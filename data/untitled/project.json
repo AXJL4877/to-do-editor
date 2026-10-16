@@ -1,19 +1,76 @@
 {
   "version": 1,
-  "fps": 30,
-  "playhead": 0,
-  "duration": 43.8,
+  "fps": 30.0,
+  "playhead": 34.1,
+  "width": 1920,
+  "height": 1080,
+  "duration": 300.0,
   "media": [
     {
-      "id": "b032434b-12eb-496e-9469-3c82bb26043d",
-      "name": "纯文字展示.mp4",
-      "path": "data/untitled/media/b032434b-12eb-496e-9469-3c82bb26043d_纯文字展示.mp4",
-      "duration": 43.8,
+      "id": "0558b6dc-d131-42ef-9e01-d1b9458df087",
+      "name": "2026-09-30_13-16-50.mp4",
+      "path": "data/untitled/media/0558b6dc-d131-42ef-9e01-d1b9458df087_2026-09-30_13-16-50.mp4",
+      "duration": 49.877,
+      "hasAudio": true,
       "width": 1920,
       "height": 1080
+    },
+    {
+      "id": "95374dbb-3dde-437c-81c5-cdefcabfc300",
+      "name": "THE-BALANCE.mp4",
+      "path": "data/untitled/media/95374dbb-3dde-437c-81c5-cdefcabfc300_THE-BALANCE.mp4",
+      "duration": 51.916667,
+      "hasAudio": true,
+      "width": 1920,
+      "height": 1080
+    },
+    {
+      "id": "074c8adf-5f75-4b69-975e-30ce4c3e64ed",
+      "name": "images.jpg",
+      "path": "data/untitled/media/074c8adf-5f75-4b69-975e-30ce4c3e64ed_images.jpg",
+      "duration": 0.04,
+      "hasAudio": false,
+      "width": 388,
+      "height": 515,
+      "kind": "image"
+    },
+    {
+      "id": "36ea4b1a-c978-4d47-8ec6-5b42fe8a84d2",
+      "name": "final.mp4",
+      "path": "data/untitled/media/36ea4b1a-c978-4d47-8ec6-5b42fe8a84d2.mp4",
+      "duration": 180.0,
+      "hasAudio": true,
+      "width": 1920,
+      "height": 1080,
+      "kind": "video"
     }
   ],
   "tracks": [
+    {
+      "id": "v2",
+      "name": "视频2",
+      "kind": "video",
+      "muted": false,
+      "locked": false,
+      "clips": [
+        {
+          "id": "c_ab",
+          "mediaId": "074c8adf-5f75-4b69-975e-30ce4c3e64ed",
+          "start": 0.0,
+          "duration": 5.0,
+          "offset": 0.0,
+          "rate": 1.0,
+          "transform": {
+            "x": -0.13670885999999993,
+            "y": 0.02699984868558636,
+            "scale": 1.0,
+            "scaleX": 1.0,
+            "scaleY": 1.0,
+            "opacity": 1.0
+          }
+        }
+      ]
+    },
     {
       "id": "v1",
       "name": "视频1",
@@ -22,27 +79,56 @@
       "locked": false,
       "clips": [
         {
-          "id": "00d89624-fb24-4d05-999d-60d3c5f48412",
-          "mediaId": "b032434b-12eb-496e-9469-3c82bb26043d",
-          "start": 0,
-          "duration": 43.8,
-          "offset": 0,
-          "rate": 1
+          "id": "c_25c",
+          "mediaId": "0558b6dc-d131-42ef-9e01-d1b9458df087",
+          "start": 0.0,
+          "duration": 49.877,
+          "offset": 0.0,
+          "rate": 1.0,
+          "linkId": "c_25d"
+        },
+        {
+          "id": "c_1",
+          "mediaId": "36ea4b1a-c978-4d47-8ec6-5b42fe8a84d2",
+          "start": 49.87700000000001,
+          "duration": 180.0,
+          "offset": 0.0,
+          "rate": 1.0,
+          "linkId": "c_2"
+        }
+      ]
+    },
+    {
+      "id": "a2",
+      "name": "音频2",
+      "kind": "audio",
+      "muted": false,
+      "locked": false,
+      "clips": [
+        {
+          "id": "c_25e",
+          "mediaId": "0558b6dc-d131-42ef-9e01-d1b9458df087",
+          "start": 0.0,
+          "duration": 49.877,
+          "offset": 0.0,
+          "rate": 1.0,
+          "linkId": "c_25d"
+        },
+        {
+          "id": "c_3",
+          "mediaId": "36ea4b1a-c978-4d47-8ec6-5b42fe8a84d2",
+          "start": 49.87700000000001,
+          "duration": 180.0,
+          "offset": 0.0,
+          "rate": 1.0,
+          "linkId": "c_2"
         }
       ]
     },
     {
       "id": "a1",
-      "name": "对白",
+      "name": "音频1",
       "kind": "audio",
-      "muted": false,
-      "locked": false,
-      "clips": []
-    },
-    {
-      "id": "sfx1",
-      "name": "音效",
-      "kind": "sfx",
       "muted": false,
       "locked": false,
       "clips": []

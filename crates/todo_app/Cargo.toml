@@ -1,0 +1,16 @@
+[package]
+name = "todo_app"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+eframe = { workspace = true }
+egui = { workspace = true }
+raw-window-handle = { workspace = true }
+todo_application = { workspace = true }
+todo_storage = { workspace = true }
+todo_interaction = { workspace = true }
+todo_media = { workspace = true }
+todo_preview = { workspace = true }
+todo_ui = { workspace = true }
+rfd = { workspace = true }

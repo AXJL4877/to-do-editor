@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "fps": 29.97,
+  "playhead": 1.25,
+  "media": [
+    {
+      "id": "m1",
+      "name": "电影.mp4",
+      "path": "data/旧工程/media/电影.mp4",
+      "duration": 12,
+      "hasAudio": true,
+      "width": 1920,
+      "height": 1080
+    },
+    { "id": "m2", "name": "音轨.wav", "duration": 6 }
+  ],
+  "tracks": [
+    {
+      "id": "v1", "name": "视频1", "kind": "video", "muted": false,
+      "clips": [
+        { "id": "c1", "mediaId": "m1", "start": 0, "duration": 4, "offset": 0.5, "rate": 1 }
+      ]
+    },
+    { "id": "a1", "name": "对白", "kind": "audio", "clips": [] }
+  ]
+}

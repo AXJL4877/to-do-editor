@@ -1,15 +1,19 @@
 node_modules/
 dist/
+target/
+__pycache__/
 
-# 本机 FFmpeg 二进制，体积大，不入库
-backend/ffmpeg/
+# Native build outputs
+native/build/
+native/*.obj
 
-# 工程里的媒体文件
+# Local FFmpeg binaries
+dependencies/ffmpeg/
+# Licensed font files; only the README is tracked
+dependencies/fonts/*
+!dependencies/fonts/README.md
+/cache/
+
+# Project media under data/
 data/**/media/
 *.mp4
-
-# Electron 本地排查日志
-electron/*.log
-electron/ver*.txt
-electron/ver*.err
-electron/electron-run*.log

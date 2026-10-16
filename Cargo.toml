@@ -1,0 +1,63 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/todo_core",
+  "crates/todo_interaction",
+  "crates/todo_ui",
+  "crates/todo_preview",
+  "crates/todo_media",
+  "crates/todo_app",
+  "crates/todo_application",
+  "crates/todo_storage",
+  "crates/todo_text",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+version = "0.1.0"
+
+[workspace.dependencies]
+todo_core = { path = "crates/todo_core" }
+todo_interaction = { path = "crates/todo_interaction" }
+todo_ui = { path = "crates/todo_ui" }
+todo_preview = { path = "crates/todo_preview" }
+todo_media = { path = "crates/todo_media" }
+todo_application = { path = "crates/todo_application" }
+todo_storage = { path = "crates/todo_storage" }
+todo_text = { path = "crates/todo_text" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+eframe = { version = "0.31", default-features = true, features = ["default_fonts", "glow"] }
+egui = "0.31"
+raw-window-handle = "0.6"
+rfd = "0.15"
+tiny-skia = "0.12"
+ttf-parser = "0.25"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
+# Text rasterization is per-pixel work: keep it fast in debug runs as well.
+[profile.dev.package.todo_text]
+opt-level = 3
+[profile.dev.package.tiny-skia]
+opt-level = 3
+[profile.dev.package.tiny-skia-path]
+opt-level = 3
+[profile.dev.package.ttf-parser]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.flate2]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.crc32fast]
+opt-level = 3
+[profile.dev.package.simd-adler32]
+opt-level = 3
+[profile.dev.package.adler2]
+opt-level = 3

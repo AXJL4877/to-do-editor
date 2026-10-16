@@ -1,0 +1,11 @@
+[package]
+name = "todo_application"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+todo_core = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

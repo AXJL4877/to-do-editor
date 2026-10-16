@@ -1,0 +1,14 @@
+[package]
+name = "todo_text"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+todo_core = { workspace = true }
+png = "0.18"
+thiserror = { workspace = true }
+tiny-skia = { workspace = true }
+ttf-parser = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
