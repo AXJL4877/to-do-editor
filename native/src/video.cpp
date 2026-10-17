@@ -65,8 +65,12 @@ struct VideoEngine::State {
       exact = exact && ExactLocked(index);
       if (!outcome.frame) continue;
       VideoFrame frame = *outcome.frame;
-      frame.target = outcome.still ? 0.0 : request.layers[index].time;
+      // A reveal atlas is a still that plays: its target is the progress.
+      const bool plays = request.layers[index].kind == VideoFrame::Kind::Reveal;
+      frame.target = outcome.still && !plays ? 0.0 : request.layers[index].time;
       frame.transform = request.layers[index].transform;
+      frame.kind = request.layers[index].kind;
+      frame.soft = request.layers[index].soft;
       frame.structure = request.structure;
       frame.generation = request.generation;
       frame.topmost = index + 1 == request.layers.size();
@@ -223,7 +227,7 @@ void VideoEngine::start(HWND window, UINT readyMessage) {
 
 void VideoEngine::setPath(std::wstring path, uint64_t generation) {
   std::vector<LayerSpec> layers;
-  if (!path.empty()) layers.push_back(LayerSpec{std::move(path), 0.0, {}});
+  if (!path.empty()) layers.push_back(LayerSpec{VideoFrame::Kind::Video, std::move(path), 0.0, {}});
   setLayers(std::move(layers), generation);
 }
 

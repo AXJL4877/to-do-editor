@@ -1,0 +1,1 @@
+ONE chalk drawing on a pure flat black background (#000000, no board frame, no wood, no chalk tray, no eraser). {{role}} Draw: {{draw}}. Style: hand-drawn blackboard illustration with dusty broken chalk strokes, {{palette}}. Centered, large in frame with a clear pure-black margin on all sides; everything outside the drawing is pure black.

@@ -43,7 +43,7 @@ struct GpuTest {
   ComPtr<ID3D11Texture2D> target, readback;
   ComPtr<ID3D11RenderTargetView> rtv;
   ComPtr<ID3D11VertexShader> vertex;
-  ComPtr<ID3D11PixelShader> video, still, gizmo;
+  ComPtr<ID3D11PixelShader> video, still, gizmo, packed, reveal;
   ComPtr<ID3D11PixelShader> stage;
   ComPtr<ID3D11Buffer> stage_params;
   ComPtr<ID3D11Buffer> video_params, gizmo_params;
@@ -58,6 +58,10 @@ struct GpuTest {
     auto vs = Compile(kVisualVertexShader, "VSMain", "vs_4_0");
     auto ps = Compile(kVideoPixelShader, "PSMain", "ps_4_0");
     auto sp = Compile(kStillPixelShader, "PSMain", "ps_4_0");
+    auto pp = Compile(kPackedPixelShader, "PSMain", "ps_4_0");
+    auto rp = Compile(kRevealPixelShader, "PSMain", "ps_4_0");
+    Require(device->CreatePixelShader(pp->GetBufferPointer(), pp->GetBufferSize(), nullptr, &packed));
+    Require(device->CreatePixelShader(rp->GetBufferPointer(), rp->GetBufferSize(), nullptr, &reveal));
     auto gs = Compile(kGizmoPixelShader, "PSMain", "ps_4_0");
     auto ss = Compile(kViewportPixelShader, "PSMain", "ps_4_0");
     Require(device->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, &vertex));
@@ -180,6 +184,66 @@ struct GpuTest {
     context->Draw(3, 0);
   }
 
+  ComPtr<ID3D11ShaderResourceView> Texture(DXGI_FORMAT format, UINT width, UINT height,
+                                           const void* pixels, UINT pitch) {
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = desc.ArraySize = 1;
+    desc.Format = format;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_IMMUTABLE;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA data{pixels, pitch, 0};
+    ComPtr<ID3D11Texture2D> texture;
+    Require(device->CreateTexture2D(&desc, &data, &texture));
+    ComPtr<ID3D11ShaderResourceView> view;
+    Require(device->CreateShaderResourceView(texture.Get(), nullptr, &view));
+    return view;
+  }
+
+  // 4x1 reveal atlas: two white picture texels, then their times 0.25 / 0.75.
+  void Reveal(float progress, float soft, unsigned char edge) {
+    const unsigned char atlas[] = {255, 255, 255, 255, 255, 255, 255, 255,
+                                   0, 64, 0, 255,       // B=soft 0, G=lo, R=hi: t=0.25
+                                   edge, 255, 191, 255};  // t~0.75, soft from `edge`
+    auto view = Texture(DXGI_FORMAT_B8G8R8A8_UNORM, 4, 1, atlas, 16);
+    const float params[24] = {0.5f, 1, 0.5f / 4, 0.5f, 0, 0, 0.5f, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+        1, 1, 0, 0,
+        1, progress, soft, 0};
+    context->UpdateSubresource(video_params.Get(), 0, nullptr, params, 0, 0);
+    ID3D11Buffer* buffer = video_params.Get();
+    context->PSSetConstantBuffers(0, 1, &buffer);
+    context->PSSetShader(reveal.Get(), nullptr, 0);
+    ID3D11ShaderResourceView* views[] = {view.Get(), nullptr};
+    context->PSSetShaderResources(0, 2, views);
+    ID3D11SamplerState* sampling = sampler.Get();
+    context->PSSetSamplers(0, 1, &sampling);
+    context->Draw(3, 0);
+  }
+
+  // Packed alpha: luma white on top, 50% alpha luma below; neutral chroma.
+  void Packed() {
+    const unsigned char luma[] = {255, 128};
+    auto y = Texture(DXGI_FORMAT_R8_UNORM, 1, 2, luma, 1);
+    const unsigned char chroma[] = {128, 128};
+    auto uv = Texture(DXGI_FORMAT_R8G8_UNORM, 1, 1, chroma, 2);
+    const float params[24] = {1, 0.5f, 0.5f, 0.25f, 0, 0, 0, 0.5f,
+        0, 1, 128.f / 255, 1, 0, 0, 0, 0,
+        1, 1, 0, 0,
+        1, 0, 0, 0};
+    context->UpdateSubresource(video_params.Get(), 0, nullptr, params, 0, 0);
+    ID3D11Buffer* buffer = video_params.Get();
+    context->PSSetConstantBuffers(0, 1, &buffer);
+    context->PSSetShader(packed.Get(), nullptr, 0);
+    ID3D11ShaderResourceView* views[] = {y.Get(), uv.Get()};
+    context->PSSetShaderResources(0, 2, views);
+    ID3D11SamplerState* sampling = sampler.Get();
+    context->PSSetSamplers(0, 1, &sampling);
+    context->Draw(3, 0);
+  }
+
   void Stage(const PreviewViewport& viewport, bool overlay) {
     const float params[8] = {static_cast<float>(viewport.left), static_cast<float>(viewport.top),
         static_cast<float>(viewport.width), static_cast<float>(viewport.height),
@@ -217,6 +281,27 @@ struct GpuTest {
 int main() {
   try {
     GpuTest gpu;
+    // Reveal: the left pixel (t=0.25) shows at progress 0.5, the right (t=0.75) not yet.
+    gpu.Clear();
+    gpu.Reveal(0.5f, 0.f, 0);
+    Check(gpu.Pixel(4, 0)[0] == 255, "revealed pixel is drawn");
+    Check(gpu.Pixel(60, 0)[0] == 0, "pixel not yet revealed stays transparent");
+    gpu.Clear();
+    gpu.Reveal(1.f, 0.f, 0);
+    Check(gpu.Pixel(4, 0)[0] == 255 && gpu.Pixel(60, 0)[0] == 255, "everything shows at the end");
+    gpu.Clear();
+    gpu.Reveal(0.f, 0.f, 0);
+    Check(gpu.Pixel(4, 0)[0] == 0 && gpu.Pixel(60, 0)[0] == 0, "nothing shows at the start");
+    // Soft edge: B=255 with soft 0.5 fades in over [0.25, 0.75]; halfway is about half.
+    gpu.Clear();
+    gpu.Reveal(0.5f, 0.5f, 255);
+    const int faded = gpu.Pixel(60, 0)[0];
+    Check(faded > 90 && faded < 165, "soft edge fades the pixel in");
+    // Packed: white at 50% packed alpha over black is mid grey.
+    gpu.Clear();
+    gpu.Packed();
+    const int grey = gpu.Pixel(32, 32)[0];
+    Check(std::abs(grey - 128) <= 3, "packed alpha premultiplies the colour");
     VisualTransform transform;
     gpu.Clear();
     gpu.Image(transform);

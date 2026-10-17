@@ -112,52 +112,16 @@ impl EditorSession {
             self.text_rasters.retain_shown(|_| false);
             return self.source_layers();
         }
-        let fps = self.project.fps;
-        let canvas = self.project.output_size();
-        let mut layers = Vec::new();
         let hits = resolve_layers(&self.project, self.playhead);
         self.text_rasters
             .retain_shown(|clip_id| hits.iter().any(|hit| hit.clip.id == clip_id));
-        for hit in hits {
-            let mut transform = hit.clip.transform;
-            let (path, media_time) = match hit.source {
-                HitSource::Media { media, media_time } => {
-                    let Some(path) = media.path.filter(|p| !p.trim().is_empty()) else {
-                        continue;
-                    };
-                    (path, media_time.max(0.0))
-                }
-                HitSource::Text { style, frame } => {
-                    let Some(content) = hit.clip.text().cloned() else {
-                        continue;
-                    };
-                    transform.opacity *= frame.opacity;
-                    // Per-character reveals change once per output frame at most.
-                    let reveal = frame.reveal.map(|mut reveal| {
-                        if fps.is_finite() && fps > 0.0 {
-                            reveal.time = (reveal.time * fps).floor() / fps;
-                        }
-                        reveal
-                    });
-                    match self.text_rasters.preview_state(
-                        &hit.clip.id,
-                        TextRaster::new(content, style, canvas, reveal),
-                    ) {
-                        // Text rasters are stills: no source time.
-                        RasterState::Ready(path) => (path, 0.0),
-                        RasterState::Pending => continue,
-                        RasterState::Failed => continue,
-                    }
-                }
-            };
-            layers.push(PreviewLayer {
-                path,
-                media_time,
-                aspect: hit.source_size,
-                transform,
-            });
-        }
-        layers
+        let rasters = &mut self.text_rasters;
+        picture_layers(&self.project, hits, &mut |clip_id, raster| match rasters
+            .preview_state(clip_id, raster)
+        {
+            RasterState::Ready(path) => Some(path),
+            RasterState::Pending | RasterState::Failed => None,
+        })
     }
 
     fn source_layers(&self) -> Vec<PreviewLayer> {
@@ -181,7 +145,9 @@ impl EditorSession {
             path: path.clone(),
             media_time: source.time.max(0.0),
             aspect,
+            kind: layer_kind(media),
             transform: ClipTransform::default(),
+            soft: todo_core::reveal_frame(media, source.time).map(|f| f.soft),
         }]
     }
 
@@ -283,4 +249,106 @@ impl EditorSession {
                 .iter()
                 .any(|c| self.playhead < c.start + c.duration)
     }
+}
+
+/// How the native host draws a library item.
+fn layer_kind(media: &todo_core::MediaItem) -> PreviewLayerKind {
+    match media.alpha {
+        Some(todo_core::AlphaPacking::Stacked) => PreviewLayerKind::Packed,
+        Some(todo_core::AlphaPacking::Reveal) => PreviewLayerKind::Reveal,
+        None if todo_core::is_image_media(media) => PreviewLayerKind::Image,
+        None => PreviewLayerKind::Video,
+    }
+}
+
+/// The picture layers of `hits` (bottom → top), as the native host draws them.
+/// Preview passes its budgeted stack, export the exact one; `text` returns a
+/// text clip's raster path once rendered. One function for both, so export
+/// shows what the preview showed.
+pub fn picture_layers(
+    project: &todo_core::Project,
+    hits: Vec<PreviewHit>,
+    text: &mut dyn FnMut(&str, TextRaster) -> Option<String>,
+) -> Vec<PreviewLayer> {
+    let fps = project.fps;
+    let canvas = project.output_size();
+    // (layer, is a chalk hand)
+    let mut layers: Vec<(PreviewLayer, bool)> = Vec::new();
+    for hit in hits {
+        let mut transform = todo_core::picture_transform(&hit.clip, hit.local_time);
+        let mut soft = None;
+        let mut hand = None;
+        let (path, media_time, kind) = match hit.source {
+            HitSource::Media { media, media_time } => {
+                let Some(path) = media.path.clone().filter(|p| !p.trim().is_empty()) else {
+                    continue;
+                };
+                let mut time = media_time.max(0.0);
+                // A reveal plays by progress; its chalk hand is one more layer.
+                if let Some(frame) = todo_core::reveal_frame(&media, time) {
+                    hand = todo_core::reveal_hand(&media, &transform, canvas, time);
+                    soft = Some(frame.soft);
+                    time = frame.progress;
+                }
+                (path, time, layer_kind(&media))
+            }
+            HitSource::Text { style, frame } => {
+                let Some(content) = hit.clip.text().cloned() else {
+                    continue;
+                };
+                transform.opacity *= frame.opacity;
+                // Per-character reveals change once per output frame at most.
+                let reveal = frame.reveal.map(|mut reveal| {
+                    if fps.is_finite() && fps > 0.0 {
+                        reveal.time = (reveal.time * fps).floor() / fps;
+                    }
+                    reveal
+                });
+                match text(
+                    &hit.clip.id,
+                    TextRaster::new(content, style, canvas, reveal),
+                ) {
+                    // Text rasters are stills: no source time.
+                    Some(path) => (path, 0.0, PreviewLayerKind::Text),
+                    None => continue,
+                }
+            }
+        };
+        layers.push((
+            PreviewLayer {
+                path,
+                media_time,
+                aspect: hit.source_size,
+                kind,
+                transform,
+                soft,
+            },
+            false,
+        ));
+        if let Some(hand) = hand {
+            layers.push((
+                PreviewLayer {
+                    path: hand.path,
+                    media_time: 0.0,
+                    aspect: Some(hand.size),
+                    kind: PreviewLayerKind::Image,
+                    transform: hand.transform,
+                    soft: None,
+                },
+                true,
+            ));
+        }
+    }
+    // Over the layer budget, hands go first, then the deepest layers.
+    while layers.len() > todo_core::MAX_PREVIEW_LAYERS {
+        match layers.iter().rposition(|(_, hand)| *hand) {
+            Some(i) => {
+                layers.remove(i);
+            }
+            None => {
+                layers.remove(0);
+            }
+        }
+    }
+    layers.into_iter().map(|(layer, _)| layer).collect()
 }

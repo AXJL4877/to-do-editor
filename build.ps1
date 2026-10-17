@@ -23,6 +23,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Rust application build failed' }
     $taskDestination = [IO.Path]::GetFullPath((Join-Path $taskRoot 'dist/to_do'))
     if (-not $taskDestination.StartsWith($taskRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Package path escaped workspace' }
+    # Rebuild the generated directory from scratch so stale local settings and
+    # nested copies cannot survive between package runs.
+    if (Test-Path -LiteralPath $taskDestination) {
+        [IO.Directory]::Delete($taskDestination, $true)
+    }
     $taskPackagedTools = Join-Path $taskDestination 'dependencies/ffmpeg/bin'
     New-Item -ItemType Directory -Path $taskPackagedTools -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $taskBuildDirectory "$Configuration/todo_app.exe") -Destination (Join-Path $taskDestination 'todo_app.exe') -Force
@@ -40,5 +45,38 @@ try {
         New-Item -ItemType Directory -Path $taskPackagedFonts -Force | Out-Null
         Get-ChildItem -LiteralPath $taskFonts -File | Copy-Item -Destination $taskPackagedFonts -Force
     }
+    # Extensions and the standard-library worker SDK are application data, not
+    # Rust resources. Never copy tests or machine-local AI settings.
+    $taskExtensions = Join-Path $taskRoot 'extensions'
+    if (Test-Path -LiteralPath $taskExtensions) {
+        $taskPackagedExtensions = Join-Path $taskDestination 'extensions'
+        New-Item -ItemType Directory -Path $taskPackagedExtensions -Force | Out-Null
+        Get-ChildItem -LiteralPath $taskExtensions -File -Recurse |
+            Where-Object { $_.FullName -notmatch '[\\/]tests[\\/]' -and $_.Name -notlike '*.pyc' } |
+            ForEach-Object {
+                $taskRelative = $_.FullName.Substring($taskExtensions.Length).TrimStart([char]92, [char]47)
+                $taskTarget = Join-Path $taskPackagedExtensions $taskRelative
+                New-Item -ItemType Directory -Path (Split-Path $taskTarget) -Force | Out-Null
+                Copy-Item -LiteralPath $_.FullName -Destination $taskTarget -Force
+            }
+    }
+    $taskPython = Join-Path $taskRoot 'dependencies/python'
+    if (Test-Path -LiteralPath $taskPython) {
+        Copy-Item -LiteralPath $taskPython -Destination (Join-Path $taskDestination 'dependencies/python') -Recurse -Force
+    } else {
+        Write-Warning 'Bundled Python is missing; run scripts/fetch_python.ps1 before shipping.'
+    }
+    $taskExample = Join-Path $taskRoot 'config/ai.example.json'
+    if (Test-Path -LiteralPath $taskExample) {
+        New-Item -ItemType Directory -Path (Join-Path $taskDestination 'config') -Force | Out-Null
+        Copy-Item -LiteralPath $taskExample -Destination (Join-Path $taskDestination 'config/ai.example.json') -Force
+    }
+    # A package must never contain credentials or copied local settings.
+    $taskForbidden = '密匙|MISHI|api_key\s*=|(?<![A-Za-z])sk-[A-Za-z0-9]{8,}'
+    $taskTextExtensions = @('.rs', '.json', '.toml', '.md', '.txt', '.py', '.ps1', '.bat', '.sh', '.lock')
+    $taskHits = Get-ChildItem -LiteralPath $taskDestination -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $taskTextExtensions -contains $_.Extension.ToLowerInvariant() } |
+        Select-String -Pattern $taskForbidden -SimpleMatch:$false -ErrorAction SilentlyContinue
+    if ($taskHits) { throw "Possible credential text found in package: $($taskHits[0].Path)" }
     Write-Host "Package ready: $taskDestination"
 } finally { Pop-Location }

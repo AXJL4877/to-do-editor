@@ -131,7 +131,9 @@ fn insertion_below_a_locked_track_preserves_existing_content_and_flags() {
         height: Some(1080),
         kind: Some(MediaKind::Video),
         folder_id: None,
-});
+        alpha: None,
+        reveal: None,
+    });
     base = place_media(base, "movie", Some("v1"), 3.0).unwrap();
     base.tracks[0].locked = true;
     base.tracks[0].muted = true;
@@ -176,8 +178,7 @@ fn add_track_lands_in_kind_section_and_keeps_video_above_audio() {
     assert_eq!(
         next.tracks
             .iter()
-            .filter(|t| t.kind == TrackKind::Audio)
-            .last()
+            .rfind(|t| t.kind == TrackKind::Audio)
             .unwrap()
             .id,
         "a3"

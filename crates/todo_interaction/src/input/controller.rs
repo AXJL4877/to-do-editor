@@ -110,6 +110,7 @@ impl EditorController {
                 | Intent::AddTrack { .. }
                 | Intent::InsertTrackBelow { .. }
                 | Intent::MoveTrack { .. }
+                | Intent::CompactTracks
                 | Intent::ToggleLock { .. }
                 | Intent::PlaceMedia { .. }
                 | Intent::AddText
@@ -272,6 +273,9 @@ impl EditorController {
             Intent::MoveTrack { track_id, up } => workspace.dispatch(AppAction::Editor(
                 EditorCommand::Edit(EditCommand::MoveTrack { track_id, up }),
             )),
+            Intent::CompactTracks => workspace.dispatch(AppAction::Editor(EditorCommand::Edit(
+                EditCommand::CompactTracks,
+            ))),
             Intent::ToggleLock { track_id } => workspace.dispatch(AppAction::Editor(
                 EditorCommand::Edit(EditCommand::ToggleLock { track_id }),
             )),

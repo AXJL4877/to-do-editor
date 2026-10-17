@@ -6,4 +6,5 @@ edition.workspace = true
 [dependencies]
 todo_core = { workspace = true }
 todo_application = { workspace = true }
+todo_production = { workspace = true }
 uuid = { workspace = true }

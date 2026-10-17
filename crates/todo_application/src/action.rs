@@ -72,5 +72,10 @@ pub enum AppAction {
         now: f64,
         requests: Vec<AssetRequest>,
     },
+    ExportTimeline {
+        output: PathBuf,
+        /// Stable UI value: standard, high, vertical or draft.
+        preset: String,
+    },
     Notice(String),
 }

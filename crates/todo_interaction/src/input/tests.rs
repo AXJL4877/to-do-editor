@@ -88,7 +88,9 @@ fn with_clip() -> Project {
         height: Some(9),
         kind: None,
         folder_id: None,
-});
+        alpha: None,
+        reveal: None,
+    });
     project = add_clip(
         project,
         "v1",
@@ -152,7 +154,9 @@ fn ctrl_marquee_selects_multiple_clips_for_move_and_delete() {
         height: Some(9),
         kind: None,
         folder_id: None,
-});
+        alpha: None,
+        reveal: None,
+    });
     project = add_clip(
         project,
         "v1",

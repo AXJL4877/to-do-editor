@@ -17,11 +17,13 @@ void Check(bool condition, const char* message) {
 }
 
 std::shared_ptr<const std::vector<VideoFrame>> WaitForStack(VideoEngine& engine,
-                                                          uint64_t generation) {
+                                                          uint64_t generation,
+                                                          size_t count) {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
   while (std::chrono::steady_clock::now() < deadline) {
     auto stack = engine.latest();
-    if (stack && stack->front().generation == generation) return stack;
+    if (stack && stack->size() == count && stack->front().generation == generation &&
+        stack->front().exact) return stack;
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   Check(false, "layer stack completes before timeout");
@@ -34,7 +36,7 @@ void TestPendingPresentation() {
   const TransformGizmo gizmo{0.1, 0.2, 0.8, 0.9, true};
   g_presenter.setGizmo(gizmo);
   g_presenter.setGuides({{true, 0.5}});
-  g_pending_layers = {{L"bottom.mp4", 1.0, {}}, {L"top.mp4", 2.0, {0.1, 0, 1}}};
+  g_pending_layers = {{VideoFrame::Kind::Video, L"bottom.mp4", 1.0, {}}, {VideoFrame::Kind::Video, L"top.mp4", 2.0, {0.1, 0, 1}}};
   g_layers_configuring = true;
   CmdLayersCommit();
   Check(g_frames == visible, "layer update retains visible stack while decoding is pending");
@@ -57,9 +59,9 @@ void TestRetainedDecoding(const std::wstring& path) {
   VideoEngine& engine = g_video;
   // No message pump: latest() is the same handoff consumed by the real host.
   engine.start(nullptr, WM_VIDEO_FRAME);
-  std::vector<LayerSpec> layers{{path, 0, {}}, {path, 1, {}}};
+  std::vector<LayerSpec> layers{{VideoFrame::Kind::Video, path, 0, {}}, {VideoFrame::Kind::Video, path, 1, {}}};
   engine.setLayers(layers, 100);
-  auto original = WaitForStack(engine, 100);
+  auto original = WaitForStack(engine, 100, 2);
   if (!original) return;
   Check(original->size() == 2, "duplicate media produces two independently retained layers");
   g_source_generation = 100;
@@ -70,7 +72,7 @@ void TestRetainedDecoding(const std::wstring& path) {
     layers[1].transform.x = (generation - 100) / 100.0;
     layers[1].transform.opacity = 0.5;
     engine.setLayers(layers, generation);
-    auto updated = WaitForStack(engine, generation);
+    auto updated = WaitForStack(engine, generation, 2);
     if (!updated) return;
     Check(updated->size() == 2, "dragging retains the complete layer stack");
     for (size_t i = 0; i < updated->size(); ++i) {
@@ -90,7 +92,7 @@ void TestRetainedDecoding(const std::wstring& path) {
   engine.setLayers({}, 200);
   Check(!engine.latest(), "clearing invalidates completed decoding immediately");
   engine.setLayers(layers, 201);
-  auto reopened = WaitForStack(engine, 201);
+  auto reopened = WaitForStack(engine, 201, 2);
   Check(reopened && reopened->size() == 2, "layers can be restored after clearing");
 }
 // Opaque stills keep the NV12 path; any transparency keeps premultiplied BGRA.

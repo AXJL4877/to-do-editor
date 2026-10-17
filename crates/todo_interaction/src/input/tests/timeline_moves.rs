@@ -13,7 +13,9 @@ fn movie() -> Project {
         height: Some(1080),
         kind: Some(MediaKind::Video),
         folder_id: None,
-});
+        alpha: None,
+        reveal: None,
+    });
     project
 }
 

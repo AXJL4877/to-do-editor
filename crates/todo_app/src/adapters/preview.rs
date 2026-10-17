@@ -152,6 +152,8 @@ impl PreviewBridge {
                             offset: c.offset,
                             rate: c.rate,
                             gain: c.gain,
+                            fade_in: c.fade_in,
+                            fade_out: c.fade_out,
                         })
                         .collect::<Vec<_>>(),
                 ),
@@ -163,7 +165,8 @@ impl PreviewBridge {
     }
 
     pub fn install_edit_proxy(&mut self, source: String, proxy: PathBuf) {
-        self.sources.install(source, proxy);
+        self.sources
+            .install(source, proxy, self.started.elapsed().as_secs_f64());
     }
 
     pub fn clear_edit_sources(&mut self) {
@@ -192,21 +195,8 @@ impl PreviewBridge {
         self.source_generation = self.source_generation.wrapping_add(1);
         self.source_path = self.sources.top_source().map(str::to_owned);
         let host_layers: Vec<HostLayer> = layers
-            .into_iter()
-            .map(|layer| HostLayer {
-                path: resolve_media_path(&self.repo, &layer.path)
-                    .to_string_lossy()
-                    .into_owned(),
-                media_time: layer.media_time,
-                transform: VisualTransform {
-                    x: layer.transform.x,
-                    y: layer.transform.y,
-                    scale: layer.transform.scale,
-                    scale_x: layer.transform.scale_x,
-                    scale_y: layer.transform.scale_y,
-                    opacity: layer.transform.opacity,
-                },
-            })
+            .iter()
+            .map(|layer| host_layer(&self.repo, layer))
             .collect();
         host.set_layers(&host_layers).map_err(|e| e.to_string())
     }
@@ -338,9 +328,44 @@ impl PreviewBridge {
     }
 }
 
+/// An application layer as the native host draws it (preview and export).
+pub fn host_layer(repo: &std::path::Path, layer: &todo_application::PreviewLayer) -> HostLayer {
+    HostLayer {
+        path: resolve_media_path(repo, &layer.path)
+            .to_string_lossy()
+            .into_owned(),
+        media_time: layer.media_time,
+        soft: layer.soft.unwrap_or(0.0),
+        kind: match layer.kind {
+            todo_application::PreviewLayerKind::Video => todo_preview::LayerKind::Video,
+            todo_application::PreviewLayerKind::Image => todo_preview::LayerKind::Image,
+            todo_application::PreviewLayerKind::Packed => todo_preview::LayerKind::Packed,
+            todo_application::PreviewLayerKind::Reveal => todo_preview::LayerKind::Reveal,
+            todo_application::PreviewLayerKind::Text => todo_preview::LayerKind::Text,
+        },
+        transform: VisualTransform {
+            x: layer.transform.x,
+            y: layer.transform.y,
+            scale: layer.transform.scale,
+            scale_x: layer.transform.scale_x,
+            scale_y: layer.transform.scale_y,
+            opacity: layer.transform.opacity,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_layer_budget_matches_the_protocol() {
+        // core owns the limit; the protocol (and native host) must accept every stack it builds.
+        assert_eq!(
+            todo_application::MAX_PREVIEW_LAYERS,
+            todo_preview::MAX_PREVIEW_LAYERS
+        );
+    }
 
     #[test]
     fn decoder_geometry_maps_only_the_current_request_to_its_project_path() {

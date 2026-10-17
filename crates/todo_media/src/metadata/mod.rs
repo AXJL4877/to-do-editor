@@ -14,6 +14,15 @@ pub struct MediaMetadata {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub kind: MediaKind,
+    pub alpha: Option<AlphaPacking>,
+    pub reveal: Option<todo_core::RevealInfo>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlphaPacking {
+    Stacked,
+    /// `todo-reveal/1`: picture and appearance times side by side.
+    Reveal,
 }
 #[derive(Deserialize, Default)]
 pub(super) struct ProbeJson {
@@ -27,6 +36,8 @@ pub(super) struct Format {
     duration: Option<String>,
     #[serde(default)]
     format_name: String,
+    #[serde(default)]
+    tags: std::collections::BTreeMap<String, String>,
 }
 #[derive(Deserialize, Default)]
 pub(super) struct Stream {
@@ -50,6 +61,39 @@ impl MediaService {
         self.probe_path(&self.resolve(stored)?)
     }
     pub(crate) fn probe_path(&self, full: &Path) -> Result<MediaMetadata, MediaError> {
+        if full
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.to_ascii_lowercase().ends_with(".reveal.png"))
+        {
+            // A reveal atlas: final picture beside its appearance times.
+            let (meta, _, _) = crate::read_reveal(full)?;
+            let hand = meta.hand.as_ref().and_then(|hand| {
+                let image = full.parent()?.join(&hand.file);
+                let (width, height) = crate::image_size(&image).ok()?;
+                Some(todo_core::RevealHand {
+                    file: hand.file.clone(),
+                    width,
+                    height,
+                    anchor: hand.anchor,
+                    scale: hand.height,
+                    path: hand.path.clone(),
+                })
+            });
+            return Ok(MediaMetadata {
+                duration: meta.duration.max(0.04),
+                has_audio: false,
+                audio_channels: 0,
+                width: Some(meta.width),
+                height: Some(meta.height),
+                kind: MediaKind::Image,
+                alpha: Some(AlphaPacking::Reveal),
+                reveal: Some(todo_core::RevealInfo {
+                    soft_max: meta.soft_max,
+                    hand,
+                }),
+            });
+        }
         let mut args: Vec<OsString> = [
             "-v",
             "error",

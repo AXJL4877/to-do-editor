@@ -33,6 +33,8 @@ pub(super) fn parse(full: &Path, json: ProbeJson) -> Result<MediaMetadata, Media
                     | "webp"
             )
         }));
+    let alpha = (json.format.tags.get("todo_alpha").map(String::as_str) == Some("stacked"))
+        .then_some(super::AlphaPacking::Stacked);
     let kind = if still {
         MediaKind::Image
     } else if video.is_some() {
@@ -69,6 +71,14 @@ pub(super) fn parse(full: &Path, json: ProbeJson) -> Result<MediaMetadata, Media
         has_audio: audio.is_some(),
         audio_channels: channels,
         width: video.and_then(|stream| stream.width),
-        height: video.and_then(|stream| stream.height),
+        height: video.and_then(|stream| stream.height).map(|height| {
+            if alpha.is_some() {
+                height / 2
+            } else {
+                height
+            }
+        }),
+        alpha,
+        reveal: None,
     })
 }

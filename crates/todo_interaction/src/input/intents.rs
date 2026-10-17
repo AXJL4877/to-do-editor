@@ -50,6 +50,8 @@ pub enum Intent {
         track_id: String,
         up: bool,
     },
+    /// Pack non-overlapping clips into fewer compatible tracks.
+    CompactTracks,
     ToggleLock {
         track_id: String,
     },

@@ -12,6 +12,40 @@ pub enum MediaKind {
     Image,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AlphaPacking {
+    Stacked,
+    /// A `todo-reveal/1` atlas: the picture appears over its duration.
+    Reveal,
+}
+
+/// What a reveal layer needs besides its atlas: the soft-edge scale and the
+/// chalk hand that follows the pen.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealInfo {
+    pub soft_max: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hand: Option<RevealHand>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealHand {
+    /// Hand image, relative to the atlas's directory.
+    pub file: String,
+    /// Pixel size of the hand image.
+    pub width: u32,
+    pub height: u32,
+    /// Pen tip inside the hand image, 0..1.
+    pub anchor: [f64; 2],
+    /// Hand height as a multiple of the element's height.
+    pub scale: f64,
+    /// `[seconds, x, y]`, the tip inside the element (0..1).
+    pub path: Vec<[f64; 3]>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaItem {
@@ -29,6 +63,12 @@ pub struct MediaItem {
     /// Set by probe when known. Legacy projects omit it — see [`media_kind`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<MediaKind>,
+    /// Packed-alpha storage scheme, when a probe identified one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<AlphaPacking>,
+    /// Playback data of a reveal atlas (`alpha == Reveal`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reveal: Option<RevealInfo>,
     /// Virtual library folder; `None` is the root. Legacy projects omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder_id: Option<String>,
@@ -133,6 +173,8 @@ mod tests {
             width: w,
             height: h,
             kind,
+            alpha: None,
+            reveal: None,
             folder_id: None,
         }
     }

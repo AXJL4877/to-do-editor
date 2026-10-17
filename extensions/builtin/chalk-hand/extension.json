@@ -1,0 +1,397 @@
+{
+  "spec": "todo-extension/1",
+  "id": "builtin.chalk-hand",
+  "name": "黑板手绘",
+  "version": "4.0.0",
+  "description": "长口播一键成片：AI 先按意思把全文切成口播段，每段单独配音、拆成几块黑板，每块 1~4 个粉笔元素；配音、黑板底、元素书写片段和字幕按时间戳自动铺进时间轴。每个元素可以多出几张候选图挑选、换描述重画或上传自己的图，改哪里只重做哪里。",
+  "kind": "narration",
+  "input": {
+    "script": {
+      "label": "口播文案",
+      "maxLength": 12000,
+      "placeholder": "粘贴整篇口播（几千字也行）。空行或 --- 表示这里必须换段；AI 会按意思切段、拆黑板，边讲边画"
+    }
+  },
+  "params": [
+    {
+      "type": "voice",
+      "id": "voice",
+      "label": "音色",
+      "group": "voice",
+      "default": "zh_female_mizai_uranus_bigtts",
+      "hint": "火山 Seed TTS 2.0 音色；声音复刻填 S_ 开头的音色 id"
+    },
+    {
+      "id": "split",
+      "type": "select",
+      "group": "story",
+      "label": "分段方式",
+      "default": "semantic",
+      "options": [
+        {
+          "value": "semantic",
+          "label": "AI 按意思",
+          "hint": "AI 找话题转折处切段，顺带定片名和人物外观；空行和 --- 一定换段"
+        },
+        {
+          "value": "paragraph",
+          "label": "按段落",
+          "hint": "尽量一个自然段一段，过长的再切"
+        },
+        {
+          "value": "length",
+          "label": "按字数",
+          "hint": "按目标字数在句号处切，不调用 AI"
+        }
+      ]
+    },
+    {
+      "type": "number",
+      "id": "segmentChars",
+      "label": "每段字数",
+      "group": "story",
+      "default": 120,
+      "min": 60,
+      "max": 200,
+      "step": 10,
+      "unit": "字",
+      "hint": "口播段的目标长度；一段 = 一条配音，硬上限 200 字"
+    },
+    {
+      "type": "number",
+      "id": "boardSec",
+      "label": "换板节奏",
+      "group": "story",
+      "default": 10,
+      "min": 5,
+      "max": 30,
+      "step": 1,
+      "unit": "秒",
+      "hint": "大约每几秒换一块黑板；AI 仍按意思找换板点"
+    },
+    {
+      "type": "number",
+      "id": "variants",
+      "label": "候选图",
+      "group": "story",
+      "default": 1,
+      "min": 1,
+      "max": 4,
+      "step": 1,
+      "unit": "张",
+      "hint": "每个元素先出几张图供挑选；之后也可以单独「再来一张」"
+    },
+    {
+      "id": "layout",
+      "type": "select",
+      "group": "scene",
+      "label": "版式",
+      "default": "auto",
+      "options": [
+        {
+          "value": "auto",
+          "label": "自动"
+        },
+        {
+          "value": "hero_left",
+          "label": "左主角"
+        },
+        {
+          "value": "diagonal_fall",
+          "label": "斜线下落"
+        },
+        {
+          "value": "conveyor_wave",
+          "label": "传送带"
+        },
+        {
+          "value": "fork_right",
+          "label": "右分叉"
+        },
+        {
+          "value": "stack_rise",
+          "label": "层层升高"
+        },
+        {
+          "value": "climax_right",
+          "label": "右侧高潮"
+        },
+        {
+          "value": "grid",
+          "label": "均分网格"
+        }
+      ]
+    },
+    {
+      "id": "tone",
+      "type": "select",
+      "group": "scene",
+      "label": "笔色",
+      "default": "chalk",
+      "options": [
+        {
+          "value": "chalk",
+          "label": "白粉笔",
+          "hint": "适合叠在深色画面"
+        },
+        {
+          "value": "ink",
+          "label": "深色墨线",
+          "hint": "适合叠在浅色画面"
+        }
+      ]
+    },
+    {
+      "id": "palette",
+      "type": "select",
+      "group": "scene",
+      "label": "配色",
+      "default": "color",
+      "options": [
+        {
+          "value": "color",
+          "label": "彩色粉笔",
+          "prompt": "white chalk with a few vivid red, green, cool blue and pale-yellow chalk accents"
+        },
+        {
+          "value": "mono",
+          "label": "纯白粉笔",
+          "prompt": "white chalk only, no colored chalk"
+        }
+      ]
+    },
+    {
+      "type": "number",
+      "id": "drawSpeed",
+      "label": "书写速度",
+      "group": "timing",
+      "default": 1,
+      "min": 0.5,
+      "max": 3,
+      "step": 0.25,
+      "unit": "×",
+      "hint": "越大画得越快、画完停着听；最慢也会在下个元素前画完"
+    },
+    {
+      "type": "number",
+      "id": "tail",
+      "label": "结尾停留",
+      "group": "timing",
+      "default": 0,
+      "min": 0,
+      "max": 3,
+      "step": 0.5,
+      "unit": "秒",
+      "hint": "配音结束后停在最后一块黑板；0 = 画面和配音同时结束"
+    },
+    {
+      "id": "hand",
+      "type": "select",
+      "group": "stroke",
+      "label": "粉笔手",
+      "default": "chalk",
+      "options": [
+        {
+          "value": "chalk",
+          "label": "自动加",
+          "hint": "手写的元素入轨时自动套「粉笔手书写」；盖章和渐显不加手"
+        },
+        {
+          "value": "none",
+          "label": "不加",
+          "hint": "手写元素只有笔画生长；需要时再在动效里给元素加"
+        }
+      ]
+    },
+    {
+      "type": "number",
+      "id": "handSize",
+      "label": "手部大小",
+      "group": "stroke",
+      "default": 1,
+      "min": 0.6,
+      "max": 1.4,
+      "step": 0.1,
+      "unit": "×",
+      "when": {
+        "hand": [
+          "chalk"
+        ]
+      }
+    },
+    {
+      "id": "enter",
+      "type": "select",
+      "group": "stroke",
+      "label": "进场",
+      "default": "mix",
+      "options": [
+        {
+          "value": "mix",
+          "label": "混合",
+          "hint": "主视觉仍用手写；配角渐渐显现；标题和大字下压盖章，砸到板上扬起粉笔灰"
+        },
+        {
+          "value": "draw",
+          "label": "全部手写"
+        },
+        {
+          "value": "stamp",
+          "label": "全部盖章"
+        },
+        {
+          "value": "fade",
+          "label": "全部显现"
+        }
+      ]
+    },
+    {
+      "id": "stroke",
+      "type": "select",
+      "group": "stroke",
+      "label": "笔迹",
+      "default": "skeleton",
+      "options": [
+        {
+          "value": "skeleton",
+          "label": "沿线条书写",
+          "hint": "骨架追踪，笔尖跟着线走"
+        },
+        {
+          "value": "grid",
+          "label": "块状扫写",
+          "hint": "更快，适合大面积涂抹"
+        }
+      ]
+    },
+    {
+      "id": "fill",
+      "type": "select",
+      "group": "stroke",
+      "label": "上色",
+      "default": "wipe",
+      "options": [
+        {
+          "value": "wipe",
+          "label": "写完淡入颜色",
+          "hint": "线稿写完后颜色直接淡入，手不再来回涂"
+        },
+        {
+          "value": "none",
+          "label": "只描线"
+        }
+      ]
+    },
+    {
+      "id": "plate",
+      "type": "select",
+      "group": "output",
+      "label": "底板",
+      "default": "board",
+      "options": [
+        {
+          "value": "board",
+          "label": "黑板底",
+          "hint": "整片铺一张黑板底图在最底层轨道"
+        },
+        {
+          "value": "none",
+          "label": "不铺",
+          "hint": "元素是透明的，叠在你自己的画面上"
+        }
+      ]
+    },
+    {
+      "type": "number",
+      "id": "subtitleChars",
+      "label": "每条字数",
+      "group": "output",
+      "default": 18,
+      "min": 8,
+      "max": 30,
+      "step": 1
+    },
+    {
+      "type": "bool",
+      "id": "subtitles",
+      "label": "字幕",
+      "group": "output",
+      "default": true,
+      "hint": "按配音逐字时间戳切好字幕条，进时间轴后可直接改字"
+    }
+  ],
+  "quick": [
+    "voice",
+    "split",
+    "variants",
+    "subtitles"
+  ],
+  "requires": {
+    "services": [
+      "chat",
+      "image",
+      "speech",
+      "encode"
+    ],
+    "runtime": {
+      "type": "python",
+      "version": ">=3.12"
+    }
+  },
+  "worker": {
+    "entry": "worker/bake.py",
+    "ops": [
+      "bake_board",
+      "plate"
+    ],
+    "timeoutSec": 900,
+    "maxProcesses": 4,
+    "memoryMiB": 1500
+  },
+  "narration": {
+    "planner": {
+      "prompt": "prompts/planner.md",
+      "maxElements": 4
+    },
+    "assets": {
+      "template": "prompts/asset.md",
+      "roles": {
+        "hero": "HERO vignette: one clear focal scene, rich but readable.",
+        "support": "SUPPORT vignette: a simpler silhouette than a hero scene.",
+        "accent": "Short chalk LETTERING only, written exactly as given, with at most one rough underline; no props, no icons."
+      },
+      "avoid": [
+        "photograph",
+        "photorealistic",
+        "3D render",
+        "real human face",
+        "classroom photo",
+        "four-panel grid",
+        "icon flowchart",
+        "long sentences",
+        "watermark",
+        "green board",
+        "board frame"
+      ],
+      "size": "1024x1024",
+      "quality": "low",
+      "transparent": false
+    },
+    "segment": {
+      "target": 120,
+      "max": 200
+    },
+    "boardSec": 10,
+    "subtitles": {
+      "maxChars": 18
+    },
+    "bake": "bake_board",
+    "plate": "plate"
+  },
+  "budget": {
+    "image": 300,
+    "chat": 120,
+    "speech": 200
+  },
+  "previews": []
+}

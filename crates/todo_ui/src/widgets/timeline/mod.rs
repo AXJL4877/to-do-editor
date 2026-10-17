@@ -86,6 +86,12 @@ pub fn draw(ui: &mut Ui, vm: &TimelineViewModel, peaks: &PeaksCache) -> Vec<Inte
         {
             intents.push(Intent::ToggleLinkedSelection);
         }
+        if button(ui, "整理轨道", Btn::Normal, true)
+            .on_hover_text("合并不重叠的片段，保持上下层关系并减少多余轨道")
+            .clicked()
+        {
+            intents.push(Intent::CompactTracks);
+        }
     });
     ui.add_space(3.0);
     let top = ui.cursor().top();

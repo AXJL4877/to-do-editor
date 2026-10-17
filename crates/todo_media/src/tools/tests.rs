@@ -1,66 +1,56 @@
-use super::process::{capture_command, capture_command_cancellable};
+//! Supervision itself is tested in `todo_process`; these pin the MediaError mapping.
+use super::process::{capture_command, execute_command};
 use crate::{test_support, MediaError};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+use std::{
+    sync::{atomic::AtomicBool, Arc},
+    time::Duration,
 };
-use std::time::{Duration, Instant};
 
 #[test]
-fn cancellation_reaps_a_stubborn_native_job_promptly() {
-    let cancelled = Arc::new(AtomicBool::new(false));
-    let signal = cancelled.clone();
-    let trigger = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(80));
-        signal.store(true, Ordering::Release);
-    });
-    let started = Instant::now();
-    let result = capture_command_cancellable(
-        test_support::command("stubborn"),
+fn process_failures_map_to_media_errors() {
+    let error = capture_command(
+        test_support::command("fail"),
         Duration::from_secs(3),
         128,
-        cancelled,
-    );
-    trigger.join().unwrap();
-    assert!(matches!(result, Err(MediaError::Cancelled)));
-    assert!(started.elapsed() < Duration::from_secs(2));
-}
-
-#[test]
-fn already_cancelled_jobs_do_not_try_to_spawn_the_tool() {
-    let result = capture_command_cancellable(
-        std::process::Command::new("missing-edit-proxy-tool"),
-        Duration::from_secs(3),
-        128,
-        Arc::new(AtomicBool::new(true)),
-    );
-    assert!(matches!(result, Err(MediaError::Cancelled)));
-}
-
-#[test]
-fn pipes_are_drained_without_deadlock_and_diagnostics_remain_bounded() {
+        None,
+    )
+    .unwrap_err();
     assert!(
-        capture_command(test_support::command("stderr"), Duration::from_secs(3), 128)
-            .unwrap()
-            .ends_with(b"done")
+        matches!(&error, MediaError::Tool { message, .. } if message.contains("exit 7")),
+        "{error}"
     );
-    let error =
-        capture_command(test_support::command("fail"), Duration::from_secs(3), 128).unwrap_err();
-    let message = error.to_string();
-    assert!(message.contains("exit 7"));
-    assert!(message.len() < 5000);
-}
-#[test]
-fn output_limits_and_timeouts_terminate_native_jobs() {
-    assert!(capture_command(test_support::command("large"), Duration::from_secs(3), 32).is_err());
-    let started = Instant::now();
     assert!(matches!(
         capture_command(
             test_support::command("stubborn"),
             Duration::from_millis(80),
-            128
+            128,
+            None
         ),
         Err(MediaError::Timeout(_))
     ));
-    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(matches!(
+        capture_command(
+            test_support::command("stubborn"),
+            Duration::from_secs(3),
+            128,
+            Some(Arc::new(AtomicBool::new(true)))
+        ),
+        Err(MediaError::Cancelled)
+    ));
+}
+
+#[test]
+fn reader_errors_survive_unchanged() {
+    let error = execute_command(
+        test_support::command("stderr"),
+        Duration::from_secs(3),
+        |mut stdout| {
+            // Drain first: a reader that drops the pipe makes the child fail, and a
+            // failed exit takes precedence over the reader's own error.
+            std::io::copy(&mut stdout, &mut std::io::sink()).unwrap();
+            Err::<(), _>(MediaError::Invalid("reader said no".into()))
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(error, MediaError::Invalid(message) if message == "reader said no"));
 }

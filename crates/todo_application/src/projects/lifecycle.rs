@@ -18,7 +18,7 @@ impl Workspace {
     }
     pub(super) fn leave(&mut self, close: bool) -> AppUpdate {
         self.close_prompt = false;
-        let mut effects = Vec::new();
+        let mut effects = self.stop_productions();
         if let Some(editor) = &mut self.editor {
             effects.push(Effect::Preview(editor.deactivate()));
         }

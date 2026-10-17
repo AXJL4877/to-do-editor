@@ -23,6 +23,9 @@ struct VideoFrame {
   // Cold partial stacks can omit the requested top layer. An available bottom
   // layer must not report its aspect as that requested top source's aspect.
   bool topmost = true;
+  enum class Kind { Video, Image, Packed, Reveal, Text } kind = Kind::Video;
+  // Reveal: soft edge as a fraction of the duration (target is the progress).
+  double soft = 0;
   std::shared_ptr<MfRuntime> runtime;
   DecoderFrame frame;
   Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
@@ -33,9 +36,12 @@ struct VideoFrame {
 };
 
 struct LayerSpec {
+  VideoFrame::Kind kind = VideoFrame::Kind::Video;
   std::wstring path;
   double time = 0;
   VisualTransform transform;
+  // Reveal soft edge as a fraction of the duration (`time` is the progress).
+  double soft = 0;
 };
 
 // At most kMaxLayers persistent stream workers and one immutable composed slot.
@@ -46,7 +52,7 @@ struct LayerSpec {
 // once every active stream has decoded the latest requested media time.
 class VideoEngine {
  public:
-  static constexpr size_t kMaxLayers = 4;
+  static constexpr size_t kMaxLayers = 16;  // Mirrors todo_core::MAX_PREVIEW_LAYERS.
 
   VideoEngine();
   ~VideoEngine();

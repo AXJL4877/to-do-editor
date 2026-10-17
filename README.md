@@ -14,6 +14,9 @@ to_do/
     todo_text         styled text (花字) rasterizer: fonts, layout, layer effects
     todo_storage      local project documents and atomic persistence
     todo_preview      preview_host.exe protocol
+    todo_ai           durable chat/image/speech service tasks and artifact cache
+    todo_extensions   extension registry, worker pool, budgets and checks
+    todo_production   production documents, timing, items and placement rules
     todo_app          eframe host + wiring
   dependencies/       packaged native media tools (FFmpeg / FFprobe) and text fonts
   tests/support/      Rust subprocess fixtures shared by protocol/media tests
@@ -76,11 +79,40 @@ accepted decoding completions; it does not measure physical display latency.
 
 Optional env: `TODO_REPO_ROOT`, `TODO_PREVIEW_HOST`, `TODO_FFMPEG`, `TODO_FFPROBE`, `TODO_FONTS_DIR`.
 
+## AI productions and extensions
+
+AI production work is stored as `data/<project>/productions/<id>/production.json`; generated
+files are kept under its fenced `work/` directory. Add non-secret service URLs and models to
+`config/ai.json` (copy `config/ai.example.json`); API keys are resolved from the supported
+environment variables or the Windows credential store and are never written to project JSON.
+
+Built-in and user extensions use the `todo-extension/1` manifest and `todo-worker/1` line
+protocol. The standard-library SDK is in `extensions/sdk/python`; before enabling a package,
+run its manifest and worker self-check:
+
+```powershell
+cargo run -p todo_extensions --example check_extension -- extensions/builtin/chalk-hand
+```
+
+The worker receives a fenced work directory. Chat, image and speech requests are deduplicated
+by their task fingerprint and recover from the durable AI journal after a restart. Paid online
+probe or generation commands are intentionally separate from the offline checks above.
+
+Open **AI 成片** from the editor toolbar to inspect the built-in extension cards. The panel
+reports missing credentials and missing worker files; **AI 设置** stores non-secret configuration
+atomically and writes API keys through the Windows credential store.
+
 Media processing runs directly in Rust workers. No Node/npm installation, local
 HTTP server, or backend port is required for builds, tests or startup. FFmpeg and
 FFprobe are native executables invoked only for media jobs and reaped when done.
 Their locations are resolved at runtime, so Rust compilation does not need
 FFmpeg development libraries. See [native tools](dependencies/README.md).
+
+Long GOP video gets a disposable editing proxy in a bounded background queue.
+The proxy is all-I-frame H.264 at up to 1280×720, keeps source timing and display
+aspect, and is used while dragging or playing. The original file remains the
+authoritative source; after a drag settles the preview returns to it for an exact
+frame. Proxy generation is cancellable and failures fall back to the original.
 
 Package a standalone directory with `./build.ps1` (release), or
 `./build.ps1 -Configuration debug`. The package contains `todo_app.exe`,
@@ -141,8 +173,12 @@ keeping off-frame elements selectable and draggable. Output-only view masks
 that area and hides selection handles. Viewport navigation is session-local,
 does not alter element transforms or project history, and reuses decoded frames.
 Project output resolution is configured in **工程设置** and determines the
-composition aspect independently of the monitor panel shape. Exporting is not
-implemented yet.
+composition aspect independently of the monitor panel shape. The media crate provides
+deterministic packed-alpha/reveal composition, FFmpeg preset arguments, and an ffprobe-backed
+`<output>.report.json` quality report for export adapters. Application media workers expose the
+same path through `MediaTask::Export` so export jobs stay off the UI thread.
+Use **导出** in the editor toolbar to provide a `000001.png` frame sequence,
+choose a preset, and receive the MP4 plus its quality report in the dialog.
 Moves, edge edits, and library placement snap to neighboring boundaries and the
 playhead; one gesture creates one undo entry. Escape cancels the active gesture.
 Alt/Ctrl+wheel zooms the timeline around the time under the mouse. Ordinary

@@ -10,8 +10,11 @@ pub use peaks::{PeakStrip, PeaksCache};
 pub use theme::{button, install as install_theme, Btn, BG, COLORS, MUTED, TEXT};
 pub use thumbs::ThumbCache;
 pub use widgets::{
-    close_project_settings, draw_close_prompt, draw_editor, draw_projects, project_settings_open,
-    MonitorHole,
+    ai_settings_open, close_ai_settings, close_production_panel, close_project_settings,
+    draw_ai_settings, draw_close_prompt, draw_editor, draw_export, draw_production_panel,
+    draw_projects, export_open, production_panel_open, project_settings_open, set_ai_settings_open,
+    set_ai_settings_open_ctx, set_export_open, AiSettingsAction, ExportAction, ExportPresetChoice,
+    ExportView, MonitorHole, ProductionAction,
 };
 
 #[cfg(test)]

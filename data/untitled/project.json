@@ -1,7 +1,7 @@
 {
   "version": 1,
   "fps": 30.0,
-  "playhead": 229.877,
+  "playhead": 10.3,
   "width": 1920,
   "height": 1080,
   "duration": 300.0,
@@ -88,8 +88,8 @@
         {
           "id": "c_0",
           "mediaId": "92239fb6-c935-4ce8-b159-98047c1b8d06",
-          "start": 229.877,
-          "duration": 5.0,
+          "start": 5.0,
+          "duration": 104.27700000000002,
           "offset": 0.0,
           "rate": 1.0,
           "transform": {

@@ -6,6 +6,7 @@ impl Workspace {
         match event {
             AppEvent::Project { ticket, result } => self.project_event(ticket, result),
             AppEvent::Media { ticket, result } => self.media_event(ticket, result),
+            AppEvent::Production(output) => self.production_event(output),
         }
     }
     fn project_event(
@@ -61,6 +62,7 @@ impl Workspace {
             self.pending_open = None;
             match result {
                 Ok(ProjectOutput::Opened { name, project }) => {
+                    let stopped = self.stop_productions();
                     self.generation = self.generation.wrapping_add(1);
                     self.jobs = MediaJobs::default();
                     self.control = Default::default();
@@ -70,7 +72,8 @@ impl Workspace {
                     self.editor = Some(EditorSession::new(project, name));
                     self.route = Route::Editor;
                     self.error = None;
-                    let mut update = AppUpdate::effects(vec![Effect::ResetPresentation]);
+                    let mut update = AppUpdate::effects(stopped);
+                    update.effects.push(Effect::ResetPresentation);
                     update.effects.extend(self.resync_preview().effects);
                     return update;
                 }
@@ -160,6 +163,24 @@ impl Workspace {
             };
             let update = editor.text_raster_done(digest, outcome);
             return self.editor_update(update);
+        }
+        let production = self.production_media(ticket, result.is_ok());
+        if let Ok(MediaOutput::Adopted(media)) = &result {
+            let mut update = AppUpdate::default();
+            for item in media.clone() {
+                let next = self.dispatch(AppAction::Editor(EditorCommand::RegisterMedia(item)));
+                update.effects.extend(next.effects);
+                update.new_clips.extend(next.new_clips);
+            }
+            let _ = self.jobs.complete(ticket, true, self.now);
+            update.effects.extend(self.advance_productions().effects);
+            return update;
+        }
+        if production {
+            if let Err(message) = &result {
+                self.problem("production", format!("成片素材登记失败：{message}"));
+            }
+            return AppUpdate::default();
         }
         if !self.jobs.complete(ticket, result.is_ok(), self.now) {
             return AppUpdate::default();

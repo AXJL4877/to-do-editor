@@ -70,6 +70,11 @@ impl MediaService {
             width: metadata.width,
             height: metadata.height,
             kind: Some(metadata.kind),
+            alpha: metadata.alpha.map(|alpha| match alpha {
+                crate::AlphaPacking::Stacked => todo_core::AlphaPacking::Stacked,
+                crate::AlphaPacking::Reveal => todo_core::AlphaPacking::Reveal,
+            }),
+            reveal: metadata.reveal.clone(),
             folder_id: None,
         })
     }

@@ -52,7 +52,9 @@ mod tests {
             height: None,
             kind: Some(crate::MediaKind::Video),
             folder_id: None,
-});
+            alpha: None,
+            reveal: None,
+        });
         project = add_clip(
             project,
             "v1",

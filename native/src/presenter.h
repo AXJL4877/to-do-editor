@@ -1,10 +1,21 @@
 #pragma once
 
 #include "decoder.h"
+#include <vector>
 #include "transform/align_guides.h"
 #include "transform/visual_transform.h"
 #include "transform/transform_gizmo.h"
 #include "viewport/preview_viewport.h"
+
+// How a layer's texture is laid out. Packed: colour on top, alpha (luma) at
+// the bottom. Reveal: final picture left, appearance times right; `progress`
+// (0..1) and `soft` (fraction of the duration) select the visible pixels.
+enum class LayerPacking { None, Packed, Reveal };
+struct LayerLook {
+  LayerPacking packing = LayerPacking::None;
+  float progress = 1.f;
+  float soft = 0.f;
+};
 
 // Draw decoder GPU texture to HWND via DXGI SwapChain + fullscreen triangle
 class GpuPresenter {
@@ -17,8 +28,14 @@ class GpuPresenter {
   void resize(int width, int height);
   bool present(const DecoderFrame& frame);
   /// Draw layers bottom→top. Each entry supplies its own transform; clears once.
-  bool presentLayers(const DecoderFrame* frames, const VisualTransform* transforms, size_t count);
+  bool presentLayers(const DecoderFrame* frames, const VisualTransform* transforms, size_t count,
+                     const LayerLook* looks = nullptr);
   void clear();
+  /// Export: draw into an offscreen BGRA target of `width`×`height` with the
+  /// same shaders as the window, then read the pixels back.
+  bool bindOffscreen(ID3D11Device* device, ID3D11DeviceContext* context, int width, int height);
+  bool renderOffscreen(const DecoderFrame* frames, const VisualTransform* transforms, size_t count,
+                       const LayerLook* looks, std::vector<unsigned char>* bgra);
   bool setTransform(const VisualTransform& transform);
   bool setGizmo(const std::optional<TransformGizmo>& gizmo);
   bool setGuides(std::vector<AlignGuide> guides);
@@ -32,7 +49,9 @@ class GpuPresenter {
   bool EnsureRtv();
   bool EnsureSamplingTexture(const D3D11_TEXTURE2D_DESC& source);
   bool EnsureStillTexture(const D3D11_TEXTURE2D_DESC& source);
-  bool DrawLayer(const DecoderFrame& frame, const VisualTransform& transform);
+  bool DrawLayer(const DecoderFrame& frame, const VisualTransform& transform, const LayerLook& look);
+  bool DrawStack(const DecoderFrame* frames, const VisualTransform* transforms, size_t count,
+                 const LayerLook* looks, bool overlays);
   void ReleaseSizeDependent();
   void ReleaseSamplingTexture();
   void ReleaseStillTexture();
@@ -49,6 +68,8 @@ class GpuPresenter {
   ID3D11VertexShader* vs_ = nullptr;
   ID3D11PixelShader* ps_2d_ = nullptr;
   ID3D11PixelShader* ps_still_ = nullptr;
+  ID3D11PixelShader* ps_packed_ = nullptr;
+  ID3D11PixelShader* ps_reveal_ = nullptr;
   ID3D11Buffer* video_params_ = nullptr;
   ID3D11PixelShader* ps_gizmo_ = nullptr;
   ID3D11Buffer* gizmo_params_ = nullptr;
@@ -60,6 +81,8 @@ class GpuPresenter {
   ID3D11ShaderResourceView* srv_y_ = nullptr;
   ID3D11ShaderResourceView* srv_uv_ = nullptr;
   ID3D11Texture2D* still_texture_ = nullptr;
+  ID3D11Texture2D* offscreen_ = nullptr;
+  ID3D11Texture2D* offscreen_read_ = nullptr;
   ID3D11ShaderResourceView* srv_still_ = nullptr;
   ID3D11SamplerState* sampler_ = nullptr;
   ID3D11RasterizerState* rast_ = nullptr;

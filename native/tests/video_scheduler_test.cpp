@@ -49,7 +49,7 @@ void TestAggregateCacheReservation() {
 void TestColdFastLayer(const std::wstring& video, const std::wstring& still) {
   VideoEngine engine;
   engine.start(nullptr, WM_APP + 3);
-  engine.setLayers({{video, 7.9, {}}, {still, 0, {0.75, 0, 1}}}, 1);
+  engine.setLayers({{VideoFrame::Kind::Video, video, 7.9, {}}, {VideoFrame::Kind::Video, still, 0, {0.75, 0, 1}}}, 1);
   bool saw_fast = false;
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
   while (std::chrono::steady_clock::now() < deadline) {
@@ -71,10 +71,10 @@ void TestColdFastLayer(const std::wstring& video, const std::wstring& still) {
 void TestIndependentSourceChanges(const std::wstring& video, const std::wstring& still) {
   VideoEngine engine;
   engine.start(nullptr, WM_APP + 3);
-  engine.setLayers({{still, 0, {}}, {still, 0, {}}}, 10);
+  engine.setLayers({{VideoFrame::Kind::Video, still, 0, {}}, {VideoFrame::Kind::Video, still, 0, {}}}, 10);
   auto original = WaitExact(engine, 10, 2);
   if (!original) return;
-  engine.setLayers({{still, 0, {0.25, 0, 1}}, {video, 7.9, {}}}, 11);
+  engine.setLayers({{VideoFrame::Kind::Video, still, 0, {0.25, 0, 1}}, {VideoFrame::Kind::Video, video, 7.9, {}}}, 11);
   auto retained = engine.latest();
   Check(retained && retained->size() >= 1 &&
             retained->front().texture == original->front().texture,
@@ -89,7 +89,7 @@ void TestIndependentSourceChanges(const std::wstring& video, const std::wstring&
 
   engine.setLayers({}, 12);
   Check(!engine.latest(), "empty stack invalidates all stream frames immediately");
-  engine.setLayers({{still, 0, {}}}, 13);
+  engine.setLayers({{VideoFrame::Kind::Video, still, 0, {}}}, 13);
   final = WaitExact(engine, 13, 1);
   Check(final && final->front().frame.width == 16,
         "source cancellation never resurrects a frame from the cleared video");
@@ -98,13 +98,13 @@ void TestIndependentSourceChanges(const std::wstring& video, const std::wstring&
 void TestLargeJumpsAndFinalCoherence(const std::wstring& video, const std::wstring& still) {
   VideoEngine engine;
   engine.start(nullptr, WM_APP + 3);
-  engine.setLayers({{video, 0.1, {}}, {video, 0.2, {}}}, 20);
+  engine.setLayers({{VideoFrame::Kind::Video, video, 0.1, {}}, {VideoFrame::Kind::Video, video, 0.2, {}}}, 20);
   auto initial = WaitExact(engine, 20, 2);
   if (!initial) return;
   const double initial_stamp = initial->front().frame.timestamp;
   uint64_t generation = 21;
   for (double target : {7.9, 0.15, 6.8, 1.2, 8.5, 2.35}) {
-    engine.setLayers({{video, target, {}}, {video, target + 0.1, {0.1, 0, 1}}}, generation++);
+    engine.setLayers({{VideoFrame::Kind::Video, video, target, {}}, {VideoFrame::Kind::Video, video, target + 0.1, {0.1, 0, 1}}}, generation++);
     std::this_thread::sleep_for(std::chrono::milliseconds(8));
   }
   auto final = WaitExact(engine, generation - 1, 2);
@@ -113,8 +113,8 @@ void TestLargeJumpsAndFinalCoherence(const std::wstring& video, const std::wstri
   Check(initial->front().frame.timestamp == initial_stamp && initial->front().generation == 20,
         "a handed-off frame lease stays immutable while both decoders advance");
 
-  engine.setLayers({{video, 7.95, {}}, {video, 7.85, {}}}, generation++);
-  engine.setLayers({{still, 0, {}}, {still, 0, {}}}, generation++);
+  engine.setLayers({{VideoFrame::Kind::Video, video, 7.95, {}}, {VideoFrame::Kind::Video, video, 7.85, {}}}, generation++);
+  engine.setLayers({{VideoFrame::Kind::Video, still, 0, {}}, {VideoFrame::Kind::Video, still, 0, {}}}, generation++);
   final = WaitExact(engine, generation - 1, 2);
   Check(final && final->front().frame.width == 16 && final->back().frame.width == 16,
         "changing both sources cancels pending long-GOP work without stale publication");

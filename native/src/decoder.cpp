@@ -494,12 +494,15 @@ bool HwDecoder::OpenStill(const wchar_t* path) {
   SafeRelease(&factory);
   if (FAILED(hr)) return false;
 
-  bool translucent = false;
-  for (size_t i = 3; i < bgra.size(); i += 4) {
-    if (bgra[i] != 255) {
-      translucent = true;
-      break;
-    }
+  // A reveal atlas carries appearance times in its pixels: never convert it.
+  const std::wstring lower = [&]() {
+    std::wstring text(path);
+    for (auto& c : text) c = static_cast<wchar_t>(towlower(c));
+    return text;
+  }();
+  bool translucent = lower.size() >= 11 && lower.compare(lower.size() - 11, 11, L".reveal.png") == 0;
+  for (size_t i = 3; !translucent && i < bgra.size(); i += 4) {
+    if (bgra[i] != 255) translucent = true;
   }
 
   D3D11_TEXTURE2D_DESC desc{};

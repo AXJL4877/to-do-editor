@@ -13,6 +13,8 @@ fn editor() -> EditorSession {
         height: Some(1080),
         kind: Some(MediaKind::Video),
         folder_id: None,
+        alpha: None,
+        reveal: None,
     });
     EditorSession::new(
         place_media(project, "video", Some("v1"), 0.0).unwrap(),

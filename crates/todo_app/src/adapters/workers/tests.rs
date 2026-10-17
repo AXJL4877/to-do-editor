@@ -176,10 +176,13 @@ fn stopped_import_queue_returns_a_terminal_event_that_releases_the_workspace() {
     let (assets, _asset_rx) = mpsc::channel();
     let (text, _text_rx) = mpsc::channel();
     let (_events_tx, events) = mpsc::channel();
+    let (export, _export_rx) = mpsc::channel();
     let workers = Workers {
         projects,
         imports,
         assets,
+        export,
+        export_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         text,
         events,
     };
@@ -195,7 +198,7 @@ fn stopped_import_queue_returns_a_terminal_event_that_releases_the_workspace() {
         tracks: Vec::new(),
         text_styles: Vec::new(),
         folders: Vec::new(),
-};
+    };
     let mut workspace = Workspace::with_project(project, "queue-test");
     let context = workspace.control_context().unwrap();
     let outcome = workspace.control(ControlRequest {
@@ -204,7 +207,7 @@ fn stopped_import_queue_returns_a_terminal_event_that_releases_the_workspace() {
         expected_revision: Some(context.revision),
         command: ControlCommand::ImportMedia {
             paths: vec!["A.mp4".into()],
-                    folder_id: None,
+            folder_id: None,
         },
     });
     let (ticket, task) = outcome

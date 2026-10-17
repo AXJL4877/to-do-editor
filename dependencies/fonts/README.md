@@ -10,6 +10,7 @@
 
 | 文件 | 来源 | 用途 |
 | --- | --- | --- |
-| `zihun-jianqi-shoushu.ttf` | 字魂剑气手书（原文件名“字魂剑气手书(商用需授权).ttf”） | 内置样式 `grunge-red-echo` |
+| `source-han-serif-sc-heavy.ttf` | 思源宋 Heavy（SIL OFL） | 内置样式 `grunge-red-echo` |
+| `noto-sans-sc-bold.otf` | Noto Sans SC Bold（SIL OFL） | 字幕与缺字回退 |
 
-**授权：** 字魂剑气手书标注“商用需授权”。对外发布或商用前，须取得字体授权，并把授权文件放在本目录随包分发；或者把样式改用可商用字体。
+**授权：** 内置样式只使用 SIL Open Font License 字体。许可证文本随字体发行包提供；不再把需要另行商用授权的字魂字体放进安装包。

@@ -99,7 +99,13 @@ mod tests {
 
     #[test]
     fn caches_by_digest_and_rejects_unsafe_keys() {
-        let root = std::env::temp_dir().join(format!("todo_text_raster_{}", std::process::id()));
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/text-raster-tests")
+            .join(unique.to_string());
         let _ = std::fs::remove_dir_all(&root);
         let mut rasterizer = TextRasterizer::new(&root);
         let (content, style) = request_parts();

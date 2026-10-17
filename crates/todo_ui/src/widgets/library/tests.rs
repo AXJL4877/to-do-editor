@@ -23,6 +23,8 @@ fn project() -> Project {
             height: Some(100),
             kind: Some(todo_core::MediaKind::Image),
             folder_id: None,
+            alpha: None,
+            reveal: None,
         }],
         folders: vec![MediaFolder {
             id: "bin1".into(),

@@ -22,6 +22,15 @@ impl App {
                         effects.extend(self.workspace.on_event(*event).effects);
                     }
                 }
+                Effect::Production(task) => match &mut self.production {
+                    Some(host) => {
+                        if let Some(problem) = host.execute(task) {
+                            self.notice(problem);
+                        }
+                    }
+                    None => self.notice("AI 成片服务没有启动".into()),
+                },
+                Effect::CancelExport => self.workers.cancel_export(),
                 Effect::Preview(commands) => {
                     if let Err(message) = self.preview.apply(commands) {
                         self.notice(format!("预览：{message}"));
@@ -45,6 +54,43 @@ impl App {
                         );
                     }
                 }
+                Effect::ChooseExportPath => {
+                    if let Some(path) = desktop::export_file() {
+                        self.export.output = path.to_string_lossy().into_owned();
+                    }
+                }
+                Effect::ChooseProductionUpload {
+                    production,
+                    element,
+                } => {
+                    let Some(source) = desktop::image_file() else {
+                        continue;
+                    };
+                    let Some(project) = self
+                        .workspace
+                        .editor()
+                        .map(|editor| editor.project_name().to_owned())
+                    else {
+                        continue;
+                    };
+                    let Some(host) = self.production.as_ref() else {
+                        self.notice("AI 成片服务没有启动".into());
+                        continue;
+                    };
+                    match host.copy_variant(&project, &production, &source) {
+                        Ok(file) => {
+                            let update = self.workspace.edit_production(
+                                &production,
+                                &[todo_application::ProductionEdit::UploadVariant {
+                                    element,
+                                    file,
+                                }],
+                            );
+                            effects.extend(update.effects);
+                        }
+                        Err(message) => self.notice(format!("上传图片失败：{message}")),
+                    }
+                }
                 Effect::UploadThumbnail { path, bytes } => {
                     if !self.thumbs.insert_bytes(path, &bytes) {
                         self.notice("缩略图解码失败".into());
@@ -58,6 +104,8 @@ impl App {
                     todo_ui::close_project_settings(ctx);
                     self.controller.reset();
                     self.thumbs = ThumbCache::default();
+                    // A project just opened: pick up its productions.
+                    effects.extend(self.resume_productions());
                 }
                 Effect::CloseWindow => {
                     self.close_approved = true;

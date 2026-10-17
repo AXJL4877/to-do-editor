@@ -68,6 +68,8 @@ GpuPresenter::GpuPresenter() = default;
 
 GpuPresenter::~GpuPresenter() {
   ReleaseSizeDependent();
+  SafeRelease(&offscreen_);
+  SafeRelease(&offscreen_read_);
   ReleaseSamplingTexture();
   ReleaseStillTexture();
   ReleasePipeline();
@@ -83,6 +85,8 @@ void GpuPresenter::ReleasePipeline() {
   SafeRelease(&sampler_);
   SafeRelease(&ps_2d_);
   SafeRelease(&ps_still_);
+  SafeRelease(&ps_packed_);
+  SafeRelease(&ps_reveal_);
   SafeRelease(&video_params_);
   SafeRelease(&ps_gizmo_);
   SafeRelease(&gizmo_params_);
@@ -144,7 +148,7 @@ bool GpuPresenter::bind(HWND hwnd, ID3D11Device* device, ID3D11DeviceContext* co
 }
 
 bool GpuPresenter::EnsurePipeline() {
-  if (vs_ && ps_2d_ && ps_still_ && sampler_ && rast_ && blend_ && video_params_ && ps_gizmo_ && gizmo_params_ &&
+  if (vs_ && ps_2d_ && ps_still_ && ps_packed_ && ps_reveal_ && sampler_ && rast_ && blend_ && video_params_ && ps_gizmo_ && gizmo_params_ &&
       ps_guides_ && guides_params_ && ps_viewport_ && viewport_params_) return true;
   if (!device_) return false;
   ReleasePipeline();
@@ -161,6 +165,8 @@ bool GpuPresenter::EnsurePipeline() {
 
   if (!CompilePs(device_, kVideoPixelShader, &ps_2d_)) return false;
   if (!CompilePs(device_, kStillPixelShader, &ps_still_)) return false;
+  if (!CompilePs(device_, kPackedPixelShader, &ps_packed_)) return false;
+  if (!CompilePs(device_, kRevealPixelShader, &ps_reveal_)) return false;
   if (!CompilePs(device_, kGizmoPixelShader, &ps_gizmo_)) return false;
   if (!CompilePs(device_, kAlignGuidesPixelShader, &ps_guides_)) return false;
   if (!CompilePs(device_, kViewportPixelShader, &ps_viewport_)) return false;
@@ -403,11 +409,15 @@ void GpuPresenter::DrawGuides() {
   context_->Draw(3, 0);
 }
 
-bool GpuPresenter::DrawLayer(const DecoderFrame& frame, const VisualTransform& transform) {
+bool GpuPresenter::DrawLayer(const DecoderFrame& frame, const VisualTransform& transform,
+                             const LayerLook& look) {
   if (!frame.texture || !context_ || !rtv_) return false;
   D3D11_TEXTURE2D_DESC source{};
   frame.texture->GetDesc(&source);
   const bool still = source.Format == DXGI_FORMAT_B8G8R8A8_UNORM;
+  // A reveal atlas is a still; packed alpha is video. Anything else is drawn plainly.
+  const bool reveal = look.packing == LayerPacking::Reveal && still;
+  const bool packed = look.packing == LayerPacking::Packed && !still;
   if (!(still ? EnsureStillTexture(source) : EnsureSamplingTexture(source)) || frame.width < 1 ||
       frame.height < 1 || frame.array_slice >= source.ArraySize * source.MipLevels) return false;
   context_->CopySubresourceRegion(still ? still_texture_ : sampling_texture_, 0, 0, 0, 0,
@@ -416,10 +426,13 @@ bool GpuPresenter::DrawLayer(const DecoderFrame& frame, const VisualTransform& t
   const auto geometry = DecodedFrameDisplayGeometry(frame, source.Width, source.Height);
   if (!geometry) return false;
   const float crop_x = geometry->crop_x, crop_y = geometry->crop_y;
-  const float visible_w = geometry->visible_width, visible_h = geometry->visible_height;
+  // The picture is one half of the texture; the other half drives it.
+  const float visible_w = geometry->visible_width / (reveal ? 2.f : 1.f);
+  const float visible_h = geometry->visible_height / (packed ? 2.f : 1.f);
+  const float display_w = geometry->display_width / (reveal ? 2.f : 1.f);
   const VisualUvMap visual_map = MapViewportVisual(
       FitVisualTransform(width_ * viewport_.width, height_ * viewport_.height,
-                         geometry->display_width, visible_h, transform), viewport_);
+                         display_w, visible_h, transform), viewport_);
 
   float kr = 0.2126f, kb = 0.0722f;
   if (frame.yuv_matrix == MFVideoTransferMatrix_BT601) {
@@ -436,27 +449,83 @@ bool GpuPresenter::DrawLayer(const DecoderFrame& frame, const VisualTransform& t
   const float kg = 1.f - kr - kb;
   const float params[24] = {
       visible_w / source.Width, visible_h / source.Height, 0.5f / source.Width, 0.5f / source.Height,
-      crop_x / source.Width, crop_y / source.Height, 0.f, 0.f,
+      crop_x / source.Width, crop_y / source.Height,
+      reveal ? visible_w / source.Width : 0.f, packed ? visible_h / source.Height : 0.f,
       frame.full_range ? 0.f : 16.f / 255.f, frame.full_range ? 1.f : 255.f / 219.f,
       128.f / 255.f, frame.full_range ? 1.f : 255.f / 224.f,
       2.f * (1.f - kr), 2.f * kb * (1.f - kb) / kg,
       2.f * kr * (1.f - kr) / kg, 2.f * (1.f - kb),
       visual_map.scale_x, visual_map.scale_y, visual_map.offset_x, visual_map.offset_y,
-      static_cast<float>(transform.opacity), 0.f, 0.f, 0.f,
+      static_cast<float>(transform.opacity), look.progress, look.soft, 0.f,
   };
   context_->UpdateSubresource(video_params_, 0, nullptr, params, 0, 0);
   ID3D11ShaderResourceView* srvs[2] = {still ? srv_still_ : srv_y_, still ? nullptr : srv_uv_};
   context_->PSSetShaderResources(0, 2, srvs);
-  if (still) context_->PSSetShader(ps_still_, nullptr, 0);
+  context_->PSSetShader(reveal ? ps_reveal_ : still ? ps_still_ : packed ? ps_packed_ : ps_2d_, nullptr, 0);
   context_->Draw(3, 0);
-  if (still) context_->PSSetShader(ps_2d_, nullptr, 0);
+  context_->PSSetShader(ps_2d_, nullptr, 0);
   ID3D11ShaderResourceView* null_srvs[2] = {nullptr, nullptr};
   context_->PSSetShaderResources(0, 2, null_srvs);
   return true;
 }
 
+bool GpuPresenter::bindOffscreen(ID3D11Device* device, ID3D11DeviceContext* context, int width,
+                                 int height) {
+  if (!device || !context || width < 1 || height < 1) return false;
+  if (device_ != device || context_ != context) {
+    ReleaseSamplingTexture();
+    ReleaseStillTexture();
+    ReleasePipeline();
+    SafeRelease(&context_);
+    SafeRelease(&device_);
+    device_ = device;
+    context_ = context;
+    device_->AddRef();
+    context_->AddRef();
+  }
+  SafeRelease(&rtv_);
+  SafeRelease(&offscreen_);
+  SafeRelease(&offscreen_read_);
+  D3D11_TEXTURE2D_DESC desc{};
+  desc.Width = static_cast<UINT>(width);
+  desc.Height = static_cast<UINT>(height);
+  desc.MipLevels = desc.ArraySize = 1;
+  desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+  desc.SampleDesc.Count = 1;
+  desc.Usage = D3D11_USAGE_DEFAULT;
+  desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+  if (FAILED(device_->CreateTexture2D(&desc, nullptr, &offscreen_))) return false;
+  if (FAILED(device_->CreateRenderTargetView(offscreen_, nullptr, &rtv_))) return false;
+  desc.Usage = D3D11_USAGE_STAGING;
+  desc.BindFlags = 0;
+  desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+  if (FAILED(device_->CreateTexture2D(&desc, nullptr, &offscreen_read_))) return false;
+  width_ = width;
+  height_ = height;
+  viewport_ = PreviewViewport{};
+  return EnsurePipeline();
+}
+
+bool GpuPresenter::renderOffscreen(const DecoderFrame* frames, const VisualTransform* transforms,
+                                   size_t count, const LayerLook* looks,
+                                   std::vector<unsigned char>* bgra) {
+  if (!offscreen_ || !offscreen_read_ || !bgra || !EnsurePipeline()) return false;
+  if (count > 0 && (!frames || !transforms)) return false;
+  DrawStack(frames, transforms, count, looks, false);
+  context_->CopyResource(offscreen_read_, offscreen_);
+  D3D11_MAPPED_SUBRESOURCE mapped{};
+  if (FAILED(context_->Map(offscreen_read_, 0, D3D11_MAP_READ, 0, &mapped))) return false;
+  const size_t row = static_cast<size_t>(width_) * 4;
+  bgra->resize(row * static_cast<size_t>(height_));
+  for (int y = 0; y < height_; ++y) {
+    std::memcpy(bgra->data() + row * y, static_cast<const unsigned char*>(mapped.pData) + mapped.RowPitch * y, row);
+  }
+  context_->Unmap(offscreen_read_, 0);
+  return true;
+}
+
 bool GpuPresenter::presentLayers(const DecoderFrame* frames, const VisualTransform* transforms,
-                                 size_t count) {
+                                 size_t count, const LayerLook* looks) {
   if ((count > 0 && (!frames || !transforms)) || !device_ || !context_ || !hwnd_) return false;
   if (!EnsurePipeline()) return false;
   RECT rc{};
@@ -464,6 +533,15 @@ bool GpuPresenter::presentLayers(const DecoderFrame* frames, const VisualTransfo
   const int cw = (std::max)(1L, rc.right - rc.left);
   const int ch = (std::max)(1L, rc.bottom - rc.top);
   if (!EnsureSwapChain(cw, ch) || !rtv_) return false;
+  const bool drew = DrawStack(frames, transforms, count, looks, true);
+  if (!drew && count == 0) {
+    return SUCCEEDED(swap_->Present(0, 0));
+  }
+  return drew && SUCCEEDED(swap_->Present(0, 0));
+}
+
+bool GpuPresenter::DrawStack(const DecoderFrame* frames, const VisualTransform* transforms, size_t count,
+                             const LayerLook* looks, bool overlays) {
 
   D3D11_VIEWPORT vp{};
   vp.Width = static_cast<float>(width_);
@@ -485,17 +563,15 @@ bool GpuPresenter::presentLayers(const DecoderFrame* frames, const VisualTransfo
 
   bool drew = false;
   for (size_t i = 0; i < count; ++i) {
-    if (DrawLayer(frames[i], transforms[i])) drew = true;
+    if (DrawLayer(frames[i], transforms[i], looks ? looks[i] : LayerLook{})) drew = true;
   }
+  if (!overlays) return drew;
   DrawViewport(true);
   if (count > 0 && (!viewport_.enabled || viewport_.show_outside)) {
     DrawGizmo();
     DrawGuides();
   }
-  if (!drew && count == 0) {
-    return SUCCEEDED(swap_->Present(0, 0));
-  }
-  return drew && SUCCEEDED(swap_->Present(0, 0));
+  return drew;
 }
 
 bool GpuPresenter::present(const DecoderFrame& frame) {

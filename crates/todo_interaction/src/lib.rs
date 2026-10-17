@@ -6,12 +6,21 @@ mod preview_viewport;
 mod timeline;
 mod transform;
 pub use input::{EditorController, EditorFocus, Intent, KeyCode, PreviewPointerKind, TimelineTool};
+pub use presentation::ai_settings::{
+    normalize_base_url, AiSettingsError, AiSettingsView, AvailableModelView, KeySource,
+    ModelCapability, ProxyChoice,
+};
+pub use presentation::production::{
+    production_view, production_view_with_document, when_visible, ChoiceView, ElementView,
+    ExtensionCardView, ExtensionStatus, FailureView, ParamInput, ParamValue, ParamView,
+    ProductionNodeStatus, ProductionNodeView, ProductionPanelView, ProductionView, ScriptView,
+    SegmentView, VariantView,
+};
 pub use presentation::{
     fmt_clock, fmt_ruler_tick, fmt_tick, status_text, tick_step, wave_span, AlignGuideView,
     ClipProperties, ClipView, DropPreview, EditorViewModel, ExplorerNode, FolderNodeView,
     LibraryEntryView, LibraryFolderView, LibraryItemView, LibraryMediaView, LibraryViewModel,
-    MarqueeView,
-    MoveTargetView, PreviewView, SourceProperties, StyleOption, TextProperties, Tick,
+    MarqueeView, MoveTargetView, PreviewView, SourceProperties, StyleOption, TextProperties, Tick,
     TimelineViewModel, TrackView, Viewport,
 };
 pub use preview_viewport::{
@@ -24,8 +33,10 @@ pub use timeline::{
     LANE_MIN_WIDTH, PX_PER_SEC_DEFAULT, PX_PER_SEC_MAX, PX_PER_SEC_MIN, ZOOM_DEFAULT, ZOOM_FACTOR,
     ZOOM_MAX, ZOOM_MIN,
 };
+pub use todo_application::ProductionEdit;
 pub use todo_application::{AssetRequest, CloseChoice, MonitorPane, PeakStrip, PeaksCache};
 pub use todo_core::{
     ClipTransform, MediaKind, MediaScaleMode, TextAlign, TextContent, TextIntro, TrackKind,
     Transform, TransformBounds, TrimEdge,
 };
+pub use todo_production::production::ElementPatch;

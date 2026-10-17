@@ -10,6 +10,10 @@ members = [
   "crates/todo_application",
   "crates/todo_storage",
   "crates/todo_text",
+  "crates/todo_process",
+  "crates/todo_production",
+  "crates/todo_ai",
+  "crates/todo_extensions",
 ]
 
 [workspace.package]
@@ -26,6 +30,10 @@ todo_media = { path = "crates/todo_media" }
 todo_application = { path = "crates/todo_application" }
 todo_storage = { path = "crates/todo_storage" }
 todo_text = { path = "crates/todo_text" }
+todo_process = { path = "crates/todo_process" }
+todo_production = { path = "crates/todo_production" }
+todo_ai = { path = "crates/todo_ai" }
+todo_extensions = { path = "crates/todo_extensions" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -36,7 +44,15 @@ raw-window-handle = "0.6"
 rfd = "0.15"
 tiny-skia = "0.12"
 ttf-parser = "0.25"
+sha2 = "0.10"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Credentials", "Win32_System_JobObjects", "Win32_System_Registry", "Win32_System_Threading"] }
+tokio = { version = "1", default-features = false, features = ["rt", "time", "sync", "macros", "net", "io-util"] }
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "http2", "system-proxy"] }
+base64 = "0.22"
+# Pure-Rust deflate only: bzip2/zstd/lzma need a C toolchain environment.
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+png = "0.18"
 
 # Text rasterization is per-pixel work: keep it fast in debug runs as well.
 [profile.dev.package.todo_text]

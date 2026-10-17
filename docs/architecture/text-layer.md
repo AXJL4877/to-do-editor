@@ -44,13 +44,13 @@ pub struct MediaSource { media_id, offset, rate }
 | 渐变 | `"paint":{"from":"#FFFFFF","to":"#FFE08A","angle":0}`，0° 自上而下 |
 | 做旧 / 斑驳 | `"erode":{"amount":0.18,"scale":0.035,"seed":7}` |
 
-参考效果 `s00_intro1_hold.png` 对应内置样式 `grunge-red-echo`：灰色 1.33 倍做旧重影，加偏移软投影，再加红色毛笔字。
+参考效果 `s00_intro1_hold.png` 对应内置样式 `grunge-red-echo`：灰色 1.33 倍做旧重影，加偏移软投影，再加红色粗体字。内置字体使用可随包分发的 SIL OFL 字体。
 
 ```json
 {
   "id": "grunge-red-echo", "name": "做旧红字·灰重影",
-  "font": { "family": "字魂剑气手书", "file": "zihun-jianqi-shoushu.ttf",
-            "fallbacks": ["msyhbd.ttc", "msyh.ttc"] },
+  "font": { "family": "思源宋 Heavy", "file": "source-han-serif-sc-heavy.ttf",
+            "fallbacks": ["noto-sans-sc-bold.otf"] },
   "layers": [
     { "kind": "fill", "paint": "#474747FF", "scale": 1.33, "opacity": 0.92,
       "erode": { "amount": 0.18, "scale": 0.035, "seed": 7 } },

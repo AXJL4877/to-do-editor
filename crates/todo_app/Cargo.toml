@@ -8,7 +8,11 @@ eframe = { workspace = true }
 egui = { workspace = true }
 raw-window-handle = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 todo_application = { workspace = true }
+todo_ai = { workspace = true }
+todo_extensions = { workspace = true }
+todo_production = { workspace = true }
 todo_storage = { workspace = true }
 todo_interaction = { workspace = true }
 todo_media = { workspace = true }
@@ -17,4 +21,6 @@ todo_ui = { workspace = true }
 rfd = { workspace = true }
 
 [dev-dependencies]
+todo_core = { workspace = true }
 egui-winit = { version = "0.31", default-features = false, features = ["serde"] }
+image = { workspace = true }

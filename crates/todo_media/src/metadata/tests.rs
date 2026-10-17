@@ -25,3 +25,15 @@ fn stream_duration_fallback_is_finite_and_missing_streams_fail() {
         assert!(probe::parse(Path::new("audio.wav"), serde_json::from_str(text).unwrap()).is_err());
     }
 }
+
+#[test]
+fn packed_alpha_tag_reports_display_height_and_scheme() {
+    let json = serde_json::from_str(
+        r#"{"format":{"duration":"1.0","format_name":"mov,mp4","tags":{"todo_alpha":"stacked"}},"streams":[{"codec_type":"video","width":8,"height":16,"duration":"1.0"}]}"#,
+    )
+    .unwrap();
+    let metadata = probe::parse(Path::new("packed.mp4"), json).unwrap();
+    assert_eq!(metadata.width, Some(8));
+    assert_eq!(metadata.height, Some(8));
+    assert_eq!(metadata.alpha, Some(AlphaPacking::Stacked));
+}

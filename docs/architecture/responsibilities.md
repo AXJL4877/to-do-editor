@@ -11,13 +11,16 @@
 | `crates/todo_core/src/transform/` | 位置、统一/二维缩放、不透明度的持久化模型、校验和纯几何；元素基准尺寸 `BaseSize` | 变换数据的唯一来源；不包含手柄、鼠标或绘制代码 |
 | `crates/todo_core/src/edit/` | 放置、移动、裁切、变速、剃刀、删除、粘贴、锁定等完整规则 | 判断编辑是否合法、如何修改工程，放这里 |
 | `crates/todo_core/src/edit/track_space.rs` | 素材入轨与片段移动共用的空闲检测和轨道分配 | 同轨区间冲突、复用空轨、按需新增同类型轨道在此统一 |
+| `crates/todo_core/src/edit/generated.rs` | AI 成片条目的原位替换、用户改动保留和删除记忆 | 生成条目变更只走这里，不在宿主或 UI 拼装领域状态 |
 | `crates/todo_core/src/query/` | 查片段、关联关系、可放置状态、预览画面和音频场景 | 只读领域查询放这里 |
+| `crates/todo_core/src/query/reveal.rs` | reveal / packed-alpha 媒体的可见范围、时长和抽帧查询 | 只读解析规则，不执行解码或写文件 |
 | `crates/todo_application/src/projects/` | 打开、创建、导入、保存、返回、关闭工程的流程和回执 | 跨步骤的工程用例放这里 |
 | `crates/todo_application/src/editor/` | 编辑会话、事务、dirty 状态、保存快照、预览更新计划 | 一次拖动一次撤销等会话规则放这里 |
 | `crates/todo_application/src/control/`、`projects/control.rs` | 共用编辑协议、批次、回执、去重和导入状态 | 供内置/外部 AI 共用；不含模型、HTTP/MCP、UI 或 I/O，规则仍由 core 执行 |
 | `crates/todo_application/src/history/`、`clipboard/` | 历史快照、剪贴板内容 | 不持有控件和鼠标状态 |
 | `crates/todo_application/src/playback/` | 播放状态、播放头推进和音频时钟协调 | 只计算命令，不调用原生进程 |
 | `crates/todo_application/src/media_jobs/` | 任务归属、请求去重、并发上限、失败退避、原始波形缓存 | 不包含 HTTP、线程或 GPU 纹理 |
+| `crates/todo_application/src/productions/` | 成片用例状态机、渐进入轨、任务回执和编辑重跑 | 只编排领域规则和 Effect，不联网、不读写文件 |
 | `crates/todo_application/src/text_rasters/` | 预览需要哪些文字栅格、是否就绪、测得的文字块 | 只记身份和结果；渲染与文件在 worker |
 | `crates/todo_interaction/src/input/` | 标准化输入、焦点、选择、预览拖动、输入到语义命令的翻译 | 鼠标或快捷键代表什么操作，放这里 |
 | `crates/todo_interaction/src/timeline/` | 工具、拖拽、框选、缩放、像素到时间换算、统一吸附 | 不直接执行工程修改；提交领域命令 |
@@ -35,6 +38,7 @@
 | `crates/todo_storage/src/projects/` | 本地工程仓库接口 | 工程持久化从这里进入 |
 | `crates/todo_storage/src/project_document/` | JSON 编解码、版本检查、领域校验入口 | 文档格式兼容放这里 |
 | `crates/todo_storage/src/filesystem/` | 路径限制、原子写入、回收目录 | 磁盘操作集中在这里 |
+| `crates/todo_storage/src/productions.rs` | `todo-production/2` 成片文档的原子保存、revision、workdir 和删除回收 | 成片路径始终受工程目录边界保护 |
 | `crates/todo_media/src/service.rs`、`error.rs` | 原生 MediaService 配置和统一错误 | worker 直接调用；不包含 HTTP 或服务端 |
 | `crates/todo_media/src/imports/`、`files/` | 本地素材流式复制、临时文件发布和来源路径解析 | 工程目录通过 storage 获取；失败清理，不修改源文件 |
 | `crates/todo_media/src/metadata/` | FFprobe 输出解析和媒体分类 | 时长、音视频流、静态图片和封面排除规则 |
@@ -43,12 +47,26 @@
 | `crates/todo_media/src/cache/` | 素材身份/参数缓存、同键任务去重和原子写入 | 缓存不可用不影响有效结果 |
 | `crates/todo_media/src/text/` | 文字栅格 PNG 缓存、字体目录查找 | 由文字专用线程持有；调用 todo_text 渲染 |
 | `crates/todo_text/` | 花字栅格化：字体库、排版、图层（填充/描边/偏移/缩放/模糊/做旧）合成 | 纯计算，只读字体文件；不写缓存、不知道工程和预览 |
-| `crates/todo_media/src/tools/` | 工具定位和隐藏子进程的有界输出、超时回收 | FFmpeg/FFprobe 统一在此调用，不散落到 UI 或 application |
-| `crates/todo_preview/src/` | 原生宿主生命周期和协议 | 传输命令、接收时钟及归一化鼠标事件 |
+| `crates/todo_media/src/tools/` | FFmpeg/FFprobe 定位，并把 `todo_process` 的错误映射为 `MediaError` | FFmpeg/FFprobe 统一在此调用，不散落到 UI 或 application |
+| `crates/todo_media/src/export/` | PNG 序列导出、预设、音频滤镜、FFprobe 质量报告 | 导出适配器只提交帧序列和预设，编码与报告不写进 UI |
+| `crates/todo_process/` | 子进程监督：隐藏窗口、双管道并行排空、有界诊断、超时 / 取消后 kill + wait；Windows Job Object 生命周期与内存上限 | 媒体工具与扩展工作程序共用，不各写一份 |
+| `crates/todo_production/` | 成片领域：任务请求与指纹（tasks）、分段（segment）、口播时间轴（voice）、分镜（storyboard）、呼吸感排期（pacing）、字幕（subtitles）、成片文档与编辑（production）、任务规划与回填（work）、扩展规范类型与校验（extension） | 纯数据与规则，无 I/O；application 只依赖它而不依赖 `todo_ai` |
+| `extensions/builtin/` | 随软件分发的扩展包（清单、提示词、素材、工作程序） | 格式见 [扩展规范](extension-spec.md)；用户安装的扩展放 `extensions/user/` |
+| `crates/todo_ai/` | 虎妞 / 火山直连：配置、密钥、错误分类、重试、熔断、任务日志、产物仓库、后台执行器 | 见 [AI 服务接入](ai-services.md)；规则遵循密匙契约 §6、§10 |
+| `crates/todo_extensions/src/runtime.rs` | 解析扩展工作程序入口，清洗密钥环境变量，注入 Python SDK 环境 | 只准备命令；子进程生命周期交给 pool |
+| `crates/todo_extensions/src/budget.rs` | 按服务 + 请求指纹计费预算 | 同请求重跑不重复扣预算 |
+| `crates/todo_extensions/src/pool.rs` | `todo-worker/1` 握手、复用、FIFO、call/reply、取消、超时和资源重试 | 只管理工作程序；服务执行由 app bridge 提供 |
+| `extensions/user/` | 用户安装的扩展包 | 安装前校验 zip，安装过程不执行包内代码 |
+| `crates/todo_media/src/proxies/` | 可取消的全 I 帧编辑代理、版本化缓存和输出校验 | 原片保持权威；代理只作为拖动/播放的可丢弃解码加速层 |
+| `crates/todo_preview/src/` | 原生宿主生命周期和窗口协议 | 传输命令、接收时钟及归一化鼠标事件 |
+| `crates/todo_preview/src/render.rs` | `preview_host.exe --render` 的离线逐帧会话 | 写图层命令、读取严格大小的 BGRA 帧、结束或取消子进程 |
 | `crates/todo_preview/src/viewport.rs` | 视口命令校验与导航事件协议类型 | 只传递视口矩形和输入，不计算交互或修改图层 |
 | `crates/todo_app/src/runtime/` | eframe 帧循环、绘制调用、输入/事件转交、执行 Effect | 只做装配和运行，不另写编辑规则 |
 | `crates/todo_app/src/runtime/window_state.rs` | 窗口还原几何的本地偏好适配 | 忽略最小化/无效尺寸，最大化保留普通窗口尺寸；与 eframe 版本兼容集中于此 |
-| `crates/todo_app/src/adapters/` | `workers` 执行阻塞 I/O；`preview` 桥接预览；`desktop/` 处理窗口和文件对话框 | 桌面平台能力放这里 |
+| `crates/todo_app/src/adapters/` | `workers` 执行阻塞 I/O；`preview` 桥接预览；`export` 驱动离线导出；`desktop/` 处理窗口和文件对话框 | 桌面平台能力放这里 |
+| `crates/todo_app/src/adapters/export.rs` | 将工程图层交给离线渲染器并编码质量报告 | 不决定导出按钮状态；取消和部分文件清理由进程监督器负责 |
+| `crates/todo_app/src/adapters/production/` | `ServiceBridge` 把 worker call 接到 `todo_ai`，复制/硬链接产物并缓存口播时间轴 | 不把网络、服务商规则或条目转换复制进 application |
+| `crates/todo_app/src/adapters/editing_proxies/` | 单槽有界代理任务队列、工程生命周期取消和结果回收 | 不在 UI 线程编码，不把过期代理安装到新工程 |
 | `dependencies/ffmpeg/` | FFmpeg/FFprobe 原生工具和随附说明 | 不存放应用逻辑，不参与 Rust 链接；由打包脚本复制 |
 | `dependencies/fonts/` | 花字字体文件和授权说明 | 字体文件不入库；由打包脚本复制 |
 | `tests/support/` | Rust 测试进程模拟器 | 复用测试可执行程序，协议测试无需 Node 或运行时编译器 |
@@ -80,6 +98,7 @@ app → 组装以上各层
 - Effect 描述副作用；app 执行后回传带操作 ID / 会话 ID 的 AppEvent。切换工程后旧回执失效。
 - `tests/dependency_boundaries.rs` 检查生产依赖。新增依赖时需要同时说明层次归属。
 - application 使用 serde 编解码共用能力层 DTO；这是数据协议依赖，不引入网络或文件系统。接口约定与运行时接法见 [共用编辑能力层](shared-control.md)。
+- AI 服务只在 `todo_ai` 中联网；密钥只读取密匙 `.env` 或系统凭据，永不写入工程与配置。见 [AI 服务接入](ai-services.md)。
 - 媒体处理完全在 Rust worker 中执行，FFmpeg 仅为按需启动的原生工具。目录和打包约定见 [Rust 媒体处理](native-media.md)。
 - 时间轴精确贴边、关联移动分轨和手势临时轨道的职责见 [时间轴编辑](timeline-editing.md)。
 
@@ -108,8 +127,8 @@ app → 组装以上各层
 - 解码器提供考虑像素比例与可见区域的实际显示比例；preview 传输带素材请求代次的回执，app 排除旧请求，interaction 按素材路径保存临时比例，core 只接收比例计算边界。源视频尺寸与实际显示比例不混用。
 - 轨道标题左侧“＋”在被点击轨道下方插入同类型空轨道，支持撤销/重做。链接选择开关只改变选择行为，不创建或解除链接。
 
-多层预览由 core 查询从底到顶的可见图层（最多保留顶层四层），application 生成更新计划，preview 传输整组图层，native 负责解码池与 GPU 透明合成。拖动中的位置、缩放和不透明度更新复用已解码纹理；新图层整组就绪后再替换显示，过期完成通知不清屏，显式空图层立即清屏。相关回归测试放在 `native/tests/`，生成夹具放在 `target/preview_tests/`。
+多层预览由 core 查询从底到顶的可见图层（总数最多 16 层，其中解码视频最多 6 层、文字最多 4 层），application 生成更新计划，preview 传输整组图层，native 负责解码池与 GPU 透明合成。拖动中的位置、缩放和不透明度更新复用已解码纹理；新图层整组就绪后再替换显示，过期完成通知不清屏，显式空图层立即清屏。相关回归测试放在 `native/tests/`，生成夹具放在 `target/preview_tests/`。
 
 编辑视口默认将固定 16:9 输出画框适应面板，支持 10%–400% 的相对适应倍率、滚轮围绕指针缩放、中键平移、适应复位和仅输出查看。画框外元素在编辑模式加暗显示并可拖入画内；仅输出模式遮蔽画外内容和控制框。interaction 统一把原生窗口坐标换算为画布坐标，app 只转发投影矩形与导航事件；选框与光标使用投影后的窗口坐标。视口状态只在会话中保留，不改工程、元素 Transform 或撤销记录。目前工程尚无输出分辨率字段，后续输出设置应为视口提供画布比例。
 
-目前仍是基础编辑器：尚未实现关键帧、转场、完整导出、代理、自动保存和崩溃恢复。面板大小只在当前运行内记忆。
+目前仍是基础编辑器：尚未实现关键帧、转场、完整导出、自动保存、崩溃恢复和 AI 成片界面。视频编辑代理、代理缓存和 `todo-worker/1` 运行时已经落地；面板大小只在当前运行内记忆。

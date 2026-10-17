@@ -1,6 +1,7 @@
 mod commands;
 mod imports;
 mod preview;
+pub use preview::picture_layers;
 
 use crate::clipboard::Clipboard;
 use crate::history::{same_content, History};
@@ -39,7 +40,21 @@ pub struct PreviewLayer {
     pub path: String,
     pub media_time: f64,
     pub aspect: Option<(u32, u32)>,
+    pub kind: PreviewLayerKind,
     pub transform: ClipTransform,
+    /// Reveal layers: `media_time` is the progress 0..1 and this the soft
+    /// edge as a fraction of the duration.
+    pub soft: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PreviewLayerKind {
+    #[default]
+    Video,
+    Image,
+    Packed,
+    Reveal,
+    Text,
 }
 
 #[derive(Debug, Clone, PartialEq)]

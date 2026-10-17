@@ -1,0 +1,32 @@
+{
+ "spec": "todo-bake-board/1",
+ "board": "sample",
+ "canvas": {
+  "width": 640,
+  "height": 360,
+  "fps": 30
+ },
+ "duration": 2.0,
+ "fadeIn": 0.0,
+ "params": {
+  "tone": "chalk",
+  "enter": "draw",
+  "hand": "chalk",
+  "drawSpeed": 2.0,
+  "layout": "auto"
+ },
+ "elements": [
+  {
+   "id": "e1",
+   "key": "sample/e1",
+   "role": "hero",
+   "label": "示例",
+   "draw": "",
+   "weight": 1.0,
+   "file": "sample_element.png",
+   "lane": 1,
+   "at": 0.2,
+   "windowEnd": 1.6
+  }
+ ]
+}

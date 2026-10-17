@@ -1,3 +1,4 @@
+use crate::productions::ProductionTask;
 use crate::{PreviewCommand, TextRaster};
 use std::path::PathBuf;
 use todo_core::Project;
@@ -34,15 +35,39 @@ pub enum MediaTask {
     },
     /// Render a text image; the result is [`crate::MediaOutput::TextRaster`].
     TextRaster(Box<TextRaster>),
+    Adopt {
+        project: String,
+        files: Vec<PathBuf>,
+    },
+    /// Render and encode the current project timeline on the dedicated export worker.
+    ExportTimeline {
+        project: Box<Project>,
+        output: PathBuf,
+        /// Stable UI value: standard, high, vertical or draft.
+        preset: String,
+    },
+    /// Legacy frame-sequence export kept for compatibility with older callers.
+    Export {
+        frames: PathBuf,
+        fps: f64,
+        audio: Option<PathBuf>,
+        output: PathBuf,
+        /// Stable UI value: standard, high, vertical or draft.
+        preset: String,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum Effect {
     Project { ticket: Ticket, task: ProjectTask },
     Media { ticket: Ticket, task: MediaTask },
+    Production(ProductionTask),
+    CancelExport,
     Preview(Vec<PreviewCommand>),
     ChooseMediaFiles,
     ChooseProjectFile,
+    ChooseExportPath,
+    ChooseProductionUpload { production: String, element: String },
     UploadThumbnail { path: String, bytes: Vec<u8> },
     ResetPresentation,
     CloseWindow,

@@ -1,8 +1,6 @@
 use crate::theme::{BORDER, BRAND, DIM, MUTED, PANEL, TEXT};
 use egui::{Ui, UiBuilder};
-use todo_interaction::{
-    EditorViewModel, Intent, MonitorPane, PREVIEW_ZOOM_MAX, PREVIEW_ZOOM_MIN,
-};
+use todo_interaction::{EditorViewModel, Intent, MonitorPane, PREVIEW_ZOOM_MAX, PREVIEW_ZOOM_MIN};
 
 #[derive(Debug, Clone, Copy)]
 pub struct MonitorHole {

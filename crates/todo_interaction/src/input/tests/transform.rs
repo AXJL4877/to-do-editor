@@ -149,7 +149,9 @@ fn lower_track_video_is_selectable_and_movable_beside_a_covering_picture() {
         height: Some(9),
         kind: Some(todo_core::MediaKind::Image),
         folder_id: None,
-});
+        alpha: None,
+        reveal: None,
+    });
     project.media.push(MediaItem {
         id: "movie".into(),
         name: "clip.mp4".into(),
@@ -160,7 +162,9 @@ fn lower_track_video_is_selectable_and_movable_beside_a_covering_picture() {
         height: Some(9),
         kind: Some(todo_core::MediaKind::Video),
         folder_id: None,
-});
+        alpha: None,
+        reveal: None,
+    });
     project = add_clip(project, "v1", {
         let mut clip = normalize_clip("cover".into(), "still".into(), 0.0, 5.0, 0.0, 1.0);
         clip.transform.scale = 0.5;

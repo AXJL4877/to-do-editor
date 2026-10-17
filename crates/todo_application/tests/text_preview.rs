@@ -13,6 +13,8 @@ fn workspace() -> Workspace {
         height: Some(720),
         kind: Some(MediaKind::Video),
         folder_id: None,
+        alpha: None,
+        reveal: None,
     });
     let project = place_media(project, "m", Some("v1"), 0.0).unwrap();
     let mut workspace = Workspace::with_project(project, "test");

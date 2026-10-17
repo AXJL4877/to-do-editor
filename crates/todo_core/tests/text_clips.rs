@@ -12,7 +12,9 @@ fn project_with_video() -> Project {
         height: Some(720),
         kind: Some(MediaKind::Video),
         folder_id: None,
-});
+        alpha: None,
+        reveal: None,
+    });
     execute_edit(
         p,
         EditCommand::PlaceMedia {

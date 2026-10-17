@@ -78,8 +78,8 @@ impl EditorController {
             .and_then(|s| project.media.iter().find(|m| m.id == s.media_id))
             .map(|m| m.duration.max(0.0))
             .unwrap_or(0.0);
-        let showing_source = editor.monitor_pane() == todo_application::MonitorPane::Source
-            && source.is_some();
+        let showing_source =
+            editor.monitor_pane() == todo_application::MonitorPane::Source && source.is_some();
         let current_time = if showing_source {
             source.map(|s| s.time).unwrap_or(0.0)
         } else {

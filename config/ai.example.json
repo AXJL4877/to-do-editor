@@ -1,0 +1,5 @@
+{
+  "huniu": { "baseUrl": "https://huniuai.com", "chatModel": "geminiflash3.1", "imageModel": "gpt-image-2" },
+  "volc": { "baseUrl": "https://openspeech.bytedance.com", "resourceId": "seed-tts-2.0", "speaker": "zh_female_mizai_uranus_bigtts" },
+  "proxy": "auto"
+}

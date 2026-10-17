@@ -13,8 +13,9 @@ pub(super) struct PreviewSources {
 }
 
 impl PreviewSources {
-    pub fn install(&mut self, path: String, proxy: PathBuf) {
+    pub fn install(&mut self, path: String, proxy: PathBuf, now: f64) {
         self.proxies.insert(path, proxy);
+        self.moving_until = self.moving_until.max(now + 0.18);
     }
     pub fn layers(&mut self, layers: Vec<PreviewLayer>, now: f64) {
         if self
@@ -74,7 +75,9 @@ mod tests {
         PreviewLayer {
             path: path.into(),
             media_time: time,
+            soft: None,
             aspect: Some((1920, 1080)),
+            kind: todo_application::PreviewLayerKind::Video,
             transform: Default::default(),
         }
     }
@@ -82,7 +85,7 @@ mod tests {
     #[test]
     fn moving_preview_uses_proxy_but_keeps_geometry_time_and_original_identity() {
         let mut sources = PreviewSources::default();
-        sources.install("source.mp4".into(), PathBuf::from("cache/proxy.mp4"));
+        sources.install("source.mp4".into(), PathBuf::from("cache/proxy.mp4"), 1.0);
         let mut video = layer("source.mp4", 12.345);
         video.transform.x = 0.2;
         video.transform.scale_x = 1.6;
@@ -101,7 +104,7 @@ mod tests {
     fn release_and_idle_restore_original_even_without_a_new_picture_command() {
         for release in [false, true] {
             let mut sources = PreviewSources::default();
-            sources.install("source.mp4".into(), "proxy.mp4".into());
+            sources.install("source.mp4".into(), "proxy.mp4".into(), 1.0);
             sources.layers(vec![layer("source.mp4", 8.1)], 1.0);
             assert_eq!(sources.take_changed(1.0).unwrap()[0].path, "proxy.mp4");
             if release {
@@ -121,17 +124,18 @@ mod tests {
         let mut sources = PreviewSources::default();
         sources.layers(vec![layer("source.mp4", 8.1)], 1.0);
         assert_eq!(sources.take_changed(1.0).unwrap()[0].path, "source.mp4");
-        sources.install("source.mp4".into(), "proxy.mp4".into());
-        assert!(
-            sources.take_changed(2.0).is_none(),
-            "late proxy must not replace the settled original"
+        sources.install("source.mp4".into(), "proxy.mp4".into(), 2.0);
+        assert_eq!(
+            sources.take_changed(2.0).unwrap()[0].path,
+            "proxy.mp4",
+            "a newly generated proxy becomes usable on the next refresh"
         );
         let mut changed = layer("source.mp4", 8.1);
         changed.transform.x = 0.1;
         sources.layers(vec![changed], 2.0);
-        assert_eq!(sources.take_changed(2.0).unwrap()[0].path, "source.mp4");
+        assert_eq!(sources.take_changed(2.0).unwrap()[0].path, "proxy.mp4");
         sources.transport(8.1, true, 2.1);
-        assert_eq!(sources.take_changed(5.0).unwrap()[0].path, "proxy.mp4");
+        assert!(sources.take_changed(5.0).is_none());
         sources.transport(8.1, false, 5.1);
         assert_eq!(sources.take_changed(5.1).unwrap()[0].path, "source.mp4");
     }
@@ -139,7 +143,7 @@ mod tests {
     #[test]
     fn clearing_or_resetting_cannot_restore_the_previous_stack() {
         let mut sources = PreviewSources::default();
-        sources.install("old.mp4".into(), "proxy.mp4".into());
+        sources.install("old.mp4".into(), "proxy.mp4".into(), 0.0);
         sources.layers(vec![layer("old.mp4", 1.0)], 0.0);
         sources.take_changed(0.0);
         sources.layers(Vec::new(), 0.1);

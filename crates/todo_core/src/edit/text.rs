@@ -8,7 +8,7 @@ use crate::{find_clip, DomainError, Project, TextContent, TrackKind};
 
 /// Make `style_id` available to the project, copying a built-in style once.
 /// Project styles win over built-ins with the same id.
-fn ensure_style(mut project: Project, style_id: &str) -> Result<Project, DomainError> {
+pub(super) fn ensure_style(mut project: Project, style_id: &str) -> Result<Project, DomainError> {
     if project.text_style(style_id).is_some() {
         return Ok(project);
     }

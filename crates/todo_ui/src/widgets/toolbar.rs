@@ -1,7 +1,7 @@
 use egui::{Align, Layout, RichText, Ui};
 use todo_interaction::{EditorViewModel, Intent};
 
-use super::{chrome, project_settings};
+use super::{ai_settings, chrome, export, production, project_settings};
 use crate::theme::{button, Btn, BORDER, BRAND, COLORS, MUTED, TEXT};
 
 pub fn draw(ui: &mut Ui, vm: &EditorViewModel) -> Vec<Intent> {
@@ -56,6 +56,24 @@ pub fn draw(ui: &mut Ui, vm: &EditorViewModel) -> Vec<Intent> {
             .clicked()
         {
             project_settings::set_open(ui, true);
+        }
+        if button(ui, "AI 设置", Btn::Normal, true)
+            .on_hover_text("服务地址、模型与密钥来源")
+            .clicked()
+        {
+            ai_settings::set_open(ui, true);
+        }
+        if button(ui, "AI 成片", Btn::Normal, true)
+            .on_hover_text("打开 AI 成片扩展与任务面板")
+            .clicked()
+        {
+            production::set_open(ui, true);
+        }
+        if button(ui, "导出", Btn::Normal, true)
+            .on_hover_text("导出当前时间轴并生成质量报告")
+            .clicked()
+        {
+            export::set_open(ui.ctx(), true);
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             chrome::window_buttons(ui);

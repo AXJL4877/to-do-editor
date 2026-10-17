@@ -1,15 +1,13 @@
+use super::library::{create_folder, delete_folder, move_folder, move_media, rename_folder};
 use super::{
     add_text, paste_clips, set_text, stretch_clips, transform::set_transform, trim_clips,
     CopiedClip,
 };
 use crate::{
-    add_track, clip_end, delete_clips, delete_track, find_clip, insert_track_below,
-    linked_clip_ids, move_track, place_media, place_media_range, razor_clips, set_project_duration,
-    set_media_scale_mode, set_project_fps, set_project_output_size, validate_project, DomainError,
+    add_track, clip_end, compact_tracks, delete_clips, delete_track, find_clip, insert_track_below,
+    linked_clip_ids, move_track, place_media, place_media_range, razor_clips, set_media_scale_mode,
+    set_project_duration, set_project_fps, set_project_output_size, validate_project, DomainError,
     MediaScaleMode, Project, TextContent, TrackKind, Transform, TrimEdge,
-};
-use super::library::{
-    create_folder, delete_folder, move_folder, move_media, rename_folder,
 };
 
 /// Semantic project edits; no input-device or layout concepts cross this boundary.
@@ -68,6 +66,8 @@ pub enum EditCommand {
         track_id: String,
         up: bool,
     },
+    /// Pack adjacent unlocked tracks while preserving overlap order.
+    CompactTracks,
     DeleteTrack {
         track_id: String,
     },
@@ -128,6 +128,8 @@ pub enum EditCommand {
         media_id: String,
         folder_id: Option<String>,
     },
+    /// One progressive-placement batch of an AI production.
+    ApplyGenerated(Vec<super::GeneratedEdit>),
 }
 
 fn require_clips(project: &Project, ids: &[String]) -> Result<(), DomainError> {
@@ -217,6 +219,7 @@ pub fn execute_edit(project: Project, command: EditCommand) -> Result<Project, D
         EditCommand::AddTrack { kind } => add_track(project, kind),
         EditCommand::InsertTrackBelow { track_id } => insert_track_below(project, &track_id)?,
         EditCommand::MoveTrack { track_id, up } => move_track(project, &track_id, up)?,
+        EditCommand::CompactTracks => compact_tracks(project),
         EditCommand::DeleteTrack { track_id } => {
             let track = project
                 .tracks
@@ -288,6 +291,7 @@ pub fn execute_edit(project: Project, command: EditCommand) -> Result<Project, D
             media_id,
             folder_id,
         } => move_media(project, &media_id, folder_id)?,
+        EditCommand::ApplyGenerated(edits) => super::apply_generated(project, edits)?,
     };
     validate_project(&next)?;
     Ok(next)

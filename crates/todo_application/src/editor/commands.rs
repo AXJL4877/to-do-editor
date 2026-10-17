@@ -217,10 +217,7 @@ impl EditorSession {
         if !todo_core::is_visual_media(media) {
             return Vec::new();
         }
-        let path_ok = media
-            .path
-            .as_ref()
-            .is_some_and(|p| !p.trim().is_empty());
+        let path_ok = media.path.as_ref().is_some_and(|p| !p.trim().is_empty());
         if !path_ok {
             return Vec::new();
         }

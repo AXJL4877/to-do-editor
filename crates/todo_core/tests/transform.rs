@@ -36,7 +36,9 @@ fn sample_project() -> Project {
         height: Some(1080),
         kind: Some(MediaKind::Video),
         folder_id: None,
-});
+        alpha: None,
+        reveal: None,
+    });
     add_clip(
         project,
         "v1",
@@ -332,10 +334,16 @@ fn place_media_defaults_to_pixel_scale_when_dimensions_are_known() {
         height: Some(1080),
         kind: Some(MediaKind::Video),
         folder_id: None,
-});
+        alpha: None,
+        reveal: None,
+    });
     let next = place_media(project, "m", Some("v1"), 0.0).unwrap();
     let clip = &next.tracks.iter().find(|t| t.id == "v1").unwrap().clips[0];
-    assert!((clip.transform.scale - 0.5).abs() < 1e-12, "{:?}", clip.transform);
+    assert!(
+        (clip.transform.scale - 0.5).abs() < 1e-12,
+        "{:?}",
+        clip.transform
+    );
 }
 
 #[test]
@@ -354,7 +362,9 @@ fn match_frame_placement_fills_the_program_canvas() {
         height: Some(1080),
         kind: Some(MediaKind::Video),
         folder_id: None,
-});
+        alpha: None,
+        reveal: None,
+    });
     let next = place_media(project, "m", Some("v1"), 0.0).unwrap();
     let clip = &next.tracks.iter().find(|t| t.id == "v1").unwrap().clips[0];
     assert!(clip.transform.is_default(), "{:?}", clip.transform);

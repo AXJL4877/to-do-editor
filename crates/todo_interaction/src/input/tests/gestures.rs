@@ -384,7 +384,9 @@ fn timeline_move_can_reassign_video_clips_onto_the_same_track() {
         height: Some(9),
         kind: None,
         folder_id: None,
-});
+        alpha: None,
+        reveal: None,
+    });
     project = add_clip(
         project,
         "v1",

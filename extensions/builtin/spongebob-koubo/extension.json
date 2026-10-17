@@ -1,0 +1,23 @@
+{
+  "spec": "todo-extension/1",
+  "id": "studio.spongebob-koubo",
+  "name": "海绵宝宝口播",
+  "version": "2.1.0",
+  "description": "将口播、角色、道具、花字和音乐编排成可编辑的工作流成片。",
+  "kind": "workflow",
+  "input": { "script": { "label": "口播文案", "maxLength": 12000, "placeholder": "粘贴口播文案" } },
+  "params": [
+    { "id": "voice", "type": "voice", "label": "音色", "group": "voice", "default": "zh_female_mizai_uranus_bigtts" },
+    { "id": "layout", "type": "select", "label": "版式", "group": "scene", "default": "auto", "options": [{ "value": "auto", "label": "自动" }] },
+    { "id": "tone", "type": "select", "label": "笔色", "group": "scene", "default": "chalk", "options": [{ "value": "chalk", "label": "粉笔" }] },
+    { "id": "enter", "type": "select", "label": "进场", "group": "scene", "default": "mix", "options": [{ "value": "mix", "label": "混合" }] },
+    { "id": "drawSpeed", "type": "number", "label": "书写速度", "group": "timing", "default": 1, "min": 0.5, "max": 3, "step": 0.25 }
+  ],
+  "quick": ["voice", "layout", "tone", "enter"],
+  "requires": {
+    "services": ["chat", "image", "speech", "subtitles", "encode"],
+    "runtime": { "type": "python", "version": ">=3.12" }
+  },
+  "worker": { "entry": "worker/main.py", "ops": ["run"], "timeoutSec": 1800, "maxProcesses": 1, "memoryMiB": 3000 },
+  "budget": { "image": 80, "chat": 60, "speech": 60 }
+}

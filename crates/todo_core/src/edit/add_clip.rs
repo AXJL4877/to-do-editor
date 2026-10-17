@@ -85,11 +85,8 @@ pub fn add_imported_video(
         1.0,
     );
     if let (Some(w), Some(h)) = (media.width, media.height) {
-        video_clip.transform = crate::Transform::for_media_placement(
-            (w, h),
-            next.output_size(),
-            next.media_scale,
-        );
+        video_clip.transform =
+            crate::Transform::for_media_placement((w, h), next.output_size(), next.media_scale);
     }
     next = add_clip(next, &video_track_id, video_clip.clone());
     if media.has_audio.unwrap_or(false) {

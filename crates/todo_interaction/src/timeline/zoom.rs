@@ -192,7 +192,10 @@ mod tests {
             timeline_scale(axis, view_w, hit.zoom).px_per_sec,
         );
         assert!((before - after).abs() < 1e-9, "{before} → {after}");
-        assert!(hit.scroll_left > scroll, "zoom-in should pan to hold the cursor");
+        assert!(
+            hit.scroll_left > scroll,
+            "zoom-in should pan to hold the cursor"
+        );
     }
 
     #[test]

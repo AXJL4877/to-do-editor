@@ -16,15 +16,24 @@ fn workspace_production_dependencies_respect_layer_boundaries() {
     let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let rules: &[(&str, &[&str])] = &[
         ("todo_core", &["serde", "serde_json"]),
-        ("todo_application", &["todo_core", "serde"]),
+        (
+            "todo_application",
+            &["todo_core", "todo_production", "serde", "serde_json"],
+        ),
         (
             "todo_interaction",
-            &["todo_core", "todo_application", "uuid"],
+            &["todo_core", "todo_application", "todo_production", "uuid"],
         ),
         ("todo_ui", &["todo_interaction", "egui", "image"]),
         (
             "todo_storage",
-            &["todo_core", "serde_json", "thiserror", "uuid"],
+            &[
+                "todo_core",
+                "todo_production",
+                "serde_json",
+                "thiserror",
+                "uuid",
+            ],
         ),
         (
             "todo_media",
@@ -32,11 +41,14 @@ fn workspace_production_dependencies_respect_layer_boundaries() {
                 "todo_core",
                 "todo_storage",
                 "todo_text",
+                "todo_process",
                 "serde",
+                "serde_json",
                 "serde_json",
                 "thiserror",
                 "uuid",
                 "image",
+                "png",
             ],
         ),
         (
@@ -44,10 +56,48 @@ fn workspace_production_dependencies_respect_layer_boundaries() {
             &["todo_core", "png", "thiserror", "tiny-skia", "ttf-parser"],
         ),
         ("todo_preview", &["thiserror"]),
+        ("todo_process", &["thiserror", "windows-sys"]),
+        // Extension packages and worker processes; services are answered by the app.
+        (
+            "todo_extensions",
+            &[
+                "todo_production",
+                "todo_process",
+                "serde",
+                "serde_json",
+                "thiserror",
+                "uuid",
+                "zip",
+            ],
+        ),
+        // Pure production domain: requests, plans and rules as data.
+        (
+            "todo_production",
+            &["todo_core", "serde", "serde_json", "sha2"],
+        ),
+        // External AI infrastructure; never a dependency of application or UI.
+        (
+            "todo_ai",
+            &[
+                "todo_production",
+                "serde",
+                "serde_json",
+                "thiserror",
+                "sha2",
+                "image",
+                "windows-sys",
+                "tokio",
+                "reqwest",
+                "base64",
+            ],
+        ),
         (
             "todo_app",
             &[
                 "todo_application",
+                "todo_ai",
+                "todo_extensions",
+                "todo_production",
                 "todo_interaction",
                 "todo_ui",
                 "todo_storage",
@@ -58,6 +108,7 @@ fn workspace_production_dependencies_respect_layer_boundaries() {
                 "raw-window-handle",
                 "rfd",
                 "serde",
+                "serde_json",
             ],
         ),
     ];

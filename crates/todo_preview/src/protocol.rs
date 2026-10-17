@@ -9,18 +9,45 @@ pub const HOST_RELATIVE: &str = "native/build/bin/preview_host.exe";
 /// Same cap as the native preview host stdin protocol.
 pub const MAX_AUDIO_CLIPS: usize = 4096;
 
-/// Soft cap matching `todo_core::MAX_PREVIEW_LAYERS` / native compositor budget.
-pub const MAX_PREVIEW_LAYERS: usize = 4;
+/// Mirrors `todo_core::MAX_PREVIEW_LAYERS` (checked by a `todo_app` test) and the
+/// native `VideoEngine::kMaxLayers`.
+pub const MAX_PREVIEW_LAYERS: usize = 16;
 
 /// One visual layer for `layers-begin` / `layer` / `layers-commit`.
 ///
-/// Wire: `layer <media_time> <x> <y> <scale> <scale_x> <scale_y> <opacity> <path>`.
-/// `path` is the rest of the line and may contain spaces.
+/// Wire: `layer <kind> <media_time> <x> <y> <scale> <scale_x> <scale_y> <opacity> <path>`.
+/// `path` is the rest of the line and may contain spaces. A reveal layer's
+/// kind is `reveal:<soft>` and its media time is the progress 0..1.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreviewLayer {
     pub path: String,
     pub media_time: f64,
+    pub kind: LayerKind,
     pub transform: VisualTransform,
+    /// Reveal soft edge as a fraction of the duration.
+    pub soft: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LayerKind {
+    #[default]
+    Video,
+    Image,
+    Packed,
+    Reveal,
+    Text,
+}
+
+impl LayerKind {
+    fn wire(self) -> &'static str {
+        match self {
+            Self::Video => "video",
+            Self::Image => "image",
+            Self::Packed => "packed",
+            Self::Reveal => "reveal",
+            Self::Text => "text",
+        }
+    }
 }
 
 /// `readAudioClock` drops a sample older than this.
@@ -30,7 +57,7 @@ pub(crate) const MAX_STDOUT_LINE: usize = 4096;
 
 /// One source clip on the native mixer timeline.
 ///
-/// Wire: `audio-clip <start> <duration> <offset> <rate> <gain> <path>`.
+/// Wire: `audio-clip <start> <duration> <offset> <rate> <gain> <fade_in> <fade_out> <path>`.
 /// `path` is the rest of the line and may contain spaces.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioClip {
@@ -40,6 +67,8 @@ pub struct AudioClip {
     pub offset: f64,
     pub rate: f64,
     pub gain: f64,
+    pub fade_in: f64,
+    pub fade_out: f64,
 }
 
 /// Last `audio-clock` line, stamped when it was read.
@@ -508,10 +537,14 @@ pub(crate) fn encode_layers(
         if layer.path.is_empty() || layer.path.contains('\n') || layer.path.contains('\r') {
             return Err(PreviewError::Invalid("layer path must be a single line"));
         }
+        let kind = match layer.kind {
+            LayerKind::Reveal => format!("reveal:{}", layer.soft.clamp(0.0, 1.0)),
+            other => other.wire().to_owned(),
+        };
         let _ = writeln!(
             buf,
-            "layer {} {} {} {} {} {} {} {}",
-            layer.media_time, t.x, t.y, t.scale, t.scale_x, t.scale_y, t.opacity, layer.path
+            "layer {} {} {} {} {} {} {} {} {}",
+            kind, layer.media_time, t.x, t.y, t.scale, t.scale_x, t.scale_y, t.opacity, layer.path
         );
     }
     buf.extend_from_slice(b"layers-commit\n");
@@ -529,8 +562,14 @@ pub(crate) fn encode_audio(buf: &mut Vec<u8>, clips: &[AudioClip]) -> Result<(),
     for clip in clips {
         let _ = write!(
             buf,
-            "audio-clip {} {} {} {} {} ",
-            clip.start, clip.duration, clip.offset, clip.rate, clip.gain
+            "audio-clip {} {} {} {} {} {} {} ",
+            clip.start,
+            clip.duration,
+            clip.offset,
+            clip.rate,
+            clip.gain,
+            clip.fade_in,
+            clip.fade_out
         );
         buf.extend_from_slice(clip.path.as_bytes());
         buf.push(b'\n');
@@ -582,6 +621,16 @@ fn validate_clip(clip: &AudioClip) -> Result<(), PreviewError> {
     }
     if !(0.0..=4.0).contains(&clip.gain) {
         return Err(PreviewError::Invalid("audio clip gain must be in 0..=4"));
+    }
+    if !clip.fade_in.is_finite()
+        || !clip.fade_out.is_finite()
+        || clip.fade_in < 0.0
+        || clip.fade_out < 0.0
+        || clip.fade_in + clip.fade_out > clip.duration
+    {
+        return Err(PreviewError::Invalid(
+            "audio clip fades must be finite, >= 0 and fit duration",
+        ));
     }
     Ok(())
 }
@@ -667,10 +716,12 @@ mod tests {
             offset: 0.25,
             rate: 1.0,
             gain: 0.5,
+            fade_in: 0.0,
+            fade_out: 0.0,
         }];
         assert_eq!(
             line(|b| encode_audio(b, &clips)),
-            "audio-begin\naudio-clip 1 2.5 0.25 1 0.5 C:/media/a b.wav\naudio-commit\n"
+            "audio-begin\naudio-clip 1 2.5 0.25 1 0.5 0 0 C:/media/a b.wav\naudio-commit\n"
         );
         assert_eq!(
             line(|b| encode_audio(b, &[])),
@@ -687,6 +738,8 @@ mod tests {
             offset: 0.0,
             rate: 1.0,
             gain: 1.0,
+            fade_in: 0.0,
+            fade_out: 0.0,
         };
         assert!(encode_audio(&mut Vec::new(), &[clip.clone()]).is_ok());
         clip.rate = 0.1;
@@ -786,6 +839,8 @@ mod tests {
                     PreviewLayer {
                         path: r"C:\a b.mp4".into(),
                         media_time: 1.25,
+                        soft: 0.0,
+                        kind: LayerKind::Video,
                         transform: VisualTransform {
                             x: 0.1,
                             y: -0.2,
@@ -798,6 +853,8 @@ mod tests {
                     PreviewLayer {
                         path: "top.png".into(),
                         media_time: 0.0,
+                        soft: 0.0,
+                        kind: LayerKind::Image,
                         transform: VisualTransform {
                             x: 0.0,
                             y: 0.0,
@@ -812,7 +869,7 @@ mod tests {
         });
         assert_eq!(
             encoded,
-            "layers-begin\nlayer 1.25 0.1 -0.2 1 1 1 1 C:\\a b.mp4\nlayer 0 0 0 0.5 1 1 0.5 top.png\nlayers-commit\n"
+            "layers-begin\nlayer video 1.25 0.1 -0.2 1 1 1 1 C:\\a b.mp4\nlayer image 0 0 0 0.5 1 1 0.5 top.png\nlayers-commit\n"
         );
         assert!(encode_layers(
             &mut Vec::new(),
@@ -820,6 +877,8 @@ mod tests {
                 PreviewLayer {
                     path: "x".into(),
                     media_time: 0.0,
+                    soft: 0.0,
+                    kind: LayerKind::Video,
                     transform: VisualTransform {
                         x: 0.0,
                         y: 0.0,

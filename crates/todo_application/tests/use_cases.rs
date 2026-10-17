@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use todo_application::*;
 use todo_core::{create_project, place_media, MediaKind};
 
@@ -13,7 +14,9 @@ fn project() -> Project {
         height: Some(1080),
         kind: Some(MediaKind::Video),
         folder_id: None,
-});
+        alpha: None,
+        reveal: None,
+    });
     place_media(project, "m", Some("v1"), 0.0).unwrap()
 }
 fn effect_ticket(update: &AppUpdate) -> Ticket {
@@ -25,6 +28,41 @@ fn effect_ticket(update: &AppUpdate) -> Ticket {
             _ => None,
         })
         .unwrap()
+}
+
+#[test]
+fn export_timeline_captures_an_immutable_project_snapshot() {
+    let mut workspace = Workspace::with_project(project(), "export-test");
+    let update = workspace.dispatch(AppAction::ExportTimeline {
+        output: PathBuf::from("out.mp4"),
+        preset: "draft".into(),
+    });
+    let task = update
+        .effects
+        .into_iter()
+        .find_map(|effect| match effect {
+            Effect::Media {
+                task:
+                    MediaTask::ExportTimeline {
+                        project,
+                        output,
+                        preset,
+                    },
+                ..
+            } => Some((project, output, preset)),
+            _ => None,
+        })
+        .expect("export task");
+    assert_eq!(task.1, PathBuf::from("out.mp4"));
+    assert_eq!(task.2, "draft");
+    assert_eq!(
+        task.0.tracks.len(),
+        workspace.editor().unwrap().project().tracks.len()
+    );
+    assert_eq!(
+        task.0.media.len(),
+        workspace.editor().unwrap().project().media.len()
+    );
 }
 
 #[test]
@@ -40,7 +78,9 @@ fn open_source_monitor_shows_library_media_instead_of_the_program_stack() {
         height: Some(720),
         kind: Some(MediaKind::Video),
         folder_id: None,
-});
+        alpha: None,
+        reveal: None,
+    });
     project.media.push(MediaItem {
         id: "prog".into(),
         name: "program.mp4".into(),
@@ -51,7 +91,9 @@ fn open_source_monitor_shows_library_media_instead_of_the_program_stack() {
         height: Some(1080),
         kind: Some(MediaKind::Video),
         folder_id: None,
-});
+        alpha: None,
+        reveal: None,
+    });
     let project = place_media(project, "prog", Some("v1"), 0.0).unwrap();
     let mut editor = EditorSession::new(project, "test");
     let _ = editor.sync();
@@ -108,7 +150,9 @@ fn opacity_and_axis_updates_emit_transform_without_seeking_or_reopening_video() 
         vec![PreviewCommand::Layers(vec![PreviewLayer {
             path: "clip.mp4".into(),
             media_time: 0.0,
+            soft: None,
             aspect: Some((1920, 1080)),
+            kind: todo_application::PreviewLayerKind::Video,
             transform,
         }])]
     );

@@ -2,6 +2,7 @@ use crate::transform::Transform;
 use serde::{Deserialize, Serialize};
 
 use super::text::TextContent;
+use super::{ClipAudio, ClipOrigin, Intro};
 pub use crate::transform::ClipTransform;
 
 pub const MIN_CLIP_DURATION: f64 = 1.0 / 240.0;
@@ -20,6 +21,15 @@ pub struct Clip {
     pub duration: f64,
     pub link_id: Option<String>,
     pub transform: Transform,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intro: Option<Intro>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<ClipAudio>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<ClipOrigin>,
+    /// Seconds of opacity fade at the end of a picture clip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outro: Option<f64>,
     pub source: ClipSource,
 }
 
@@ -89,6 +99,10 @@ pub fn normalize_clip(
         duration: duration.max(MIN_CLIP_DURATION),
         link_id: None,
         transform: Transform::default(),
+        intro: None,
+        audio: None,
+        origin: None,
+        outro: None,
         source: ClipSource::Media(MediaSource {
             media_id,
             offset: offset.max(0.0),
@@ -104,6 +118,10 @@ pub fn text_clip(id: String, start: f64, duration: f64, content: TextContent) ->
         duration: duration.max(MIN_CLIP_DURATION),
         link_id: None,
         transform: Transform::default(),
+        intro: None,
+        audio: None,
+        origin: None,
+        outro: None,
         source: ClipSource::Text(content),
     }
 }
@@ -146,6 +164,14 @@ struct ClipRecord {
     #[serde(default, skip_serializing_if = "Transform::is_default")]
     transform: Transform,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    intro: Option<Intro>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    audio: Option<ClipAudio>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin: Option<ClipOrigin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outro: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     text: Option<TextContent>,
 }
 
@@ -180,6 +206,10 @@ impl TryFrom<ClipRecord> for Clip {
             duration: record.duration,
             link_id: record.link_id,
             transform: record.transform,
+            intro: record.intro,
+            audio: record.audio,
+            origin: record.origin,
+            outro: record.outro.filter(|s| s.is_finite() && *s > 0.0),
             source,
         })
     }
@@ -205,6 +235,10 @@ impl From<Clip> for ClipRecord {
             rate,
             link_id: clip.link_id,
             transform: clip.transform,
+            intro: clip.intro,
+            audio: clip.audio,
+            origin: clip.origin,
+            outro: clip.outro,
             text,
         }
     }
@@ -246,5 +280,27 @@ mod tests {
         let text_rate =
             r#"{"id":"x","start":0,"duration":1,"rate":2,"text":{"text":"a","styleId":"s"}}"#;
         assert!(serde_json::from_str::<Clip>(text_rate).is_err());
+    }
+
+    #[test]
+    fn optional_effects_round_trip_without_changing_legacy_shape() {
+        let mut clip = normalize_clip("c".into(), "m".into(), 0.0, 2.0, 0.0, 1.0);
+        clip.intro = Some(Intro {
+            kind: crate::IntroKind::Rise,
+            duration: 0.5,
+        });
+        clip.audio = Some(crate::ClipAudio {
+            gain: 0.75,
+            fade_in: 0.2,
+            fade_out: 0.3,
+        });
+        clip.origin = Some(crate::ClipOrigin {
+            production: "p".into(),
+            key: "s0/voice".into(),
+            rev: "r1".into(),
+        });
+        let value = serde_json::to_value(&clip).unwrap();
+        assert_eq!(value["intro"]["kind"], "rise");
+        assert_eq!(serde_json::from_value::<Clip>(value).unwrap(), clip);
     }
 }

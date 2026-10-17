@@ -15,6 +15,8 @@ struct AudioClip {
   double offset = 0;
   double rate = 1;
   float gain = 1;
+  double fade_in = 0;
+  double fade_out = 0;
 };
 
 // Samples are interleaved PCM. start is the source timestamp of sample zero;

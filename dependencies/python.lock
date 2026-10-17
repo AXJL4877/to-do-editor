@@ -1,0 +1,9 @@
+--only-binary=:all:
+fonttools==4.56.0 \
+    --hash=sha256:62cc1253827d1e500fde9dbe981219fea4eb000fd63402283472d38e7d8aa1c6
+numpy==2.2.6 \
+    --hash=sha256:b0544343a702fa80c95ad5d3d608ea3599dd54d4632df855e4c8d24eb6ecfa1c
+opencv-python-headless==4.10.0.84 \
+    --hash=sha256:afcf28bd1209dd58810d33defb622b325d3cbe49dcd7a43a902982c33e5fad05
+Pillow==11.1.0 \
+    --hash=sha256:593c5fd6be85da83656b93ffcccc2312d2d149d251e98588b14fbc288fd8909c

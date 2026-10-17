@@ -32,7 +32,11 @@ bool ValidClip(const AudioClip& clip) {
          std::isfinite(clip.duration) && clip.duration > 0 &&
          std::isfinite(clip.offset) && clip.offset >= 0 &&
          std::isfinite(clip.rate) && clip.rate > 0 && clip.rate <= 8 &&
-         std::isfinite(clip.gain) && std::isfinite(clip.start + clip.duration) &&
+         std::isfinite(clip.gain) && clip.gain >= 0 && clip.gain <= 4 &&
+         std::isfinite(clip.fade_in) && std::isfinite(clip.fade_out) &&
+         clip.fade_in >= 0 && clip.fade_out >= 0 &&
+         clip.fade_in + clip.fade_out <= clip.duration &&
+         std::isfinite(clip.start + clip.duration) &&
          std::isfinite(clip.offset + clip.duration * clip.rate);
 }
 
@@ -266,7 +270,12 @@ void MixAudio(const std::vector<AudioClip>& clips,
           const UINT32 inputChannel = window->channels == 1 ? 0 : channel;
           const float left = window->samples[first * window->channels + inputChannel];
           const float right = window->samples[second * window->channels + inputChannel];
-          const double value = (left + (right - static_cast<double>(left)) * fraction) * clip.gain;
+          const double elapsed = time - clip.start;
+          double envelope = 1.0;
+          if (clip.fade_in > 0) envelope = (std::min)(envelope, elapsed / clip.fade_in);
+          if (clip.fade_out > 0) envelope = (std::min)(envelope, (clipEnd - time) / clip.fade_out);
+          envelope = (std::clamp)(envelope, 0.0, 1.0);
+          const double value = (left + (right - static_cast<double>(left)) * fraction) * clip.gain * envelope;
           if (std::isfinite(value)) sums[static_cast<size_t>(frame - block) * 2 + channel] += value;
         }
       }

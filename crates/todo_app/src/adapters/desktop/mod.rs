@@ -16,3 +16,16 @@ pub fn project_file() -> Option<PathBuf> {
         .add_filter("工程 JSON", &["json"])
         .pick_file()
 }
+
+pub fn export_file() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .add_filter("MP4 视频", &["mp4"])
+        .set_file_name("export.mp4")
+        .save_file()
+}
+
+pub fn image_file() -> Option<PathBuf> {
+    rfd::FileDialog::new()
+        .add_filter("图片", &["png", "jpg", "jpeg", "webp", "bmp"])
+        .pick_file()
+}

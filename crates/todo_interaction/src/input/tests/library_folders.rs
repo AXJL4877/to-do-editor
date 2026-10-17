@@ -11,6 +11,8 @@ fn media(id: &str, folder_id: Option<&str>) -> MediaItem {
         width: Some(8),
         height: Some(8),
         kind: Some(MediaKind::Video),
+        alpha: None,
+        reveal: None,
         folder_id: folder_id.map(str::to_owned),
     }
 }

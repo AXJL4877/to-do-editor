@@ -1,5 +1,5 @@
 use crate::model::clip::{clip_end, Clip, ClipSource};
-use crate::model::media::MediaItem;
+use crate::model::media::{is_video_media, MediaItem};
 use crate::model::text::{TextFrame, TextStyle};
 use crate::model::track::{Track, TrackKind};
 use crate::model::Project;
@@ -68,6 +68,8 @@ pub struct ResolvedAudioClip {
     pub offset: f64,
     pub rate: f64,
     pub gain: f64,
+    pub fade_in: f64,
+    pub fade_out: f64,
 }
 
 pub fn resolve_audio_clips(project: &Project) -> Vec<ResolvedAudioClip> {
@@ -104,6 +106,22 @@ pub fn resolve_audio_clips(project: &Project) -> Vec<ResolvedAudioClip> {
             {
                 continue;
             }
+            let audio = clip.audio.unwrap_or_default();
+            let gain = if audio.gain.is_finite() {
+                audio.gain.clamp(0.0, 4.0)
+            } else {
+                1.0
+            };
+            let fade_in = if audio.fade_in.is_finite() {
+                audio.fade_in.max(0.0).min(clip.duration)
+            } else {
+                0.0
+            };
+            let fade_out = if audio.fade_out.is_finite() {
+                audio.fade_out.max(0.0).min(clip.duration)
+            } else {
+                0.0
+            };
             clips.push(ResolvedAudioClip {
                 id: clip.id.clone(),
                 path: path.clone(),
@@ -111,20 +129,24 @@ pub fn resolve_audio_clips(project: &Project) -> Vec<ResolvedAudioClip> {
                 duration: clip.duration,
                 offset: source.offset,
                 rate: source.rate,
-                gain: 1.0,
+                gain,
+                fade_in,
+                fade_out,
             });
         }
     }
     clips
 }
 
-/// Decoder budget for live preview: extra lower video layers are dropped so the
-/// topmost (covering) tracks stay visible.
-pub const MAX_VIDEO_LAYERS: usize = 4;
+/// Hardware decoder budget for live preview: layers showing video media. Extra
+/// lower ones are dropped so the topmost (covering) tracks stay visible. Stills
+/// on video tracks decode once and only count towards the total.
+pub const MAX_DECODED_LAYERS: usize = 6;
 /// Text rasters are stills with their own budget.
 pub const MAX_TEXT_LAYERS: usize = 4;
 /// Total stack size accepted by the preview protocol and native compositor.
-pub const MAX_PREVIEW_LAYERS: usize = MAX_VIDEO_LAYERS + MAX_TEXT_LAYERS;
+/// The single source for the limit; `todo_preview` and the native host mirror it.
+pub const MAX_PREVIEW_LAYERS: usize = 16;
 
 pub fn resolve_preview(
     project: &Project,
@@ -157,8 +179,9 @@ pub fn resolve_preview(
 /// Visible picture layers (text and video) at `timeline_time`, bottom → top.
 ///
 /// Earlier tracks are visually higher (they cover), so this is the reverse of
-/// track order. Over budget, the deepest layers of the exceeding kind are
-/// dropped: at most [`MAX_VIDEO_LAYERS`] video and [`MAX_TEXT_LAYERS`] text.
+/// track order. Over budget, the deepest layers of the exceeding group are
+/// dropped: at most [`MAX_DECODED_LAYERS`] decoded videos, [`MAX_TEXT_LAYERS`]
+/// text layers and [`MAX_PREVIEW_LAYERS`] layers in total.
 pub fn resolve_layers(project: &Project, timeline_time: f64) -> Vec<PreviewHit> {
     let t = timeline_time.max(0.0);
     let mut layers = Vec::new();
@@ -170,24 +193,53 @@ pub fn resolve_layers(project: &Project, timeline_time: f64) -> Vec<PreviewHit> 
             layers.push(hit);
         }
     }
-    for (kind, cap) in [
-        (TrackKind::Video, MAX_VIDEO_LAYERS),
-        (TrackKind::Text, MAX_TEXT_LAYERS),
-    ] {
-        let mut excess = layers
-            .iter()
-            .filter(|hit| hit.track_kind == kind)
-            .count()
-            .saturating_sub(cap);
-        layers.retain(|hit| {
-            if excess > 0 && hit.track_kind == kind {
-                excess -= 1;
-                return false;
-            }
-            true
-        });
-    }
+    let decoded = |hit: &PreviewHit| hit.media().is_some_and(is_video_media);
+    let text = |hit: &PreviewHit| hit.track_kind == TrackKind::Text;
+    let any = |_: &PreviewHit| true;
+    drop_deepest(&mut layers, MAX_DECODED_LAYERS, decoded);
+    drop_deepest(&mut layers, MAX_TEXT_LAYERS, text);
+    drop_deepest(&mut layers, MAX_PREVIEW_LAYERS, any);
     layers
+}
+
+/// Exact layer stack for export. Unlike live preview this does not silently
+/// drop decoded-video or text layers; callers get an actionable error when the
+/// composition exceeds the protocol's hard 16-layer limit.
+pub fn export_layers(project: &Project, timeline_time: f64) -> Result<Vec<PreviewHit>, String> {
+    let t = timeline_time.max(0.0);
+    let mut layers = Vec::new();
+    for track in project.tracks.iter().rev() {
+        if track.muted || !track.kind.is_visual() {
+            continue;
+        }
+        if let Some(hit) = hit_on_track(project, track, t) {
+            layers.push(hit);
+        }
+    }
+    if layers.len() > MAX_PREVIEW_LAYERS {
+        return Err(format!(
+            "export frame has {} visual layers; maximum is {}",
+            layers.len(),
+            MAX_PREVIEW_LAYERS
+        ));
+    }
+    Ok(layers)
+}
+
+/// Keep at most `cap` matching layers of a bottom → top stack, dropping the deepest.
+fn drop_deepest(layers: &mut Vec<PreviewHit>, cap: usize, matches: impl Fn(&PreviewHit) -> bool) {
+    let mut excess = layers
+        .iter()
+        .filter(|hit| matches(hit))
+        .count()
+        .saturating_sub(cap);
+    layers.retain(|hit| {
+        if excess > 0 && matches(hit) {
+            excess -= 1;
+            return false;
+        }
+        true
+    });
 }
 
 fn hit_on_track(project: &Project, track: &Track, t: f64) -> Option<PreviewHit> {

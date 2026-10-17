@@ -2,6 +2,7 @@ mod control;
 mod dispatch;
 mod events;
 mod lifecycle;
+mod productions;
 
 use crate::media_jobs::MediaJobs;
 use crate::*;
@@ -65,6 +66,7 @@ pub struct Workspace {
     raster_jobs: HashMap<Ticket, String>,
     /// Virtual folder that receives the in-flight import (`None` = library root).
     import_folder_id: Option<String>,
+    productions: productions::Productions,
 }
 
 impl Default for Workspace {
@@ -87,6 +89,7 @@ impl Default for Workspace {
             control: Default::default(),
             raster_jobs: HashMap::new(),
             import_folder_id: None,
+            productions: Default::default(),
         }
     }
 }
@@ -132,6 +135,10 @@ impl Workspace {
     }
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+    /// Allocate a ticket for an adapter-created media task.
+    pub fn media_ticket(&mut self) -> Ticket {
+        self.ticket()
     }
     /// Target folder for the next / current media import (`None` = root).
     pub fn set_import_folder(&mut self, folder_id: Option<String>) {

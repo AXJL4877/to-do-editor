@@ -2,6 +2,23 @@
 use super::*;
 use todo_interaction::MediaKind;
 
+fn proxyable_video(media: &todo_application::MediaItem) -> bool {
+    if media.kind == Some(MediaKind::Video) {
+        return true;
+    }
+    media.kind.is_none()
+        && media.path.as_deref().is_some_and(|path| {
+            matches!(
+                std::path::Path::new(path)
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext.to_ascii_lowercase())
+                    .as_deref(),
+                Some("mp4" | "mov" | "mkv" | "webm" | "avi" | "m4v" | "wmv" | "mpeg" | "mpg")
+            )
+        })
+}
+
 impl App {
     pub(super) fn sync_edit_proxies(&mut self, ctx: &egui::Context) {
         let identity = self
@@ -17,7 +34,7 @@ impl App {
                         .project()
                         .media
                         .iter()
-                        .filter(|media| matches!(media.kind, None | Some(MediaKind::Video)))
+                        .filter(|media| proxyable_video(media))
                         .filter_map(|media| media.path.clone())
                         .collect()
                 })

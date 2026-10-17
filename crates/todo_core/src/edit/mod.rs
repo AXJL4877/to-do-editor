@@ -4,6 +4,7 @@ mod command;
 pub mod delete_clips;
 pub mod delete_track;
 mod edge;
+pub mod generated;
 pub mod library;
 pub mod move_clip;
 pub mod move_clips;
@@ -27,6 +28,9 @@ pub use command::{execute_edit, EditCommand};
 pub use delete_clips::delete_clips;
 pub use delete_track::delete_track;
 pub use edge::{stretch_clips, trim_clips};
+pub use generated::{
+    apply_generated, Anchor, GeneratedClip, GeneratedEdit, GeneratedSource, LaneHint,
+};
 pub use move_clip::move_clip;
 pub use move_clips::move_clips;
 pub use paste::{paste_clips, CopiedClip};

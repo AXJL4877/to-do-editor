@@ -13,23 +13,26 @@ pub use edit::project::{
     MAX_OUTPUT_EDGE, MIN_FPS,
 };
 pub use edit::tracks::{
-    add_track, can_move_track_down, can_move_track_up, cleanup_empty_tracks, ensure_av_tracks,
-    ensure_track_sections, insert_track_below, move_track, set_track_locked, set_track_muted,
+    add_track, can_move_track_down, can_move_track_up, cleanup_empty_tracks, compact_tracks,
+    ensure_av_tracks, ensure_track_sections, insert_track_below, move_track, set_track_locked,
+    set_track_muted,
 };
 pub use edit::{
-    add_clip, add_imported_video, add_text, default_clip_id, delete_clips, delete_track,
-    execute_edit, is_split_piece, move_clip, move_clips, paste_clips, place_media,
+    add_clip, add_imported_video, add_text, apply_generated, default_clip_id, delete_clips,
+    delete_track, execute_edit, is_split_piece, move_clip, move_clips, paste_clips, place_media,
     place_media_range, razor, razor_clips, seek, set_text, stretch, stretch_clips, trim,
-    trim_clips, validate_project, CopiedClip, EditCommand, TrimEdge,
+    trim_clips, validate_project, Anchor, CopiedClip, EditCommand, GeneratedClip, GeneratedEdit,
+    GeneratedSource, LaneHint, TrimEdge,
 };
 pub use error::DomainError;
 pub use model::clip::{
     clip_end, normalize_clip, source_span, text_clip, MAX_CLIP_RATE, MIN_CLIP_DURATION,
     MIN_CLIP_RATE,
 };
+pub use model::effects::{intro_at, picture_transform};
 pub use model::media::{
-    is_image_media, is_video_media, is_visual_media, media_kind, place_duration,
-    DEFAULT_STILL_DURATION_SECS,
+    is_image_media, is_video_media, is_visual_media, media_kind, place_duration, RevealHand,
+    RevealInfo, DEFAULT_STILL_DURATION_SECS,
 };
 pub use model::project::{
     create_project, DEFAULT_OUTPUT_HEIGHT, DEFAULT_OUTPUT_WIDTH, DEFAULT_WORKSPACE_SECS,
@@ -40,15 +43,17 @@ pub use model::text::{
 };
 pub use model::track::create_default_tracks;
 pub use model::{
-    Clip, ClipSource, ClipTransform, FontRef, MediaFolder, MediaItem, MediaKind, MediaScaleMode,
-    MediaSource, Project, TextAlign, TextAnimation, TextColor, TextContent, TextErode, TextFrame,
-    TextIntro, TextLayer, TextLayerKind, TextLayout, TextPaint, TextStyle, Track, TrackKind,
+    AlphaPacking, Clip, ClipAudio, ClipOrigin, ClipSource, ClipTransform, FontRef, Intro,
+    IntroKind, IntroSample, MediaFolder, MediaItem, MediaKind, MediaScaleMode, MediaSource,
+    Project, TextAlign, TextAnimation, TextColor, TextContent, TextErode, TextFrame, TextIntro,
+    TextLayer, TextLayerKind, TextLayout, TextPaint, TextStyle, Track, TrackKind,
 };
 pub use query::project::{content_duration, project_duration, timeline_extent, workspace_duration};
 pub use query::{
-    can_move_clips, can_place_media, clip_display_name, find_clip, linked_clip_ids,
-    resolve_audio_clips, resolve_layers, resolve_preview, FoundClip, HitSource, PreviewHit,
-    ResolvedAudioClip, MAX_PREVIEW_LAYERS, MAX_TEXT_LAYERS, MAX_VIDEO_LAYERS,
+    can_move_clips, can_place_media, clip_display_name, export_layers, find_clip, linked_clip_ids,
+    resolve_audio_clips, resolve_layers, resolve_preview, reveal_frame, reveal_hand, FoundClip,
+    HandLayer, HitSource, PreviewHit, ResolvedAudioClip, RevealFrame, MAX_DECODED_LAYERS,
+    MAX_PREVIEW_LAYERS, MAX_TEXT_LAYERS,
 };
 pub use transform::{BaseSize, Transform, TransformBounds};
 
@@ -78,7 +83,9 @@ mod tests {
             height: Some(1080),
             kind: None,
             folder_id: None,
-});
+            alpha: None,
+            reveal: None,
+        });
         p = add_clip(
             p,
             "v1",
@@ -104,7 +111,9 @@ mod tests {
             height: Some(1080),
             kind: None,
             folder_id: None,
-});
+            alpha: None,
+            reveal: None,
+        });
         p = add_clip(
             p,
             "v1",
@@ -130,7 +139,9 @@ mod tests {
             height: None,
             kind: None,
             folder_id: None,
-});
+            alpha: None,
+            reveal: None,
+        });
         p = add_clip(
             p,
             "v1",
@@ -171,7 +182,9 @@ mod tests {
                 height: Some(720),
                 kind: Some(MediaKind::Video),
                 folder_id: None,
-});
+                alpha: None,
+                reveal: None,
+            });
         }
         // tracks[0]=v1 is visually highest; insert_track_below pushes later tracks lower.
         p = insert_track_below(p, "v1").unwrap();
@@ -214,13 +227,13 @@ mod tests {
             "top"
         );
 
-        // Over budget: keep topmost MAX_VIDEO_LAYERS (drop deepest layers).
+        // Over budget: keep topmost MAX_DECODED_LAYERS (drop deepest videos).
         while p
             .tracks
             .iter()
             .filter(|t| t.kind == TrackKind::Video)
             .count()
-            < MAX_VIDEO_LAYERS + 2
+            < MAX_DECODED_LAYERS + 2
         {
             p = insert_track_below(p, "v1").unwrap();
         }
@@ -252,7 +265,9 @@ mod tests {
                 height: Some(64),
                 kind: Some(MediaKind::Video),
                 folder_id: None,
-});
+                alpha: None,
+                reveal: None,
+            });
             p = add_clip(
                 p,
                 track_id,
@@ -260,7 +275,7 @@ mod tests {
             );
         }
         let capped = resolve_layers(&p, 1.0);
-        assert_eq!(capped.len(), MAX_VIDEO_LAYERS);
+        assert_eq!(capped.len(), MAX_DECODED_LAYERS);
         assert_eq!(capped.last().unwrap().clip.id, "top");
     }
 
@@ -439,7 +454,9 @@ mod tests {
                 height: Some(720),
                 kind: None,
                 folder_id: None,
-},
+                alpha: None,
+                reveal: None,
+            },
             "vc".into(),
             "ac".into(),
         );
@@ -462,7 +479,9 @@ mod tests {
                 height: None,
                 kind: None,
                 folder_id: None,
-},
+                alpha: None,
+                reveal: None,
+            },
             "vc2".into(),
             "ac2".into(),
         );
@@ -484,7 +503,9 @@ mod tests {
             height: Some(1080),
             kind: None,
             folder_id: None,
-});
+            alpha: None,
+            reveal: None,
+        });
         p
     }
 }

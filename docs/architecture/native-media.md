@@ -61,3 +61,33 @@ FFprobe 元数据输出限制为 4 MiB。静态图片默认停留 5 秒；MJPEG 
 - 既有 C++/Media Foundation 原生预览保持原生渲染链路，本轮替换的是 Node 媒体服务。
 
 旧后端原文件已可恢复地移到忽略目录 target/retired-node-backend，作为迁移留存，不参与构建、启动、测试或打包。历史报告保留当时的架构描述。
+
+## AI 产物媒体格式
+
+`todo_media::encode_frames` 可把 PNG 序列编码成 packed-alpha 视频：颜色帧在上半部，灰度
+alpha 在下半部，视频 metadata 使用 `todo_alpha=stacked`。编码前会对透明像素做有限次数的
+RGB 外扩，避免 yuv420p 在边缘产生暗边；取消使用共享进程监督器，输出失败不会留下临时序列。
+
+`todo_media::write_reveal` / `read_reveal` 是 `todo-reveal/1` 的唯一 Rust 编解码入口。文件
+宽度为 `2W`，左半是最终 RGBA，右半是逐像素时间与柔化宽度；完整 JSON 放在 `todo-reveal`
+的 PNG `tEXt` 块中。探测 `.reveal.png` 时使用元数据里的显示尺寸和时长，不把右半误报成画面。
+
+`todo_media::compose_reveal` 是导出与原生着色器共用语义的 CPU 参考实现：按 R/G 解码
+16 位出现时间，按 B 解码柔化边缘，并把参与位与最终 straight-alpha 相乘。编码完成后，
+`encode_frames` 会在发布前用 FFprobe 校验视频尺寸、帧数和 `todo_alpha=stacked` 容器标签；
+校验失败会删除输出。`todo_media::inspect_quality` / `write_report` 可将帧率、时长、音视频
+时长差和编码流信息写成 `<output>.report.json`，响度和 PSNR 在没有参考帧时明确列为未测量。
+
+`preview_host.exe --render` 使用行协议：`begin <width> <height>`，随后每帧发送
+`layers-begin`、若干 `layer <kind> <time> <x> <y> <scale> <scale-x> <scale-y> <opacity> <path>`、
+`layers-commit`，最后发送 `end`。每个 commit 严格输出一张 `width × height × 4` 的 BGRA
+二进制帧；空层仍输出清屏帧。离线路径会用 WIC 解码 PNG，按 `kind=image|reveal|packed` 选择
+整图、左半 reveal 或上下 packed-alpha，并按层序做预乘 alpha 合成。输入缺少 begin、层行不完整
+或在 begin 前提交会以错误码退出；缺失或不可访问的盘符在初始化 GPU/MF 前快速拒绝。
+
+离线渲染保留最多 `VideoEngine::kMaxLayers` 个解码槽，按媒体路径而不是图层下标复用；图层
+重排不会重开相同文件，同一路径在同一帧出现多次时仍使用不同槽位。Rust 入口是
+`todo_preview::OfflineRenderer`，负责子进程生命周期、完整帧读回和取消时的 kill + wait。
+
+窗口预览的 `layer` 行同样带有显式 `kind=video|image|packed|reveal|text` 字段，application
+从 `MediaItem`（packed 会携带 `alpha: stacked`）生成它；native 不再根据扩展名猜测层类型。

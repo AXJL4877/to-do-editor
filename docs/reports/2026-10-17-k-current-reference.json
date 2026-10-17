@@ -1,0 +1,28 @@
+{
+  "source": "D:\\desktop\\to_do\\target\\offline-workflow\\data\\e2e\\productions\\p65ef3f32969d\\production.json",
+  "times": [
+    0.0,
+    1.3455,
+    2.6909,
+    4.0364,
+    5.3818
+  ],
+  "visualKeys": [
+    "intro_red",
+    "shot/0/character",
+    "shot/0/prop",
+    "shot/0/bubble",
+    "sub/0",
+    "shot/1/character",
+    "shot/1/prop",
+    "shot/1/bubble",
+    "shot/1/wipe",
+    "sub/1",
+    "shot/2/character",
+    "shot/2/prop",
+    "shot/2/bubble",
+    "shot/2/wipe",
+    "sub/2"
+  ],
+  "legacyComparison": "pending legacy screenshots"
+}

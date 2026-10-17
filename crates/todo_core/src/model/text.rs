@@ -339,9 +339,9 @@ pub fn builtin_text_styles() -> Vec<TextStyle> {
             id: DEFAULT_TEXT_STYLE_ID.into(),
             name: "做旧红字·灰重影".into(),
             font: FontRef {
-                family: "字魂剑气手书".into(),
-                file: "zihun-jianqi-shoushu.ttf".into(),
-                fallbacks: vec!["msyhbd.ttc".into(), "msyh.ttc".into()],
+                family: "思源宋 Heavy".into(),
+                file: "source-han-serif-sc-heavy.ttf".into(),
+                fallbacks: vec!["noto-sans-sc-bold.otf".into()],
             },
             layers: vec![
                 layer(
@@ -385,9 +385,9 @@ pub fn builtin_text_styles() -> Vec<TextStyle> {
             id: "clean-white-outline".into(),
             name: "白字黑描边".into(),
             font: FontRef {
-                family: "微软雅黑".into(),
-                file: "msyhbd.ttc".into(),
-                fallbacks: vec!["msyh.ttc".into()],
+                family: "Noto Sans SC Bold".into(),
+                file: "noto-sans-sc-bold.otf".into(),
+                fallbacks: vec!["source-han-serif-sc-heavy.ttf".into()],
             },
             layers: vec![
                 layer(

@@ -1,5 +1,5 @@
 //! Pure track management; creating an empty track never performs cleanup.
-use crate::{DomainError, Project, Track, TrackKind};
+use crate::{clip_end, DomainError, Project, Track, TrackKind};
 
 /// Stable partition: Text block → Video block → Audio block → Sfx block.
 /// Relative order inside each kind is preserved.
@@ -93,7 +93,7 @@ pub fn can_move_track_down(project: &Project, track_id: &str) -> bool {
     index + 1 < project.tracks.len() && project.tracks[index + 1].kind == project.tracks[index].kind
 }
 
-fn empty_track(project: &Project, kind: TrackKind, unique_name: bool) -> Track {
+pub(super) fn empty_track(project: &Project, kind: TrackKind, unique_name: bool) -> Track {
     let (prefix, label) = match kind {
         TrackKind::Text => ("t", "文字"),
         TrackKind::Video => ("v", "视频"),
@@ -156,6 +156,89 @@ pub fn cleanup_empty_tracks(project: Project) -> Project {
         false
     });
     ensure_track_sections(project)
+}
+
+const COMPACT_EPSILON: f64 = 1e-7;
+
+fn can_share_track(clip: &crate::Clip, existing: &[crate::Clip]) -> bool {
+    existing.iter().all(|other| {
+        clip.start >= clip_end(other) - COMPACT_EPSILON
+            || clip_end(clip) <= other.start + COMPACT_EPSILON
+    })
+}
+
+/// Pack clips from adjacent unlocked tracks into the fewest compatible tracks.
+///
+/// The operation is deliberately conservative: locked tracks and mute state are
+/// barriers, and clips are processed in their existing top-to-bottom track
+/// order. Overlapping clips therefore retain their visual/audio order while
+/// non-overlapping clips can share a track. Track ids and the metadata of the
+/// first surviving tracks are preserved so this remains a normal undoable edit.
+pub fn compact_tracks(mut project: Project) -> Project {
+    project = ensure_track_sections(project);
+    let original = std::mem::take(&mut project.tracks);
+    let mut compacted = Vec::with_capacity(original.len());
+    let mut index = 0;
+
+    while index < original.len() {
+        if original[index].locked {
+            compacted.push(original[index].clone());
+            index += 1;
+            continue;
+        }
+        let kind = original[index].kind;
+        let muted = original[index].muted;
+        let mut end = index + 1;
+        while end < original.len()
+            && !original[end].locked
+            && original[end].kind == kind
+            && original[end].muted == muted
+        {
+            end += 1;
+        }
+
+        let run = &original[index..end];
+        let mut slots: Vec<Vec<crate::Clip>> = vec![Vec::new(); run.len()];
+        let mut possible = true;
+        for track in run {
+            let mut clips = track.clips.clone();
+            clips.sort_by(|a, b| a.start.total_cmp(&b.start));
+            for clip in clips {
+                let Some(slot) = slots
+                    .iter()
+                    .position(|existing| can_share_track(&clip, existing))
+                else {
+                    possible = false;
+                    break;
+                };
+                slots[slot].push(clip);
+            }
+            if !possible {
+                break;
+            }
+        }
+
+        if !possible {
+            // A malformed or unusually constrained legacy layout should remain
+            // untouched rather than risk changing an overlap relationship.
+            compacted.extend(run.iter().cloned());
+        } else {
+            let used = slots
+                .iter()
+                .rposition(|clips| !clips.is_empty())
+                .map_or(0, |last| last + 1);
+            for (track, mut clips) in run.iter().take(used).cloned().zip(slots) {
+                let mut track = track;
+                clips.sort_by(|a, b| a.start.total_cmp(&b.start));
+                track.clips = clips;
+                compacted.push(track);
+            }
+        }
+        index = end;
+    }
+
+    project.tracks = compacted;
+    ensure_av_tracks(project)
 }
 
 pub fn set_track_locked(mut project: Project, track_id: &str, locked: bool) -> Project {

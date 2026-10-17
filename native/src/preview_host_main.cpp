@@ -12,6 +12,11 @@
 #include <thread>
 #include <sstream>
 #include <vector>
+#include <unordered_map>
+#include <io.h>
+#include <fcntl.h>
+#include <wincodec.h>
+#include <wrl/client.h>
 
 #include "video.h"
 #include "presenter.h"
@@ -36,6 +41,8 @@ static bool g_audio_configuring = false;
 static std::vector<LayerSpec> g_pending_layers;
 static bool g_layers_configuring = false;
 
+static LayerLook LookOf(VideoFrame::Kind kind, double time, double soft);
+
 static bool PresentStack() {
   if (!g_popup || !g_frames || g_frames->empty()) {
     if (g_popup) g_presenter.clear();
@@ -43,13 +50,16 @@ static bool PresentStack() {
   }
   std::vector<DecoderFrame> frames;
   std::vector<VisualTransform> transforms;
+  std::vector<LayerLook> looks;
   frames.reserve(g_frames->size());
   transforms.reserve(g_frames->size());
+  looks.reserve(g_frames->size());
   for (const auto& item : *g_frames) {
     frames.push_back(item.frame);
     transforms.push_back(item.transform);
+    looks.push_back(LookOf(item.kind, item.target, item.soft));
   }
-  return g_presenter.presentLayers(frames.data(), transforms.data(), frames.size());
+  return g_presenter.presentLayers(frames.data(), transforms.data(), frames.size(), looks.data());
 }
 static constexpr wchar_t kClassName[] = L"TodoPreviewHost";
 static constexpr wchar_t kMsgClass[] = L"TodoPreviewMsg";
@@ -320,7 +330,7 @@ static void CmdPath(const std::string& arg, uint64_t generation = 0, bool tagged
   g_presenter.setGuides({});
   VisualTransform transform;
   g_presenter.setTransform(transform);
-  g_video.setLayers({LayerSpec{g_media_path, g_seek_sec, transform}}, generation);
+  g_video.setLayers({LayerSpec{VideoFrame::Kind::Video, g_media_path, g_seek_sec, transform}}, generation);
   if (g_popup) g_presenter.clear();
 }
 
@@ -344,7 +354,7 @@ static void CmdTransform(const std::string& arg) {
   if (!ParseVisualTransform(arg, transform) || !g_presenter.setTransform(transform)) return;
   // Prefer updating the live single-source stack so decode textures are reused.
   if (!g_media_path.empty()) {
-    g_video.setLayers({LayerSpec{g_media_path, g_seek_sec, transform}}, g_source_generation);
+  g_video.setLayers({LayerSpec{VideoFrame::Kind::Video, g_media_path, g_seek_sec, transform}}, g_source_generation);
     return;
   }
   if (g_popup && g_frames && g_frames->size() == 1) {
@@ -384,18 +394,79 @@ static bool Utf8ToWide(const std::string& text, std::wstring* out) {
   return true;
 }
 
+// `<kind> <time> <x> <y> <scale> <scale_x> <scale_y> <opacity> <path>`; shared by
+// the window preview and the offline renderer.
+static bool ParseLayer(const std::string& arg, LayerSpec* out) {
+  LayerSpec layer;
+  std::istringstream input(arg);
+  std::string kind;
+  if (!(input >> kind >> layer.time >> layer.transform.x >> layer.transform.y >> layer.transform.scale >>
+        layer.transform.scale_x >> layer.transform.scale_y >> layer.transform.opacity))
+    return false;
+  if (kind == "video") layer.kind = VideoFrame::Kind::Video;
+  else if (kind == "image") layer.kind = VideoFrame::Kind::Image;
+  else if (kind == "packed") layer.kind = VideoFrame::Kind::Packed;
+  else if (kind.rfind("reveal", 0) == 0) {
+    // `reveal:<soft>`; the media time is the progress 0..1.
+    layer.kind = VideoFrame::Kind::Reveal;
+    if (kind.size() > 7 && kind[6] == ':') {
+      try {
+        layer.soft = std::stod(kind.substr(7));
+      } catch (...) {
+        return false;
+      }
+    }
+    if (!std::isfinite(layer.soft) || layer.soft < 0) return false;
+  } else if (kind == "text") layer.kind = VideoFrame::Kind::Text;
+  else return false;
+  if (!std::isfinite(layer.time) || layer.time < 0 || !layer.transform.valid()) return false;
+  std::string path;
+  std::getline(input >> std::ws, path);
+  if (!Utf8ToWide(path, &layer.path) || layer.path.empty()) return false;
+  *out = std::move(layer);
+  return true;
+}
+
+static LayerLook LookOf(VideoFrame::Kind kind, double time, double soft) {
+  LayerLook look;
+  if (kind == VideoFrame::Kind::Packed) look.packing = LayerPacking::Packed;
+  if (kind == VideoFrame::Kind::Reveal) {
+    look.packing = LayerPacking::Reveal;
+    look.progress = static_cast<float>(time);
+    look.soft = static_cast<float>(soft);
+  }
+  return look;
+}
+
 static void CmdLayer(const std::string& arg) {
   if (!g_layers_configuring || g_pending_layers.size() >= VideoEngine::kMaxLayers) return;
   LayerSpec layer;
-  std::istringstream input(arg);
-  if (!(input >> layer.time >> layer.transform.x >> layer.transform.y >> layer.transform.scale >>
-        layer.transform.scale_x >> layer.transform.scale_y >> layer.transform.opacity))
-    return;
-  if (!std::isfinite(layer.time) || layer.time < 0 || !layer.transform.valid()) return;
-  std::string path;
-  std::getline(input >> std::ws, path);
-  if (!Utf8ToWide(path, &layer.path) || layer.path.empty()) return;
-  g_pending_layers.push_back(std::move(layer));
+  if (ParseLayer(arg, &layer)) g_pending_layers.push_back(std::move(layer));
+}
+
+static bool RenderPathAvailable(const std::wstring& path) {
+  bool available = true;
+  // Querying a disconnected drive can block while the shell retries the
+  // device. The logical-drive bitmask is immediate and lets the protocol
+  // reject that case before Media Foundation or D3D is initialized.
+  if (path.size() >= 3 && path[1] == L':' && (path[2] == L'\\' || path[2] == L'/')) {
+    wchar_t drive = path[0];
+    if (drive >= L'a' && drive <= L'z') drive = static_cast<wchar_t>(drive - L'a' + L'A');
+    const DWORD logical_drives = GetLogicalDrives();
+    available = drive >= L'A' && drive <= L'Z' && logical_drives != 0 &&
+                (logical_drives & (1u << (drive - L'A'))) != 0;
+    if (available) {
+      wchar_t root[] = {drive, L':', L'\\', L'\0'};
+      // A mapped network drive may be present in the bitmask while its server
+      // is offline. Treat it as unavailable for the synchronous render
+      // protocol rather than blocking on a network filesystem probe.
+      const UINT drive_type = GetDriveTypeW(root);
+      available = drive_type != DRIVE_REMOTE && drive_type != DRIVE_NO_ROOT_DIR;
+    }
+  }
+  if (!available) return false;
+  const DWORD attributes = GetFileAttributesW(path.c_str());
+  return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
 }
 
 static void CmdLayersCommit() {
@@ -433,11 +504,13 @@ static void CmdAudioClip(const std::string& arg) {
   if (!g_audio_configuring || g_pending_audio.size() >= 4096) return;
   AudioClip clip;
   std::istringstream input(arg);
-  if (!(input >> clip.start >> clip.duration >> clip.offset >> clip.rate >> clip.gain)) return;
+  if (!(input >> clip.start >> clip.duration >> clip.offset >> clip.rate >> clip.gain >> clip.fade_in >> clip.fade_out)) return;
   if (!std::isfinite(clip.start) || !std::isfinite(clip.duration) ||
       !std::isfinite(clip.offset) || !std::isfinite(clip.rate) || !std::isfinite(clip.gain) ||
+      !std::isfinite(clip.fade_in) || !std::isfinite(clip.fade_out) ||
       clip.start < 0 || clip.duration <= 0 || clip.offset < 0 ||
-      clip.rate < 0.1 || clip.rate > 8 || clip.gain < 0 || clip.gain > 4) return;
+      clip.rate < 0.1 || clip.rate > 8 || clip.gain < 0 || clip.gain > 4 ||
+      clip.fade_in < 0 || clip.fade_out < 0 || clip.fade_in + clip.fade_out > clip.duration) return;
   std::string path;
   std::getline(input >> std::ws, path);
   const int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path.data(),
@@ -508,7 +581,10 @@ static LRESULT CALLBACK MsgWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     const auto& top = g_frames->back();
     D3D11_TEXTURE2D_DESC texture{};
     top.frame.texture->GetDesc(&texture);
-    const auto geometry = DecodedFrameDisplayGeometry(top.frame, texture.Width, texture.Height);
+    auto geometry = DecodedFrameDisplayGeometry(top.frame, texture.Width, texture.Height);
+    // The reported aspect is the picture's, not the packed texture's.
+    if (geometry && top.kind == VideoFrame::Kind::Reveal) geometry->aspect /= 2.0;
+    if (geometry && top.kind == VideoFrame::Kind::Packed) geometry->aspect *= 2.0;
     if (top.topmost && geometry &&
         (!g_reported_source_aspect || *g_reported_source_aspect != geometry->aspect)) {
       g_reported_source_aspect = geometry->aspect;
@@ -566,6 +642,179 @@ static LRESULT CALLBACK MsgWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
   return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+// Offline export renderer: the same decoders, layer protocol and shaders as the
+// window preview, drawn offscreen. stdin:
+//   begin <width> <height>
+//   layers-begin / layer ... / layers-commit   (one frame; may be empty)
+//   end
+// Every commit writes width*height*4 BGRA bytes to stdout; frames are decoded
+// exactly (never an approximate scrub frame).
+static int RenderMain() {
+  CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  _setmode(_fileno(stdout), _O_BINARY);
+  int result = 0;
+  {
+    HwDecoder shared;
+    GpuPresenter presenter;
+    // Keep a bounded pool of decoder slots, but assign them by source path
+    // instead of layer index. Timeline layers can be reordered between frames;
+    // keeping the decoder with its source avoids reopening the same media and
+    // preserves the per-slot frame lease needed when two layers share a path.
+    std::vector<std::unique_ptr<HwDecoder>> slots(VideoEngine::kMaxLayers);
+    std::vector<std::wstring> opened(VideoEngine::kMaxLayers);
+    std::vector<uint64_t> last_used(VideoEngine::kMaxLayers, 0);
+    uint64_t frame_serial = 0;
+    std::vector<LayerSpec> layers;
+    std::vector<unsigned char> pixels;
+    int render_width = 0;
+    int render_height = 0;
+    bool device_ready = false;
+    bool began = false, configuring = false, ended = false;
+    std::string line;
+    while (std::getline(std::cin, line)) {
+      if (!line.empty() && line.back() == '\r') line.pop_back();
+      if (line.rfind("begin ", 0) == 0) {
+        std::istringstream input(line.substr(6));
+        int width = 0, height = 0;
+        if (!(input >> width >> height) || width < 2 || height < 2 || width > 8192 || height > 8192 ||
+            (device_ready && !presenter.bindOffscreen(shared.device(), shared.context(), width, height))) {
+          std::fputs("render: invalid begin\n", stderr);
+          result = 5;
+          break;
+        }
+        render_width = width;
+        render_height = height;
+        began = true;
+      } else if (line == "layers-begin") {
+        layers.clear();
+        configuring = true;
+      } else if (line.rfind("layer ", 0) == 0) {
+        LayerSpec layer;
+        if (!configuring || layers.size() >= VideoEngine::kMaxLayers || !ParseLayer(line.substr(6), &layer)) {
+          std::fputs("render: invalid layer\n", stderr);
+          result = 4;
+          break;
+        }
+        layers.push_back(std::move(layer));
+      } else if (line == "layers-commit") {
+        if (!began || !configuring) {
+          std::fputs("render: frame before begin\n", stderr);
+          result = 2;
+          break;
+        }
+        configuring = false;
+        ++frame_serial;
+        // Do cheap path validation before creating the GPU device. Besides
+        // producing a prompt diagnostic, this keeps a disconnected drive from
+        // consuming the renderer's startup/cancellation budget.
+        for (size_t i = 0; i < layers.size(); ++i) {
+          if (!RenderPathAvailable(layers[i].path)) {
+            std::fprintf(stderr, "render: cannot open layer %zu\n", i);
+            result = 3;
+            break;
+          }
+        }
+        if (result != 0) break;
+        if (!device_ready) {
+          if (!shared.prepareDevice() ||
+              !presenter.bindOffscreen(shared.device(), shared.context(), render_width, render_height)) {
+            std::fputs("render: cannot create the GPU device\n", stderr);
+            result = 7;
+            break;
+          }
+          device_ready = true;
+        }
+        std::vector<DecoderFrame> frames;
+        std::vector<VisualTransform> transforms;
+        std::vector<LayerLook> looks;
+        std::vector<bool> used(VideoEngine::kMaxLayers, false);
+        bool ok = true;
+        for (size_t i = 0; i < layers.size() && ok; ++i) {
+          const auto& layer = layers[i];
+          size_t slot = VideoEngine::kMaxLayers;
+          // Prefer an existing decoder for this path that has not already been
+          // claimed by another occurrence in the current layer stack.
+          for (size_t candidate = 0; candidate < slots.size(); ++candidate) {
+            if (!used[candidate] && slots[candidate] && opened[candidate] == layer.path) {
+              slot = candidate;
+              break;
+            }
+          }
+          if (slot == VideoEngine::kMaxLayers) {
+            // Reuse an empty slot first, then evict the least recently used
+            // slot that is not needed by this frame.
+            for (size_t candidate = 0; candidate < slots.size(); ++candidate) {
+              if (!used[candidate] && !slots[candidate]) {
+                slot = candidate;
+                break;
+              }
+            }
+          }
+          if (slot == VideoEngine::kMaxLayers) {
+            uint64_t oldest = UINT64_MAX;
+            for (size_t candidate = 0; candidate < slots.size(); ++candidate) {
+              if (!used[candidate] && last_used[candidate] < oldest) {
+                oldest = last_used[candidate];
+                slot = candidate;
+              }
+            }
+          }
+          if (slot == VideoEngine::kMaxLayers) {
+            std::fputs("render: decoder slot allocation failed\n", stderr);
+            ok = false;
+            break;
+          }
+          auto& decoder = slots[slot];
+          if (!decoder || opened[slot] != layer.path) {
+            decoder = std::make_unique<HwDecoder>();
+            if (!decoder->attachDevice(shared.device(), shared.context(), shared.dxgiManager(),
+                                       shared.resetToken()) ||
+                !decoder->open(layer.path.c_str())) {
+              std::fprintf(stderr, "render: cannot open layer %zu\n", i);
+              ok = false;
+              break;
+            }
+            opened[slot] = layer.path;
+          }
+          used[slot] = true;
+          last_used[slot] = frame_serial;
+          // A reveal's time is its progress; the atlas itself is a still.
+          const double at = decoder->isStill() ? 0.0 : layer.time;
+          double served = at;
+          const SeekResult seek = decoder->seek(at, SeekControl{}, &served);
+          if (seek != SeekResult::Exact || !decoder->frame()) {
+            std::fprintf(stderr, "render: cannot decode layer %zu at %.6f\n", i, layer.time);
+            ok = false;
+            break;
+          }
+          frames.push_back(*decoder->frame());
+          transforms.push_back(layer.transform);
+          looks.push_back(LookOf(layer.kind, layer.time, layer.soft));
+        }
+        if (!ok || !presenter.renderOffscreen(frames.data(), transforms.data(), frames.size(), looks.data(),
+                                              &pixels)) {
+          if (ok) std::fputs("render: drawing failed\n", stderr);
+          result = 3;
+          break;
+        }
+        std::cout.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
+        std::cout.flush();
+        if (!std::cout) {
+          result = 8;
+          break;
+        }
+      } else if (line == "end") {
+        ended = true;
+        break;
+      }
+    }
+    if (result == 0 && !began) result = 5;
+    if (result == 0 && !ended) result = 6;
+  }
+  CoUninitialize();
+  return result;
+}
+
 static void StdinLoop() {
   std::string line;
   for (;;) {
@@ -581,7 +830,8 @@ static void StdinLoop() {
   if (g_msg) PostMessageW(g_msg, WM_NATIVE_EOF, 0, 0);
 }
 
-int main() {
+int main(int argc, char** argv) {
+  if (argc > 1 && std::string(argv[1]) == "--render") return RenderMain();
   // Match Electron's Per-Monitor V2 awareness. An unaware process gets
   // virtualized coordinates, so the child HWND lands offset from the UI.
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);

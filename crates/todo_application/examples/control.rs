@@ -14,7 +14,9 @@ fn main() {
         height: Some(1080),
         kind: Some(MediaKind::Video),
         folder_id: None,
-};
+        alpha: None,
+        reveal: None,
+    };
     let project = create_project(Some(30.0), None, None, Some(vec![media]), None);
     let mut workspace = Workspace::with_project(project, "shared-control-demo");
     let context = workspace.control_context().unwrap();

@@ -16,8 +16,8 @@
 //! - `aspect <width> <height>`
 //! - `layout <x> <y> <w> <h>`
 //! - `size-screen <x> <y> <w> <h> <visible 0|1>`
-//! - `audio-begin` / `audio-clip <start> <duration> <offset> <rate> <gain> <path>` / `audio-commit`
-//! - `layers-begin` / `layer <media_time> <x> <y> <scale> <scale_x> <scale_y> <opacity> <path>` / `layers-commit`
+//! - `audio-begin` / `audio-clip <start> <duration> <offset> <rate> <gain> <fade_in> <fade_out> <path>` / `audio-commit`
+//! - `layers-begin` / `layer <kind> <media_time> <x> <y> <scale> <scale_x> <scale_y> <opacity> <path>` / `layers-commit`
 //! - `transport <seconds> <playing 0|1>`
 //! - `quit`
 //!
@@ -30,14 +30,16 @@
 
 mod host;
 mod protocol;
+mod render;
 mod viewport;
 
 pub use host::{resolve_host_exe, PreviewHost};
 pub use protocol::{
-    AlignGuide, AudioClip, AudioClock, ClockSample, HostEvent, LayoutRect, PreviewBounds,
-    PreviewLayer, PreviewPointerKind, ScreenSlot, TransformGizmo, VisualTransform, CLOCK_STALE,
-    HOST_RELATIVE, MAX_ALIGN_GUIDES, MAX_AUDIO_CLIPS, MAX_PREVIEW_LAYERS,
+    AlignGuide, AudioClip, AudioClock, ClockSample, HostEvent, LayerKind, LayoutRect,
+    PreviewBounds, PreviewLayer, PreviewPointerKind, ScreenSlot, TransformGizmo, VisualTransform,
+    CLOCK_STALE, HOST_RELATIVE, MAX_ALIGN_GUIDES, MAX_AUDIO_CLIPS, MAX_PREVIEW_LAYERS,
 };
+pub use render::OfflineRenderer;
 pub use viewport::{PreviewNavigation, PreviewNavigationKind, PreviewViewport};
 
 #[derive(Debug, thiserror::Error)]

@@ -29,6 +29,10 @@ pub(super) fn run(mode: &str, marker: Option<&std::ffi::OsStr>) {
         }
         "source" => emit(&"audio-clock 1 0 1\n".repeat(65)),
         "clock" => emit("audio-clock 3.250000000 1 0\npreview-bounds 8 9 100 80 1\n"),
+        "deaf" => {
+            std::thread::sleep(Duration::from_secs(3));
+            return;
+        }
         _ => {}
     }
     let mut lines = Vec::new();
@@ -44,6 +48,7 @@ pub(super) fn run(mode: &str, marker: Option<&std::ffi::OsStr>) {
                 if line == "path-token 42 C:/a b.mp4" { emit("preview-pointer down 0.5 0.5\nsource-aspect 41 1\nsource-aspect 42 1.3333333333333333\n"); }
             }
             "clock" if line.starts_with("seek ") => emit("audio-clock 9.000000000 0 1\n"),
+            "echo" => emit(&format!("echo:{}\n", line.len())),
             _ => {}
         }
         if line == "quit" {

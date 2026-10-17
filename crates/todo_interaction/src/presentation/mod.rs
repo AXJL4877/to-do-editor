@@ -1,6 +1,8 @@
 pub use crate::inspector::{ClipProperties, SourceProperties, StyleOption, TextProperties};
+pub mod ai_settings;
 mod library;
 mod messages;
+pub mod production;
 pub(crate) use library::LibraryState;
 pub use messages::status_text;
 use todo_core::{ClipTransform, MediaKind};

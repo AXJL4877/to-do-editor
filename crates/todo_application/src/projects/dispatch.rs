@@ -108,6 +108,25 @@ impl Workspace {
                 }
                 AppUpdate::effects(effects)
             }
+            AppAction::ExportTimeline { output, preset } => {
+                let Some(project) = self.editor.as_ref().map(|editor| editor.project().clone())
+                else {
+                    return AppUpdate::default();
+                };
+                if preset == "vertical" && project.width >= project.height {
+                    self.problem("export", "竖屏预设要求工程画布为竖屏".into());
+                    return AppUpdate::default();
+                }
+                let ticket = self.ticket();
+                AppUpdate::effects(vec![Effect::Media {
+                    ticket,
+                    task: MediaTask::ExportTimeline {
+                        project: Box::new(project),
+                        output,
+                        preset,
+                    },
+                }])
+            }
             AppAction::Notice(message) => {
                 self.problem("runtime", message);
                 AppUpdate::default()
