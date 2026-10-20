@@ -22,6 +22,12 @@ pub enum DataKind {
     Items,
     /// File container: `{ "files": [{ "path", "kind": "text"|"audio"|"video"|"image", "name"? }] }`.
     MediaBin,
+    /// Workflow start pulse: `{ "trigger": true, "at"?: number }`.
+    Trigger,
+    /// LLM / multimodal text reply: `{ "text": string, "model"?: string }`.
+    ChatReply,
+    /// Generated or reference still: `{ "path": string, "mime"?: "image/png"|… }`.
+    ImageAsset,
     /// Untyped (python nodes / transitional builtins).
     Any,
 }
@@ -35,12 +41,39 @@ impl DataKind {
             Self::SubtitleCues => "subtitle_cues",
             Self::Items => "items",
             Self::MediaBin => "media_bin",
+            Self::Trigger => "trigger",
+            Self::ChatReply => "chat_reply",
+            Self::ImageAsset => "image_asset",
+            Self::Any => "any",
+        }
+    }
+
+    /// Compact port badge (fits beside the node card).
+    pub fn display_label(self) -> &'static str {
+        match self {
+            Self::ScriptText => "txt",
+            Self::Segments => "json",
+            Self::SpeechClip => "mp3",
+            Self::SubtitleCues => "srt",
+            Self::Items => "items",
+            Self::MediaBin => "files",
+            Self::Trigger => "go",
+            Self::ChatReply => "reply",
+            Self::ImageAsset => "img",
             Self::Any => "any",
         }
     }
 
     pub fn compatible(self, other: Self) -> bool {
-        self == other || self == Self::Any || other == Self::Any
+        self == other
+            || self == Self::Any
+            || other == Self::Any
+            // LLM reply is usable as oral script text.
+            || (self == Self::ChatReply && other == Self::ScriptText)
+            || (self == Self::ScriptText && other == Self::ChatReply)
+            // Segments are the script cut into parts: a text sink may join them.
+            || (self == Self::Segments && other == Self::ScriptText)
+            || (self == Self::ScriptText && other == Self::Segments)
     }
 }
 
@@ -122,6 +155,13 @@ const SEGMENT_FIELDS: &[ParamField] = &[
         default: 120.0,
         unit: Some("字"),
     },
+    ParamField::Text {
+        id: "model",
+        label: "模型",
+        hint: "留空用 AI 设置里的聊天模型；实测切点由它决定",
+        default: "",
+        placeholder: "deepseek-flash …",
+    },
     ParamField::Number {
         id: "max",
         label: "上限字数",
@@ -170,14 +210,120 @@ const TTS_FIELDS: &[ParamField] = &[
     },
 ];
 
+const LLM_FIELDS: &[ParamField] = &[
+    ParamField::Select {
+        id: "capability",
+        label: "能力",
+        hint: "走宿主绑定的聊天模型",
+        options: &[("chat", "文本对话"), ("reasoning", "长推理")],
+        default: "chat",
+    },
+    ParamField::Text {
+        id: "system",
+        label: "系统提示",
+        hint: "可选；覆盖默认角色设定",
+        default: "",
+        placeholder: "你是…",
+    },
+    ParamField::Text {
+        id: "model",
+        label: "模型",
+        hint: "留空用 AI 设置里的聊天模型；填网关上的模型名可覆盖",
+        default: "",
+        placeholder: "deepseek-flash / claude-fable-5 …",
+    },
+    ParamField::Select {
+        id: "json",
+        label: "输出",
+        hint: "强制 JSON（分段、抽字段这类下游要结构时打开）",
+        options: &[("text", "自然语言"), ("json", "强制 JSON")],
+        default: "text",
+    },
+    ParamField::Number {
+        id: "temperature",
+        label: "温度",
+        hint: "越高越发散",
+        min: 0.0,
+        max: 2.0,
+        step: 0.1,
+        default: 0.7,
+        unit: None,
+    },
+];
+
+const IMAGE_GEN_FIELDS: &[ParamField] = &[
+    ParamField::Select {
+        id: "size",
+        label: "尺寸",
+        hint: "生图分辨率预设",
+        options: &[
+            ("1024x1024", "1024²"),
+            ("1280x720", "1280×720"),
+            ("720x1280", "720×1280"),
+        ],
+        default: "1024x1024",
+    },
+    ParamField::Text {
+        id: "style",
+        label: "风格提示",
+        hint: "附加在 prompt 后的风格词",
+        default: "",
+        placeholder: "扁平插画，干净背景",
+    },
+    ParamField::Text {
+        id: "model",
+        label: "模型",
+        hint: "留空用 AI 设置里的生图模型；可填网关上的其它模型名",
+        default: "",
+        placeholder: "gpt-image-2 …",
+    },
+];
+
+const MULTIMODAL_FIELDS: &[ParamField] = &[
+    ParamField::Select {
+        id: "mode",
+        label: "模式",
+        hint: "看图说话 / 看图改图说明",
+        options: &[("understand", "视觉理解"), ("edit_brief", "改图说明")],
+        default: "understand",
+    },
+    ParamField::Number {
+        id: "temperature",
+        label: "温度",
+        hint: "越高越发散",
+        min: 0.0,
+        max: 2.0,
+        step: 0.1,
+        default: 0.4,
+        unit: None,
+    },
+];
+
 /// Canonical builtins (aliases like `speech` → `tts` resolved via [`lookup`]).
 pub const CATALOG: &[NodeSpec] = &[
     NodeSpec {
+        type_name: "trigger",
+        label: "触发器",
+        summary: "手动或定时启动整条工作流。",
+        docs: "工作流入口开关。点击运行时从此口发出 trigger；可接到素材容器 / LLM / 脚本等下游。无输入口。",
+        inputs: &[],
+        outputs: &[Port {
+            name: "start",
+            kind: DataKind::Trigger,
+            required: false,
+        }],
+        fields: &[],
+    },
+    NodeSpec {
         type_name: "media_bin",
         label: "素材容器",
-        summary: "起始节点：挂载 txt / mp3 / mp4 等输入文件。",
-        docs: "工作流入口容器。可放入口播文案（txt/md）、音频（mp3/wav）、视频（mp4）与参考图。输出 files 给下游；若含文本文件，也可经 text 口输出 script_text。",
-        inputs: &[],
+        summary: "挂载 txt / mp3 / mp4 / 图片等输入文件。",
+        docs: "可放入口播文案（txt/md）、音频（mp3/wav）、视频（mp4）与参考图。files=素材清单；text=若含文本文件则抽出文案。可选接 trigger 再往下跑。",
+        inputs: &[Port {
+            name: "start",
+            kind: DataKind::Trigger,
+            required: false,
+        }],
         outputs: &[
             Port {
                 name: "files",
@@ -191,6 +337,93 @@ pub const CATALOG: &[NodeSpec] = &[
             },
         ],
         fields: MEDIA_BIN_FIELDS,
+    },
+    NodeSpec {
+        type_name: "llm_chat",
+        label: "大模型·对话",
+        summary: "调用宿主 LLM：文案进、回复出。",
+        docs: "走 AI 设置里的聊天模型。prompt 为用户话；可选 system。输出 chat_reply（可当文案接到分段/TTS）。",
+        inputs: &[
+            Port {
+                name: "prompt",
+                kind: DataKind::ScriptText,
+                required: true,
+            },
+            Port {
+                name: "start",
+                kind: DataKind::Trigger,
+                required: false,
+            },
+        ],
+        outputs: &[Port {
+            name: "reply",
+            kind: DataKind::ChatReply,
+            required: false,
+        }],
+        fields: LLM_FIELDS,
+    },
+    NodeSpec {
+        type_name: "image_gen",
+        label: "大模型·生图",
+        summary: "文生图：prompt → 图片文件。",
+        docs: "走宿主生图能力。prompt 必填；ref 可选参考图。输出 image_asset（png/webp 路径）。",
+        inputs: &[
+            Port {
+                name: "prompt",
+                kind: DataKind::ScriptText,
+                required: true,
+            },
+            Port {
+                name: "ref",
+                kind: DataKind::ImageAsset,
+                required: false,
+            },
+            Port {
+                name: "start",
+                kind: DataKind::Trigger,
+                required: false,
+            },
+        ],
+        outputs: &[Port {
+            name: "image",
+            kind: DataKind::ImageAsset,
+            required: false,
+        }],
+        fields: IMAGE_GEN_FIELDS,
+    },
+    NodeSpec {
+        type_name: "multimodal",
+        label: "大模型·多模态",
+        summary: "图文理解：图片 + 提问 → 文本回复。",
+        docs: "视觉模型。images 来自素材容器或生图节点；prompt 为问题。输出 chat_reply。",
+        inputs: &[
+            Port {
+                name: "prompt",
+                kind: DataKind::ScriptText,
+                required: true,
+            },
+            Port {
+                name: "images",
+                kind: DataKind::MediaBin,
+                required: false,
+            },
+            Port {
+                name: "image",
+                kind: DataKind::ImageAsset,
+                required: false,
+            },
+            Port {
+                name: "start",
+                kind: DataKind::Trigger,
+                required: false,
+            },
+        ],
+        outputs: &[Port {
+            name: "reply",
+            kind: DataKind::ChatReply,
+            required: false,
+        }],
+        fields: MULTIMODAL_FIELDS,
     },
     NodeSpec {
         type_name: "script",
@@ -575,13 +808,35 @@ fn canonical_type(node_type: &str) -> &str {
 pub fn validate_payload(kind: DataKind, value: &Value) -> Result<(), String> {
     match kind {
         DataKind::Any => Ok(()),
-        DataKind::ScriptText => validate_script_text(value),
+        DataKind::ScriptText | DataKind::ChatReply => validate_script_text(value),
         DataKind::Segments => validate_segments(value),
         DataKind::SpeechClip => validate_speech_clip(value),
         DataKind::SubtitleCues => validate_subtitle_cues(value),
         DataKind::Items => validate_items_payload(value),
         DataKind::MediaBin => validate_media_bin(value),
+        DataKind::Trigger => validate_trigger(value),
+        DataKind::ImageAsset => validate_image_asset(value),
     }
+}
+
+fn validate_trigger(value: &Value) -> Result<(), String> {
+    let obj = value.as_object().ok_or("trigger 须为对象")?;
+    if obj.get("trigger").and_then(Value::as_bool) != Some(true) {
+        return Err("trigger.trigger 须为 true".into());
+    }
+    Ok(())
+}
+
+fn validate_image_asset(value: &Value) -> Result<(), String> {
+    let obj = value.as_object().ok_or("image_asset 须为对象")?;
+    let path = obj
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or("image_asset.path 须为字符串")?;
+    if path.is_empty() || path.contains("..") || path.starts_with('/') || path.contains('\\') {
+        return Err("image_asset.path 非法".into());
+    }
+    Ok(())
 }
 
 fn validate_media_bin(value: &Value) -> Result<(), String> {

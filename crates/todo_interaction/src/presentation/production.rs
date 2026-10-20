@@ -232,6 +232,12 @@ pub struct WorkflowNodeView {
     pub fields: Vec<WorkflowParamFieldView>,
     /// Files attached to a media_bin (from params.files).
     pub files: Vec<WorkflowMediaFileView>,
+    /// Raw params JSON object (for copy/paste).
+    pub params_json: String,
+    /// Image this node produced in the last run (path, for the preview).
+    pub image: Option<String>,
+    /// First output payload of the last run (pretty JSON, truncated).
+    pub output: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -249,11 +255,22 @@ pub struct WorkflowEdgeView {
     pub input: Option<String>,
 }
 
+/// One entry in the "add node" palette (type_name → display label).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkflowTypeChoice {
+    pub type_name: String,
+    pub label: String,
+}
+
 /// Graph projection for the workflow panel / flow window.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct WorkflowPanelView {
     pub nodes: Vec<WorkflowNodeView>,
     pub edges: Vec<WorkflowEdgeView>,
+    /// Built-in types the user can insert from the canvas menu.
+    pub palette: Vec<WorkflowTypeChoice>,
+    /// 正在运行时的进度文字（"3/12 · 等待 tts"）。
+    pub running: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -975,6 +992,9 @@ mod tests {
                     y: 40.0,
                     fields: vec![],
                     files: vec![],
+                    params_json: "{}".into(),
+            image: None,
+            output: None,
                 },
                 WorkflowNodeView {
                     id: "speech".into(),
@@ -990,6 +1010,9 @@ mod tests {
                     y: 40.0,
                     fields: vec![],
                     files: vec![],
+                    params_json: "{}".into(),
+            image: None,
+            output: None,
                 },
                 WorkflowNodeView {
                     id: "split_shots".into(),
@@ -1005,9 +1028,14 @@ mod tests {
                     y: 40.0,
                     fields: vec![],
                     files: vec![],
+                    params_json: "{}".into(),
+            image: None,
+            output: None,
                 },
             ],
             edges: vec![],
+            palette: vec![],
+            running: None,
         };
         let view = production_view_with_document(
             &status(vec![

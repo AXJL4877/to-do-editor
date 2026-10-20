@@ -12,4 +12,5 @@ pub mod motions;
 pub mod paths;
 pub mod preview;
 pub mod production;
+pub mod workflow;
 pub mod workers;

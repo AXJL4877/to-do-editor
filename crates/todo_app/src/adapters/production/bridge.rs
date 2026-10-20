@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use todo_ai::{AiEvent, AiRouter};
 use todo_workflow::{PoolHandle, RunId};
@@ -33,6 +34,9 @@ pub struct ServiceBridge {
     defaults: HostDefaults,
     runs: HashMap<RunId, PathBuf>,
     pending: HashMap<TaskKey, Vec<PendingCall>>,
+    /// 同步调用（工作流 runner）的结果，按 call id 存放。
+    direct: HashMap<String, Result<serde_json::Value, ServiceError>>,
+    direct_calls: std::collections::BTreeSet<String>,
     timelines: Timelines,
     tools: MediaTools,
     pool: PoolHandle,
@@ -77,6 +81,8 @@ impl ServiceBridge {
             defaults,
             runs: HashMap::new(),
             pending: HashMap::new(),
+            direct: HashMap::new(),
+            direct_calls: std::collections::BTreeSet::new(),
             timelines: Arc::default(),
             tools: MediaTools::discover(root),
             pool,
@@ -104,7 +110,7 @@ impl ServiceBridge {
     /// A worker's service call.
     pub fn call(&mut self, ai: &AiRouter, run: RunId, call: String, service: ServiceCall) {
         let Some(workdir) = self.runs.get(&run).cloned() else {
-            self.pool.reply(run, call, Err(invalid("运行已结束")));
+            self.finish_call(&call.clone(), run, Err(invalid("运行已结束")));
             return;
         };
         match &service {
@@ -130,7 +136,7 @@ impl ServiceBridge {
                         },
                     ))
                 })();
-                self.pool.reply(run, call, result);
+                self.finish_call(&call.clone(), run, result);
             }
             ServiceCall::Probe(_) | ServiceCall::Encode(_) => {
                 // Encoding takes seconds: never on the UI thread.
@@ -177,6 +183,62 @@ impl ServiceBridge {
         }
     }
 
+    /// Local services answer inline; synchronous callers must receive that
+    /// answer instead of a pool reply addressed to a worker.
+    fn finish_call(
+        &mut self,
+        call_id: &str,
+        run: RunId,
+        result: Result<serde_json::Value, ServiceError>,
+    ) {
+        if self.direct_calls.remove(call_id) {
+            self.direct.insert(call_id.to_owned(), result);
+        } else {
+            self.pool.reply(run, call_id.to_owned(), result);
+        }
+    }
+
+    /// Start a call whose result a later frame will collect with
+    /// [`Self::take_direct`] (incremental workflow driver: no blocking).
+    pub fn call_async(&mut self, ai: &AiRouter, run: RunId, call_id: String, service: ServiceCall) {
+        self.direct_calls.insert(call_id.clone());
+        self.call(ai, run, call_id, service);
+    }
+
+    /// Result of an async call, once it exists.
+    pub fn take_direct(&mut self, call_id: &str) -> Option<Result<serde_json::Value, String>> {
+        self.direct
+            .remove(call_id)
+            .map(|result| result.map_err(|error| error.message))
+    }
+
+    /// Run one service call synchronously (workflow runner). Events for other
+    /// in-flight calls are still routed through [`Self::on_ai_event`].
+    pub fn call_blocking(
+        &mut self,
+        ai: &AiRouter,
+        run: RunId,
+        call_id: String,
+        service: ServiceCall,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, String> {
+        self.direct_calls.insert(call_id.clone());
+        self.call(ai, run, call_id.clone(), service);
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if let Some(result) = self.direct.remove(&call_id) {
+                return result.map_err(|error| error.message);
+            }
+            if std::time::Instant::now() >= deadline {
+                self.direct_calls.remove(&call_id);
+                return Err("服务调用超时".into());
+            }
+            if let Some(event) = ai.recv_timeout(Duration::from_millis(50)) {
+                self.on_ai_event(ai, &event);
+            }
+        }
+    }
+
     /// Answer the calls waiting for a finished AI task.
     pub fn on_ai_event(&mut self, ai: &AiRouter, event: &AiEvent) {
         let key = match event {
@@ -215,7 +277,11 @@ impl ServiceBridge {
                     message: "已取消".into(),
                 }),
             };
-            self.pool.reply(pending.run, pending.call, result);
+            if self.direct_calls.remove(&pending.call) {
+                self.direct.insert(pending.call.clone(), result);
+            } else {
+                self.pool.reply(pending.run, pending.call, result);
+            }
         }
     }
 

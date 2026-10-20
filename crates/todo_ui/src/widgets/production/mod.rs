@@ -53,6 +53,11 @@ pub enum ProductionAction {
     Thumbnail {
         path: String,
     },
+    /// 运行整条工作流（空 script 用图里的文案）。
+    WorkflowRun {
+        extension: String,
+        script: String,
+    },
     /// Scaffold a blank user workflow package.
     WorkflowCreate,
     /// Write the open graph (positions + inspector edits) to disk.
@@ -78,6 +83,55 @@ pub enum ProductionAction {
         extension: String,
         node_id: String,
         path: String,
+    },
+    /// Insert a catalog node onto the canvas.
+    WorkflowAddNode {
+        extension: String,
+        node_type: String,
+        x: f32,
+        y: f32,
+        positions: BTreeMap<String, (f32, f32)>,
+    },
+    /// Clone a node (no edges).
+    WorkflowDuplicateNode {
+        extension: String,
+        node_id: String,
+        positions: BTreeMap<String, (f32, f32)>,
+    },
+    /// Delete a node and its incident edges.
+    WorkflowDeleteNode {
+        extension: String,
+        node_id: String,
+        positions: BTreeMap<String, (f32, f32)>,
+    },
+    /// Paste a previously copied node.
+    WorkflowPasteNode {
+        extension: String,
+        node_type: String,
+        label: Option<String>,
+        /// JSON object of params (`{}` if empty).
+        params_json: String,
+        x: f32,
+        y: f32,
+        positions: BTreeMap<String, (f32, f32)>,
+    },
+    /// Wire an output port to an input port.
+    WorkflowConnect {
+        extension: String,
+        from: String,
+        to: String,
+        out: Option<String>,
+        input: Option<String>,
+        positions: BTreeMap<String, (f32, f32)>,
+    },
+    /// Remove one edge.
+    WorkflowDisconnect {
+        extension: String,
+        from: String,
+        to: String,
+        out: Option<String>,
+        input: Option<String>,
+        positions: BTreeMap<String, (f32, f32)>,
     },
 }
 
@@ -265,7 +319,7 @@ pub fn draw_dock(
                     }
                     ui.add_space(10.0);
                     ui.label(
-                        RichText::new("按 ~ 全屏打开 · Esc 关闭")
+                        RichText::new("~ 全屏 · 右键加节点 · Ctrl+C/V")
                             .size(11.0)
                             .color(MUTED),
                     );

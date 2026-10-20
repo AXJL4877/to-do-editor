@@ -122,7 +122,11 @@ enum Command {
     Cancel(TaskKey),
     Retry(TaskKey),
     SetKey(Provider, Option<Secret>),
-    ListModels { id: u64, provider: Provider },
+    ListModels {
+        id: u64,
+        provider: Provider,
+        capability: todo_production::Capability,
+    },
 }
 
 /// Handle owned by the app. Dropping it stops the runtime; in-flight sends are
@@ -245,9 +249,13 @@ impl AiService {
     }
     /// Ask a provider for its current model catalog without touching the task
     /// journal or submitting a generation request.
-    pub fn list_models(&self, provider: Provider) -> u64 {
+    pub fn list_models(&self, provider: Provider, capability: todo_production::Capability) -> u64 {
         let id = self.next_probe.fetch_add(1, Ordering::Relaxed);
-        let _ = self.commands.send(Command::ListModels { id, provider });
+        let _ = self.commands.send(Command::ListModels {
+            id,
+            provider,
+            capability,
+        });
         id
     }
     pub fn poll(&self) -> Option<AiEvent> {
@@ -350,8 +358,12 @@ async fn run_loop(
                 }
                 shared.resumed.notify_waiters();
             }
-            Command::ListModels { id, provider } => {
-                tokio::spawn(list_models(shared.clone(), id, provider));
+            Command::ListModels {
+                id,
+                provider,
+                capability,
+            } => {
+                tokio::spawn(list_models(shared.clone(), id, provider, capability));
             }
         }
     }
@@ -360,12 +372,25 @@ async fn run_loop(
     }
 }
 
-async fn list_models(shared: Arc<Shared>, id: u64, provider: Provider) {
+async fn list_models(
+    shared: Arc<Shared>,
+    id: u64,
+    provider: Provider,
+    capability: todo_production::Capability,
+) {
+    // 语言能力可能挂在独立端点上：列模型要问那个端点。
+    let language_endpoint = (capability == todo_production::Capability::Language)
+        .then(|| shared.settings.language.as_ref())
+        .flatten()
+        .map(|endpoint| (endpoint.base_url.clone(), endpoint.key.clone()));
     let result = match provider {
         Provider::Huniu => {
             let key = shared.keys.lock().unwrap().get(&provider).cloned();
-            match key {
-                Some(key) => {
+            match (language_endpoint, key) {
+                (Some((base_url, key)), _) => {
+                    crate::providers::huniu::list_models(&shared.http, &base_url, &key).await
+                }
+                (None, Some(key)) => {
                     crate::providers::huniu::list_models(
                         &shared.http,
                         &shared.settings.huniu_base_url,
@@ -373,7 +398,7 @@ async fn list_models(shared: Arc<Shared>, id: u64, provider: Provider) {
                     )
                     .await
                 }
-                None => Err(crate::providers::AttemptError::new(
+                (None, None) => Err(crate::providers::AttemptError::new(
                     ErrorClass::Auth,
                     "还没有配置 API Key",
                 )),
@@ -561,12 +586,23 @@ async fn run_task(shared: Arc<Shared>, key: TaskKey) {
                 });
                 return;
             }
-            TaskState::Failed | TaskState::Ambiguous => {
+            // A plain failure was not billed, so a re-run retries it instead of
+            // replaying the old error (the model or key may have changed since).
+            // An ambiguous one may have been billed: only an explicit retry.
+            TaskState::Failed => {
+                shared.update(&key, |r| {
+                    r.state = TaskState::Pending;
+                    r.error_class = None;
+                    r.error = None;
+                });
+                continue;
+            }
+            TaskState::Ambiguous => {
                 shared.emit(AiEvent::Failed {
                     key,
                     class: record.error_class.unwrap_or_default(),
                     message: record.error.unwrap_or_default(),
-                    possibly_billed: record.state == TaskState::Ambiguous,
+                    possibly_billed: true,
                 });
                 return;
             }

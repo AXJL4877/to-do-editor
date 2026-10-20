@@ -239,3 +239,74 @@ README.md
 ## 10. 自检与交付
 
 `tests/` 放至少一个样例：`input.json`（文案与参数）、`services/`（录制的服务结果，按请求指纹命名）、`expect.json`（期望条目的 key 与 role）。宿主自检命令离线回放服务结果运行流程，校验：清单与参数合法、协议消息合法、条目与文件合法、在预算内完成、两次运行产出一致（确定性）。不通过的扩展不允许安装为可用。
+
+## 10. 工作流执行（runner）
+
+`todo_workflow::runner::run(graph, base_dir, services, input, emit)` 按拓扑序执行 `todo-graph/1`。
+
+| 阶段 | 行为 |
+| --- | --- |
+| 运行前 | 必需输入未接线 → 直接返回「还有必需输入没接线：node.port」；有环 → 拒绝 |
+| 触发 | `trigger` 发出 `{trigger:true, at}`；`media_bin` 读 `params.files`，文本文件拼成 `text`，其余进 `files` |
+| 分段 | `segment_script`：`paragraph`/`length` 走 `todo_production::segment` 规则；`semantic` 调 chat 只选切点，模型答歪时自动退回规则切分（整条流不中断） |
+| 外部 API | `llm_chat`/`image_gen`/`multimodal`/`tts`/`subtitles` 全部经 `Services` trait（宿主实现），runner 不联网 |
+| 出片 | `split_shots` 按字幕条合成镜头（<1.2s 合并）；`label_shots` 给每镜标签；`choose_motions` 从白名单派 `intro/outro/transition`；`ground_emit`/`picture_batch` 产出条目并 emit |
+| 校验 | 每个输出过 `nodes::validate_payload`，类型不对立即报错并停止下游 |
+
+安装/画布保存只做**草稿**校验（必需端口未接也能先建图）；严格校验发生在运行前。
+内置图 `studio.spongebob-koubo` 已能 12 个节点全绿跑完（离线 stub 服务）。
+
+### 宿主接线
+
+`todo_app::adapters::workflow::HostServices` 把 runner 的五个服务接到宿主：
+
+| 节点 | 宿主路径 |
+| --- | --- |
+| chat / image / speech / subtitles | `ServiceBridge::call_blocking`（复用 AI 日志、产物落盘、口播时间轴、字幕对齐） |
+| multimodal | 直接提交 `MultimodalRequest`，等待其终态事件 |
+
+`ProductionHost::run_workflow(extension_id, script)` 是入口：为每次运行建 `cache/workflow-runs/<ext>-<stamp>/` 工作目录、注册 run、执行图并返回 `RunReport`。
+单节点默认上限 300 s（`NODE_TIMEOUT`）；超时取消并报错。
+
+### 节点参数与产物（面板可见）
+
+| 节点 | 可调参数 | 运行后面板显示 |
+| --- | --- | --- |
+| `llm_chat` | `model`（留空用 AI 设置）、`json`（自然语言 / 强制 JSON）、`system`、`temperature` | 回复预览（JSON 片段） |
+| `segment_script` | `mode`、`target`、`max`、`model` | `{mode, segments[{id,text,chars}]}` |
+| `image_gen` | `size`（1024x1024…）、`model`、`style`、`transparent` | 生成图缩略图 + 路径 |
+| `multimodal` | `model`、`mode`、`temperature` | 回复预览 |
+| `tts` | `voice`（S_… 克隆音）、`rate` | 音频文件 + 时长 |
+
+runner 把每个成功节点的**首个输出**截断成 `preview`（≤1200 字）存在 `NodeRun`，产图再带 `image` 路径；
+`ProductionHost` 记住最近一次运行并映射到面板：`status`（完成/失败）、`detail`（端口或错误）、`output`（JSON 预览）、`image`（绝对路径，检查器里出缩略图）。
+
+### 增量驱动（面板点「运行」）
+
+`todo_workflow::runner::WorkflowJob` 是可暂停的执行器：
+
+```rust
+let mut job = WorkflowJob::new(&graph, package_dir, RunInput { script, at: None });
+match job.advance() {
+    Step::Call(call) => { /* 提交，记住 (call_id, key) */ }
+    Step::Waiting    => { /* 上一调用还没回来 */ }
+    Step::Finished   => { /* 读 job.report() */ }
+}
+job.resume(Ok(payload));   // 结果回填，继续 advance
+```
+
+宿主每帧执行一次（`ProductionHost::poll` → `pump_workflows`）：
+
+1. 收到事件 → `bridge.on_ai_event`（本地服务/生成类）或 `workflow_results`（多模态 key）；
+2. 有待取的结果 → `bridge.take_direct(call_id)` / `workflow_results` → `job.resume`；
+3. `job.advance()` 直到下一个 `Step::Call` → `bridge.call_async`（不阻塞）或 `ai.submit`（视觉）；
+4. 面板显示 `3/12 · 等待 tts`，节点卡片边框实时变色；
+5. 结束时把报告（含绝对图片路径）存进 `workflow_runs`，检查器显示产物预览。
+
+阻塞版 `run()` 仍保留给 CLI/测试：它内部就是 `advance/resume` 的死循环，两条路径共用同一套节点逻辑。
+
+### 模型选择与失败重试
+
+- 节点参数 `model` 现在是**下拉**：`跟随 AI 设置` / `当前：<已配置模型>` / 已知可用名（按能力给：语言 `deepseek-flash`、`deepseek-v4-pro`、`claude-fable-5`；生图 `gpt-image-2`；多模态 `deepseek-flash`、`gemini-3.8-flash`）。
+- `config/ai.json` 的 `language` 块新增 `model`；不填时回落到 `huniu.languageModel`。改了模型要重启 App 才会重新读配置。
+- AI 日志里的**失败任务不再被回放**：再次提交会真正重试（`TaskState::Failed` → 重新入队）；只有"可能已扣费"的 `Ambiguous` 才需要手动重试。这修掉了"改了模型/重新运行还是同一个 400"的问题。

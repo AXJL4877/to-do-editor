@@ -140,7 +140,7 @@ fn model_discovery_lists_and_classifies_gateway_models() {
     );
     let dir = scratch("model-discovery");
     let (service, _) = AiService::start(settings(&server, &dir)).unwrap();
-    let id = service.list_models(Provider::Huniu);
+    let id = service.list_models(Provider::Huniu, todo_production::Capability::Language);
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
         let event = service.recv_timeout(Duration::from_millis(50));

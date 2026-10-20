@@ -60,7 +60,8 @@ impl Extension {
             .iter()
             .flat_map(|w| w.ops.iter().map(String::as_str))
             .collect();
-        let problems = graph.validate(&ops);
+        // Load for canvas edit: incomplete required wires are OK until run/check.
+        let problems = graph.validate_draft(&ops);
         if !problems.is_empty() {
             return Err(problems
                 .into_iter()
@@ -103,7 +104,7 @@ impl Extension {
             .iter()
             .flat_map(|w| w.ops.iter().map(String::as_str))
             .collect();
-        let problems = graph.validate(&ops);
+        let problems = graph.validate_draft(&ops);
         if !problems.is_empty() {
             return Err(problems
                 .iter()
@@ -186,7 +187,7 @@ impl Extension {
             .iter()
             .flat_map(|w| w.ops.iter().map(String::as_str))
             .collect();
-        let problems = graph.validate(&ops);
+        let problems = graph.validate_draft(&ops);
         if !problems.is_empty() {
             return Err(problems
                 .iter()
@@ -243,7 +244,8 @@ impl Extension {
             .iter()
             .flat_map(|w| w.ops.iter().map(String::as_str))
             .collect();
-        let problems = graph.validate(&ops);
+        // Draft save: allow unwired required ports while the user is editing.
+        let problems = graph.validate_draft(&ops);
         if !problems.is_empty() {
             return Err(problems
                 .iter()
@@ -522,7 +524,7 @@ fn ports(list: &[todo_production::extension::nodes::Port]) -> Vec<WorkflowPortCa
     list.iter()
         .map(|p| WorkflowPortCard {
             name: p.name.to_owned(),
-            kind: p.kind.as_str().to_owned(),
+            kind: p.kind.display_label().to_owned(),
             required: p.required,
         })
         .collect()
@@ -530,7 +532,7 @@ fn ports(list: &[todo_production::extension::nodes::Port]) -> Vec<WorkflowPortCa
 
 /// Kind name helper for tests / UI.
 pub fn data_kind_label(kind: DataKind) -> &'static str {
-    kind.as_str()
+    kind.display_label()
 }
 
 pub fn catalog() -> &'static [NodeSpec] {

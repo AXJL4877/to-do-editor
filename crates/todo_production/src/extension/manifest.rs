@@ -582,7 +582,9 @@ impl Manifest {
                         Some(text) => match crate::extension::graph::Graph::parse(&text, "graph") {
                             Err(p) => problem(&p.path, p.message),
                             Ok(graph) => {
-                                for p in graph.validate(&ops) {
+                                // 画布保存/安装只做草稿校验：必需端口未接也能先建图，
+                                // 真正的运行前检查见 check.rs 与 runner::preflight。
+                                for p in graph.validate_draft(&ops) {
                                     problem(&format!("graph.{}", p.path), p.message);
                                 }
                             }

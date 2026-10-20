@@ -71,6 +71,10 @@ pub struct LanguageFile {
     /// Origin without `/v1`, e.g. `https://api.deepseek.com`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    /// Model served by that origin. A separate endpoint usually speaks a
+    /// different model family, so it must be named explicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 impl HuniuFile {
@@ -165,6 +169,8 @@ pub struct AiConfig {
     pub huniu: HuniuSettings,
     /// Direct language endpoint; `None` keeps everything on huniu.
     pub language_base_url: Option<String>,
+    /// Model for that endpoint; falls back to the huniu language model.
+    pub language_model: Option<String>,
     pub volc: VolcSettings,
     pub limits: Limits,
     pub proxy: ProxyMode,
@@ -246,13 +252,20 @@ impl AiConfig {
                 huniu.image_size
             )));
         }
-        let language_base_url = match file.language.as_ref().and_then(|l| l.base_url.as_deref()) {
-            Some(raw) => Some(normalize_base_url(raw)?),
-            None => None,
+        let (language_base_url, language_model) = match file.language.as_ref() {
+            Some(language) => (
+                match language.base_url.as_deref() {
+                    Some(raw) => Some(normalize_base_url(raw)?),
+                    None => None,
+                },
+                language.model.clone(),
+            ),
+            None => (None, None),
         };
         Ok(Self {
             huniu,
             language_base_url,
+            language_model,
             volc,
             limits,
             proxy: file.proxy.unwrap_or(ProxyMode::Auto),

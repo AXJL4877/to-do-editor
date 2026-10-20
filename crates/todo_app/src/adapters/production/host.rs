@@ -94,6 +94,16 @@ pub fn class_message(class: &str, message: &str) -> String {
     }
 }
 
+/// A workflow mid-flight: the job plus the call it is waiting on.
+struct WorkflowLive {
+    job: todo_workflow::runner::WorkflowJob,
+    /// (call id, via AI router, started)
+    call: Option<(String, bool, Instant)>,
+    run_id: RunId,
+    workdir: PathBuf,
+    started: Instant,
+}
+
 pub struct ProductionHost {
     root: PathBuf,
     ai: AiRouter,
@@ -110,6 +120,17 @@ pub struct ProductionHost {
     budgets: HashMap<PathBuf, Arc<Budget>>,
     checks: mpsc::Receiver<(String, Result<(), String>)>,
     check_results: HashMap<String, Result<(), String>>,
+    /// 最近一次工作流运行的逐节点结果，供面板显示状态与产物。
+    workflow_runs: HashMap<String, todo_workflow::RunReport>,
+    /// 正在跑的工作流：每帧推进一个节点，服务调用挂起等事件。
+    workflow_live: HashMap<String, WorkflowLive>,
+    /// 网关返回的模型目录（填一次 Key 后自动拉取，供所有下拉使用）。
+    models: Vec<todo_ai::models::ModelInfo>,
+    models_error: Option<String>,
+    /// 多模态任务 key → 调用 id（视觉结果回填）。
+    workflow_keys: HashMap<TaskKey, String>,
+    workflow_results: HashMap<String, Result<serde_json::Value, String>>,
+    workflow_seq: u64,
     defaults: HostDefaults,
     keys: HashMap<Provider, bool>,
     connection_test: Option<TaskKey>,
@@ -213,7 +234,13 @@ fn ai_settings(
                 (Capability::Audio, Provider::Volc),
             ]),
             models: HashMap::from([
-                (Capability::Language, config.huniu.language_model.clone()),
+                (
+                    Capability::Language,
+                    config
+                        .language_model
+                        .clone()
+                        .unwrap_or_else(|| config.huniu.language_model.clone()),
+                ),
                 (Capability::Image, config.huniu.image_model.clone()),
                 (Capability::Video, config.huniu.video_model.clone()),
                 (
@@ -448,7 +475,7 @@ impl ProductionHost {
             })
             .map_err(|e| e.to_string())?;
         let bridge = ServiceBridge::new(defaults.clone(), &root, workers.handle());
-        Ok(Self {
+        let built: Result<Self, String> = Ok(Self {
             root,
             ai,
             bridge,
@@ -464,23 +491,43 @@ impl ProductionHost {
             budgets: HashMap::new(),
             checks,
             check_results: HashMap::new(),
+            workflow_runs: HashMap::new(),
+            workflow_live: HashMap::new(),
+            models: Vec::new(),
+            models_error: None,
+            workflow_keys: HashMap::new(),
+            workflow_results: HashMap::new(),
+            workflow_seq: 0,
             defaults,
             keys,
             connection_test: None,
             connection_test_started: None,
             model_probe: None,
             agent_tasks: HashMap::new(),
-        })
+        });
+        let mut host = built?;
+        host.fetch_models_if_ready();
+        Ok(host)
     }
 
     pub fn set_key(&mut self, provider: Provider, key: Option<Secret>) {
         self.keys.insert(provider, key.is_some());
         self.ai.set_key(provider, key);
+        self.models.clear();
+        self.models_error = None;
+        self.fetch_models_if_ready();
     }
 
     /// Submit a fresh, uncached chat request used by the settings dialog.
     /// The nonce deliberately prevents a previous successful test from being
     /// answered from the durable production journal.
+    /// 填过 Key 就自动拉一次模型目录，用户不需要再手填模型名。
+    fn fetch_models_if_ready(&mut self) {
+        if self.models.is_empty() {
+            let _ = self.list_models();
+        }
+    }
+
     /// Read the gateway's model catalogue (`GET /v1/models`, free).
     pub fn list_models(&mut self) -> Result<(), String> {
         let provider = self
@@ -1025,6 +1072,24 @@ impl ProductionHost {
                 | AiEvent::ModelsFailed { .. }
                 | AiEvent::NeedsAttention { .. } => None,
             };
+            // 工作流里的多模态调用：先把结果交回 job，不再往下分发。
+            if let Some(key) = event_key.cloned() {
+                if let Some(call_id) = self.workflow_keys.remove(&key) {
+                    let result = match &event {
+                        AiEvent::Done { output, .. } => Ok(output
+                            .as_ref()
+                            .and_then(|value| value.get("text"))
+                            .and_then(serde_json::Value::as_str)
+                            .map(|text| serde_json::json!({ "text": text }))
+                            .unwrap_or_else(|| serde_json::json!({ "text": "" }))),
+                        AiEvent::Failed { message, .. } => Err(message.clone()),
+                        AiEvent::Cancelled { .. } => Err("已取消".into()),
+                        _ => continue,
+                    };
+                    self.workflow_results.insert(call_id, result);
+                    continue;
+                }
+            }
             if matches!(&event, AiEvent::Models { id, .. } if self.model_probe == Some(*id)) {
                 if let AiEvent::Models {
                     provider, models, ..
@@ -1034,6 +1099,8 @@ impl ProductionHost {
                     if self.connection_test.is_none() {
                         self.connection_test_started = None;
                     }
+                    self.models = models.clone();
+                    self.models_error = None;
                     reports.push(HostReport::Models { provider, models });
                 }
                 continue;
@@ -1050,6 +1117,7 @@ impl ProductionHost {
                     if self.connection_test.is_none() {
                         self.connection_test_started = None;
                     }
+                    self.models_error = Some(message.clone());
                     reports.push(HostReport::ModelsFailed {
                         provider,
                         class,
@@ -1336,6 +1404,7 @@ impl ProductionHost {
             };
             reports.push(HostReport::Output(output));
         }
+        self.pump_workflows();
         reports
     }
 
@@ -1349,6 +1418,263 @@ impl ProductionHost {
         self.registry.get(id).map(|e| e.manifest.name.clone())
     }
 
+    /// Start a workflow and drive it from `poll` (no blocking, cancels cheaply).
+    pub fn start_workflow(&mut self, extension_id: &str, script: String) -> Result<(), String> {
+        let extension = self
+            .registry
+            .get(extension_id)
+            .ok_or_else(|| format!("没有扩展 {extension_id}"))?;
+        let workflow = extension
+            .workflow()
+            .map_err(|problems| {
+                problems
+                    .iter()
+                    .map(|p| format!("{}: {}", p.path, p.message))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })?
+            .ok_or_else(|| format!("{extension_id} 没有 graph.json"))?;
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let workdir = self
+            .root
+            .join("cache/workflow-runs")
+            .join(format!("{}-{stamp}", extension_id.replace(['.', '/', '\\'], "-")));
+        std::fs::create_dir_all(&workdir).ok();
+        let run_id = stamp as RunId;
+        self.bridge.register_run(run_id, workdir.clone());
+        let job = todo_workflow::runner::WorkflowJob::new(
+            &workflow.graph,
+            &extension.dir,
+            todo_workflow::runner::RunInput {
+                script,
+                at: Some(0.0),
+            },
+        );
+        self.workflow_live.insert(
+            extension_id.to_owned(),
+            WorkflowLive {
+                job,
+                call: None,
+                run_id,
+                workdir,
+                started: Instant::now(),
+            },
+        );
+        self.pump_workflows();
+        Ok(())
+    }
+
+    /// One frame of every running workflow: collect settled calls, advance until
+    /// the next service call, submit it, stop.
+    fn pump_workflows(&mut self) {
+        if self.workflow_live.is_empty() {
+            return;
+        }
+        let mut live = std::mem::take(&mut self.workflow_live);
+        let mut finished = Vec::new();
+        for (extension, run) in live.iter_mut() {
+            if run.started.elapsed().as_secs() > 1800 {
+                run.job.resume(Err("工作流运行超时（30 分钟）".into()));
+                finished.push(extension.clone());
+                continue;
+            }
+            loop {
+                if let Some((call_id, via_router, started)) = run.call.clone() {
+                    let result = if via_router {
+                        self.workflow_results.remove(&call_id)
+                    } else {
+                        self.bridge.take_direct(&call_id)
+                    };
+                    match result {
+                        Some(result) => {
+                            run.call = None;
+                            run.job.resume(result);
+                            continue;
+                        }
+                        None if started.elapsed().as_secs() > 300 => {
+                            run.call = None;
+                            run.job.resume(Err("服务调用超时".into()));
+                            continue;
+                        }
+                        None => break,
+                    }
+                }
+                match run.job.advance() {
+                    todo_workflow::runner::Step::Waiting => break,
+                    todo_workflow::runner::Step::Finished => {
+                        finished.push(extension.clone());
+                        break;
+                    }
+                    todo_workflow::runner::Step::Call(call) => {
+                        self.workflow_seq += 1;
+                        let call_id = format!("wf-{}-{}", run.run_id, self.workflow_seq);
+                        if self.dispatch_workflow_call(run, call, &call_id) {
+                            run.call = Some((call_id, true, Instant::now()));
+                        } else {
+                            run.call = Some((call_id, false, Instant::now()));
+                        }
+                    }
+                }
+            }
+        }
+        for extension in finished {
+            if let Some(run) = live.remove(&extension) {
+                let mut report = run.job.report().clone();
+                for node in &mut report.nodes {
+                    if let Some(image) = node.image.clone() {
+                        if !std::path::Path::new(&image).is_absolute() {
+                            node.image =
+                                Some(run.workdir.join(image).to_string_lossy().into_owned());
+                        }
+                    }
+                }
+                self.workflow_runs.insert(extension, report);
+            }
+        }
+        self.workflow_live = live;
+    }
+
+    /// `true` when the call went to the AI router (vision), `false` for the bridge.
+    fn dispatch_workflow_call(
+        &mut self,
+        run: &WorkflowLive,
+        call: todo_workflow::runner::RequestedCall,
+        call_id: &str,
+    ) -> bool {
+        use todo_production::extension::protocol::ServiceCall;
+        use todo_workflow::runner::RequestedCall;
+        match call {
+            RequestedCall::Chat(call) => {
+                self.bridge
+                    .call_async(&self.ai, run.run_id, call_id.to_owned(), ServiceCall::Chat(call));
+                false
+            }
+            RequestedCall::Image(call) => {
+                self.bridge
+                    .call_async(&self.ai, run.run_id, call_id.to_owned(), ServiceCall::Image(call));
+                false
+            }
+            RequestedCall::Speech(call) => {
+                self.bridge
+                    .call_async(&self.ai, run.run_id, call_id.to_owned(), ServiceCall::Speech(call));
+                false
+            }
+            RequestedCall::Subtitles(call) => {
+                self.bridge.call_async(
+                    &self.ai,
+                    run.run_id,
+                    call_id.to_owned(),
+                    ServiceCall::Subtitles(call),
+                );
+                false
+            }
+            RequestedCall::Vision { prompt, images } => {
+                let media: Vec<String> = images
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect();
+                let request = todo_production::tasks::MultimodalRequest {
+                    model: String::new(),
+                    prompt,
+                    digests: todo_ai::providers::vision::media_digests(&media),
+                    media,
+                    json: false,
+                };
+                let key = self
+                    .ai
+                    .submit(todo_production::TaskRequest::Multimodal(request));
+                self.workflow_keys.insert(key, call_id.to_owned());
+                true
+            }
+        }
+    }
+
+    /// `(done, total, waiting node)` for a running workflow.
+    pub fn workflow_progress(&self, extension_id: &str) -> Option<(usize, usize, Option<String>)> {
+        let run = self.workflow_live.get(extension_id)?;
+        let (done, total) = run.job.progress();
+        Some((
+            done,
+            total,
+            run.job.waiting_on().map(str::to_owned),
+        ))
+    }
+
+    /// Cancel a running workflow (its AI tasks are cancelled by the caller).
+    pub fn cancel_workflow(&mut self, extension_id: &str) -> Vec<TaskKey> {
+        let Some(run) = self.workflow_live.remove(extension_id) else {
+            return Vec::new();
+        };
+        let keys: Vec<TaskKey> = self
+            .workflow_keys
+            .iter()
+            .filter(|(_, id)| id.starts_with(&format!("wf-{}-", run.run_id)))
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in &keys {
+            self.ai.cancel(key);
+        }
+        keys
+    }
+
+    /// Run one installed workflow graph with the host's services.
+    ///
+    /// Blocking: each node waits for its AI task. Call it from a worker thread
+    /// if the UI must stay responsive; the AI journal still makes it resumable.
+    pub fn run_workflow(
+        &mut self,
+        extension_id: &str,
+        script: String,
+    ) -> Result<todo_workflow::RunReport, String> {
+        let extension = self
+            .registry
+            .get(extension_id)
+            .ok_or_else(|| format!("没有扩展 {extension_id}"))?;
+        let workflow = extension
+            .workflow()
+            .map_err(|problems| {
+                problems
+                    .iter()
+                    .map(|p| format!("{}: {}", p.path, p.message))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })?
+            .ok_or_else(|| format!("{extension_id} 没有 graph.json"))?;
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let workdir = self
+            .root
+            .join("cache/workflow-runs")
+            .join(format!("{}-{stamp}", extension_id.replace(['.', '/', '\\'], "-")));
+        let run_id = stamp as todo_workflow::RunId;
+        let run_dir = workdir.clone();
+        let mut report = crate::adapters::workflow::run_workflow(
+            &workflow,
+            &extension.dir,
+            workdir,
+            &mut self.bridge,
+            &self.ai,
+            run_id,
+            script,
+        );
+        // 产物路径是运行目录内的相对路径；面板预览要绝对路径。
+        for node in &mut report.nodes {
+            if let Some(image) = node.image.clone() {
+                if !std::path::Path::new(&image).is_absolute() {
+                    node.image = Some(run_dir.join(image).to_string_lossy().into_owned());
+                }
+            }
+        }
+        self.workflow_runs
+            .insert(extension_id.to_owned(), report.clone());
+        Ok(report)
+    }
+
     /// Declared workflow graph for the panel (None for narration / no graph).
     pub fn workflow_panel(&self, extension_id: &str) -> Option<todo_interaction::WorkflowPanelView> {
         let extension = self.registry.get(extension_id)?;
@@ -1358,16 +1684,50 @@ impl ProductionHost {
                 .node_cards()
                 .into_iter()
                 .map(|n| {
-                    let fields = workflow_inspector_fields(&n.node_type, &n.params);
+                    let fields = workflow_inspector_fields(
+                        &n.node_type,
+                        &n.params,
+                        &self.model_choices(&n.node_type),
+                    );
                     let files = media_bin_files(&n.params);
+                    let params_json =
+                        serde_json::to_string(&serde_json::Value::Object(n.params.clone()))
+                            .unwrap_or_else(|_| "{}".into());
+                    let live = self.workflow_live.get(extension_id);
+                    let waiting = live.and_then(|run| run.job.waiting_on());
+                    let last = match live {
+                        Some(run) => run.job.report().nodes.iter().find(|run| run.id == n.id),
+                        None => self
+                            .workflow_runs
+                            .get(extension_id)
+                            .and_then(|report| report.nodes.iter().find(|run| run.id == n.id)),
+                    };
+                    let status = if waiting == Some(n.id.as_str()) {
+                        todo_interaction::ProductionNodeStatus::Running
+                    } else {
+                        match last {
+                            None => todo_interaction::ProductionNodeStatus::Queued,
+                            Some(run) if run.ok => todo_interaction::ProductionNodeStatus::Complete,
+                            Some(_) => todo_interaction::ProductionNodeStatus::Failed,
+                        }
+                    };
+                    let detail = last.map(|run| {
+                        if run.ok {
+                            run.outputs.join(",")
+                        } else {
+                            run.message.clone()
+                        }
+                    });
                     todo_interaction::WorkflowNodeView {
                         id: n.id,
                         node_type: n.node_type,
                         label: n.label,
                         summary: n.summary,
                         docs: n.docs,
-                        status: todo_interaction::ProductionNodeStatus::Queued,
-                        detail: None,
+                        status,
+                        detail,
+                        image: last.and_then(|run| run.image.clone()),
+                        output: last.and_then(|run| run.preview.clone()),
                         inputs: n
                             .inputs
                             .into_iter()
@@ -1382,9 +1742,16 @@ impl ProductionHost {
                         y: n.y,
                         fields,
                         files,
+                        params_json,
                     }
                 })
                 .collect(),
+            running: self.workflow_progress(extension_id).map(|(done, total, waiting)| {
+                match waiting {
+                    Some(node) => format!("{done}/{total} · 等待 {node}"),
+                    None => format!("{done}/{total}"),
+                }
+            }),
             edges: workflow
                 .edges()
                 .iter()
@@ -1393,6 +1760,13 @@ impl ProductionHost {
                     to: e.to.clone(),
                     out: e.out.clone(),
                     input: e.input.clone(),
+                })
+                .collect(),
+            palette: todo_production::extension::nodes::CATALOG
+                .iter()
+                .map(|s| todo_interaction::WorkflowTypeChoice {
+                    type_name: s.type_name.to_owned(),
+                    label: s.label.to_owned(),
                 })
                 .collect(),
         })
@@ -1554,6 +1928,278 @@ impl ProductionHost {
         extension.save_graph(&graph)
     }
 
+    fn load_writable_graph(
+        &mut self,
+        extension_id: &str,
+        positions: &BTreeMap<String, (f32, f32)>,
+    ) -> Result<(std::sync::Arc<Extension>, todo_production::extension::graph::Graph), String> {
+        use todo_production::extension::graph::Graph;
+        let extension = self.writable_extension(extension_id)?;
+        let workflow = extension
+            .workflow()
+            .map_err(|ps| {
+                ps.iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })?
+            .ok_or_else(|| "扩展没有工作流图".to_string())?;
+        let mut graph: Graph = workflow.graph.clone();
+        for node in &mut graph.nodes {
+            if let Some(&(x, y)) = positions.get(&node.id) {
+                node.x = Some(x as f64);
+                node.y = Some(y as f64);
+            }
+        }
+        Ok((extension, graph))
+    }
+
+    fn unique_node_id(graph: &todo_production::extension::graph::Graph, base: &str) -> String {
+        let safe: String = base
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let base = if safe.is_empty() { "node" } else { &safe };
+        let existing: std::collections::BTreeSet<_> =
+            graph.nodes.iter().map(|n| n.id.as_str()).collect();
+        if !existing.contains(base) {
+            return base.to_owned();
+        }
+        for i in 2..10_000 {
+            let id = format!("{base}_{i}");
+            if !existing.contains(id.as_str()) {
+                return id;
+            }
+        }
+        format!("{base}_{}", graph.nodes.len() + 1)
+    }
+
+    fn default_node_params(
+        node_type: &str,
+    ) -> std::collections::BTreeMap<String, serde_json::Value> {
+        use todo_production::extension::nodes::{self, ParamField};
+        let mut params = std::collections::BTreeMap::new();
+        let Some(spec) = nodes::lookup(node_type) else {
+            return params;
+        };
+        for field in spec.fields {
+            match field {
+                ParamField::Select { id, default, .. } => {
+                    params.insert((*id).into(), serde_json::json!(*default));
+                }
+                ParamField::Number { id, default, .. } => {
+                    params.insert((*id).into(), serde_json::json!(*default));
+                }
+                ParamField::Text { id, default, .. } => {
+                    params.insert((*id).into(), serde_json::json!(*default));
+                }
+                ParamField::FileKinds { id, accept, .. } => {
+                    params.insert((*id).into(), serde_json::json!(*accept));
+                }
+            }
+        }
+        params
+    }
+
+    /// Insert a catalog node at graph coordinates.
+    pub fn add_workflow_node(
+        &mut self,
+        extension_id: &str,
+        node_type: &str,
+        x: f32,
+        y: f32,
+        positions: &BTreeMap<String, (f32, f32)>,
+    ) -> Result<String, String> {
+        use todo_production::extension::graph::GraphNode;
+        use todo_production::extension::nodes;
+        let spec = nodes::lookup(node_type).ok_or_else(|| format!("未知节点类型 {node_type}"))?;
+        let (extension, mut graph) = self.load_writable_graph(extension_id, positions)?;
+        let id = Self::unique_node_id(&graph, spec.type_name);
+        graph.nodes.push(GraphNode {
+            id: id.clone(),
+            node_type: spec.type_name.to_owned(),
+            label: Some(spec.label.to_owned()),
+            params: Self::default_node_params(spec.type_name),
+            x: Some(x as f64),
+            y: Some(y as f64),
+        });
+        extension.save_graph(&graph)?;
+        Ok(id)
+    }
+
+    /// Duplicate a node (params + label; no edges), offset on canvas.
+    pub fn duplicate_workflow_node(
+        &mut self,
+        extension_id: &str,
+        node_id: &str,
+        positions: &BTreeMap<String, (f32, f32)>,
+    ) -> Result<String, String> {
+        use todo_production::extension::graph::GraphNode;
+        let (extension, mut graph) = self.load_writable_graph(extension_id, positions)?;
+        let src = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == node_id)
+            .ok_or_else(|| format!("没有节点 {node_id}"))?
+            .clone();
+        let id = Self::unique_node_id(&graph, &src.node_type);
+        let (x, y) = positions
+            .get(node_id)
+            .copied()
+            .map(|(x, y)| (x as f64, y as f64))
+            .or_else(|| Some((src.x.unwrap_or(80.0), src.y.unwrap_or(80.0))))
+            .unwrap();
+        graph.nodes.push(GraphNode {
+            id: id.clone(),
+            node_type: src.node_type,
+            label: src.label,
+            params: src.params,
+            x: Some(x + 48.0),
+            y: Some(y + 48.0),
+        });
+        extension.save_graph(&graph)?;
+        Ok(id)
+    }
+
+    /// Remove a node and any edges that touch it.
+    pub fn delete_workflow_node(
+        &mut self,
+        extension_id: &str,
+        node_id: &str,
+        positions: &BTreeMap<String, (f32, f32)>,
+    ) -> Result<(), String> {
+        let (extension, mut graph) = self.load_writable_graph(extension_id, positions)?;
+        if !graph.nodes.iter().any(|n| n.id == node_id) {
+            return Err(format!("没有节点 {node_id}"));
+        }
+        graph.nodes.retain(|n| n.id != node_id);
+        graph
+            .edges
+            .retain(|e| e.from != node_id && e.to != node_id);
+        extension.save_graph(&graph)
+    }
+
+    /// Paste a copied node (type + JSON params) at a graph position.
+    pub fn paste_workflow_node(
+        &mut self,
+        extension_id: &str,
+        node_type: &str,
+        label: Option<String>,
+        params_json: &str,
+        x: f32,
+        y: f32,
+        positions: &BTreeMap<String, (f32, f32)>,
+    ) -> Result<String, String> {
+        use todo_production::extension::graph::GraphNode;
+        use todo_production::extension::nodes;
+        let spec = nodes::lookup(node_type).ok_or_else(|| format!("未知节点类型 {node_type}"))?;
+        let params: BTreeMap<String, serde_json::Value> = if params_json.is_empty() {
+            Self::default_node_params(spec.type_name)
+        } else {
+            serde_json::from_str(params_json).map_err(|e| e.to_string())?
+        };
+        let (extension, mut graph) = self.load_writable_graph(extension_id, positions)?;
+        let id = Self::unique_node_id(&graph, spec.type_name);
+        graph.nodes.push(GraphNode {
+            id: id.clone(),
+            node_type: spec.type_name.to_owned(),
+            label: label.or_else(|| Some(spec.label.to_owned())),
+            params,
+            x: Some(x as f64),
+            y: Some(y as f64),
+        });
+        extension.save_graph(&graph)?;
+        Ok(id)
+    }
+
+    /// Add an edge; port names optional when unambiguous / compatible.
+    pub fn connect_workflow_edge(
+        &mut self,
+        extension_id: &str,
+        from: &str,
+        to: &str,
+        out: Option<&str>,
+        input: Option<&str>,
+        positions: &BTreeMap<String, (f32, f32)>,
+    ) -> Result<(), String> {
+        use todo_production::extension::graph::GraphEdge;
+        use todo_production::extension::nodes::resolve_edge_ports;
+        if from == to {
+            return Err("不能连接到自身".into());
+        }
+        let (extension, mut graph) = self.load_writable_graph(extension_id, positions)?;
+        let from_type = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == from)
+            .map(|n| n.node_type.clone())
+            .ok_or_else(|| format!("没有源节点 {from}"))?;
+        let to_type = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == to)
+            .map(|n| n.node_type.clone())
+            .ok_or_else(|| format!("没有目标节点 {to}"))?;
+        let (out_port, in_port) =
+            resolve_edge_ports(&from_type, &to_type, out, input).map_err(|e| e)?;
+        graph.edges.retain(|e| {
+            !(e.from == from
+                && e.to == to
+                && e.out.as_deref() == Some(out_port.name)
+                && e.input.as_deref() == Some(in_port.name))
+        });
+        // One wire per target input port (replace previous source).
+        graph.edges.retain(|e| {
+            !(e.to == to && e.input.as_deref() == Some(in_port.name))
+        });
+        graph.edges.push(GraphEdge {
+            from: from.to_owned(),
+            to: to.to_owned(),
+            out: Some(out_port.name.to_owned()),
+            input: Some(in_port.name.to_owned()),
+        });
+        extension.save_graph(&graph)
+    }
+
+    pub fn disconnect_workflow_edge(
+        &mut self,
+        extension_id: &str,
+        from: &str,
+        to: &str,
+        out: Option<&str>,
+        input: Option<&str>,
+        positions: &BTreeMap<String, (f32, f32)>,
+    ) -> Result<(), String> {
+        let (extension, mut graph) = self.load_writable_graph(extension_id, positions)?;
+        let before = graph.edges.len();
+        graph.edges.retain(|e| {
+            if e.from != from || e.to != to {
+                return true;
+            }
+            if let Some(o) = out {
+                if e.out.as_deref() != Some(o) {
+                    return true;
+                }
+            }
+            if let Some(i) = input {
+                if e.input.as_deref() != Some(i) {
+                    return true;
+                }
+            }
+            false
+        });
+        if graph.edges.len() == before {
+            return Err("没有找到这条连线".into());
+        }
+        extension.save_graph(&graph)
+    }
+
     /// Pick-and-copy files into a media_bin node.
     pub fn add_workflow_media_files(
         &mut self,
@@ -1675,9 +2321,53 @@ fn media_bin_files(
         .collect()
 }
 
+impl ProductionHost {
+    /// Models offered for a node's `model` field: the configured default plus
+    /// the known-good names for the capability.
+    fn model_choices(&self, node_type: &str) -> Vec<(String, String)> {
+        let capability = match node_type {
+            "image_gen" => Capability::Image,
+            "multimodal" => Capability::Multimodal,
+            "tts" => Capability::Audio,
+            _ => Capability::Language,
+        };
+        let mut out: Vec<(String, String)> = vec![(String::new(), "跟随 AI 设置".to_owned())];
+        if let Some(binding) = self.ai.binding(capability) {
+            let current = binding.model.clone();
+            out.push((current.clone(), format!("当前：{current}")));
+        }
+        let wanted = match capability {
+            Capability::Language => todo_ai::models::ModelCapability::Language,
+            Capability::Image => todo_ai::models::ModelCapability::Image,
+            Capability::Video => todo_ai::models::ModelCapability::Video,
+            Capability::Multimodal => todo_ai::models::ModelCapability::Multimodal,
+            Capability::Audio => todo_ai::models::ModelCapability::Audio,
+        };
+        for info in self.models.iter().filter(|info| info.supports(wanted)) {
+            if !out.iter().any(|(value, _)| value == &info.id) {
+                out.push((info.id.clone(), info.id.clone()));
+            }
+        }
+        let extra: &[&str] = match capability {
+            Capability::Language => &["deepseek-flash", "deepseek-v4-pro", "claude-fable-5"],
+            Capability::Image => &["gpt-image-2"],
+            Capability::Multimodal => &["deepseek-flash", "gemini-3.8-flash"],
+            Capability::Video => &["sora-2"],
+            Capability::Audio => &[],
+        };
+        for model in extra {
+            if !out.iter().any(|(value, _)| value == model) {
+                out.push(((*model).to_owned(), (*model).to_owned()));
+            }
+        }
+        out
+    }
+}
+
 fn workflow_inspector_fields(
     node_type: &str,
     params: &serde_json::Map<String, serde_json::Value>,
+    models: &[(String, String)],
 ) -> Vec<todo_interaction::WorkflowParamFieldView> {
     use todo_interaction::WorkflowParamFieldView;
     use todo_production::extension::nodes::{self, ParamField};
@@ -1732,6 +2422,30 @@ fn workflow_inspector_fields(
                     max: *max,
                     step: *step,
                     unit: unit.map(|u| u.to_owned()),
+                    value,
+                }
+            }
+            ParamField::Text {
+                id,
+                label,
+                hint,
+                default,
+                placeholder,
+            } if *id == "model" => {
+                let value = params
+                    .get(*id)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(default)
+                    .to_owned();
+                let mut options = models.to_vec();
+                if !value.is_empty() && !options.iter().any(|(v, _)| v == &value) {
+                    options.push((value.clone(), value.clone()));
+                }
+                WorkflowParamFieldView::Select {
+                    id: (*id).into(),
+                    label: (*label).into(),
+                    hint: "留空跟随 AI 设置；也可选具体模型".into(),
+                    options,
                     value,
                 }
             }

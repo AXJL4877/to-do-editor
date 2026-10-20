@@ -105,7 +105,7 @@ impl AiRouter {
             .binding(capability)
             .map(|binding| binding.provider)
             .unwrap_or(Provider::Huniu);
-        self.service.list_models(provider)
+        self.service.list_models(provider, capability)
     }
     pub fn poll(&self) -> Option<AiEvent> {
         self.service.poll()

@@ -22,7 +22,7 @@ pub use presentation::production::{
     ParamView, ProblemAction, ProblemView, ProductionNodeStatus, ProductionPanelView,
     ProductionView, ScriptView, SegmentView, StageView, VariantView, WorkflowEdgeView,
     WorkflowEntryView, WorkflowMediaFileView, WorkflowNodeView, WorkflowPanelView,
-    WorkflowParamFieldView,
+    WorkflowParamFieldView, WorkflowTypeChoice,
 };
 pub use presentation::{
     fmt_clock, fmt_ruler_tick, fmt_tick, status_text, tick_step, wave_span, AlignGuideView,

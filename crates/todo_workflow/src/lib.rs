@@ -7,6 +7,7 @@ pub mod check;
 pub mod install;
 pub mod pool;
 pub mod registry;
+pub mod runner;
 pub mod runtime;
 pub mod workflow;
 
@@ -15,6 +16,7 @@ pub use check::{check_extension, check_extension_fixtures, load_and_check, Check
 pub use install::{install, pack, uninstall, InstallError};
 pub use pool::{PoolHandle, PoolOptions, RunId, RunRequest, WorkerEvent, WorkerPool};
 pub use registry::{load, Extension, Origin, Registry, Rejected, MANIFEST_FILE};
+pub use runner::{run, segment_script, NodeRun, RunInput, RunReport, Services};
 pub use runtime::{worker_command, RuntimeError, RuntimePaths};
 pub use workflow::{
     copy_package, create_blank_workflow, Workflow, WorkflowNodeCard, WorkflowPortCard,

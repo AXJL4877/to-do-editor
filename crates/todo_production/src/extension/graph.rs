@@ -61,8 +61,18 @@ impl Graph {
         })
     }
 
-    /// Structural + catalog checks. `worker_ops` are package `worker.ops`.
+    /// Full install/run checks (types, edges, cycles, required inputs wired).
     pub fn validate(&self, worker_ops: &BTreeSet<&str>) -> Vec<Problem> {
+        self.validate_inner(worker_ops, true)
+    }
+
+    /// Canvas edit / save: same as [`validate`] but allows unwired required inputs
+    /// so users can drop incomplete nodes (e.g. llm_chat) then connect later.
+    pub fn validate_draft(&self, worker_ops: &BTreeSet<&str>) -> Vec<Problem> {
+        self.validate_inner(worker_ops, false)
+    }
+
+    fn validate_inner(&self, worker_ops: &BTreeSet<&str>, require_inputs: bool) -> Vec<Problem> {
         let mut problems = Vec::new();
         let mut problem = |path: &str, message: String| {
             problems.push(Problem {
@@ -177,16 +187,18 @@ impl Graph {
             }
         }
 
-        for (i, node) in self.nodes.iter().enumerate() {
-            let Some(spec) = nodes::lookup(&node.node_type) else {
-                continue;
-            };
-            for port in spec.inputs.iter().filter(|p| p.required) {
-                if !wired.contains(&(node.id.clone(), port.name.to_owned())) {
-                    problem(
-                        &format!("nodes[{i}]"),
-                        format!("必需输入端口 {} 未连接", port.name),
-                    );
+        if require_inputs {
+            for (i, node) in self.nodes.iter().enumerate() {
+                let Some(spec) = nodes::lookup(&node.node_type) else {
+                    continue;
+                };
+                for port in spec.inputs.iter().filter(|p| p.required) {
+                    if !wired.contains(&(node.id.clone(), port.name.to_owned())) {
+                        problem(
+                            &format!("nodes[{i}]"),
+                            format!("必需输入端口 {} 未连接", port.name),
+                        );
+                    }
                 }
             }
         }
@@ -368,6 +380,10 @@ mod tests {
         assert!(
             found.iter().any(|p| p.message.contains("text") && p.message.contains("未连接")),
             "{found:?}"
+        );
+        assert!(
+            g.validate_draft(&BTreeSet::new()).is_empty(),
+            "draft save must allow unwired required ports"
         );
     }
 

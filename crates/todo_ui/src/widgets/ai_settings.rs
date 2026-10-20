@@ -104,9 +104,7 @@ fn connection_row(ui: &mut Ui, view: &AiSettingsView) -> bool {
             "测试连接"
         };
         test = button(ui, label, Btn::Normal, !view.huniu_testing)
-            .on_hover_text(
-                "保存后发送一条很短的对话请求，确认 Key 和对话模型可用（会消耗极少额度）",
-            )
+            .on_hover_text("会发一条很短的对话请求，消耗极少额度")
             .clicked();
         if let Some((ok, message)) = &view.huniu_connection {
             ui.label(
@@ -116,33 +114,11 @@ fn connection_row(ui: &mut Ui, view: &AiSettingsView) -> bool {
             );
         }
     });
-    let models = &view.huniu_models;
     let status = view.huniu_model_status.as_deref();
-    if status.is_some() || !models.is_empty() {
+    if let Some(status) = status {
         ui.horizontal(|ui| {
             ui.add_sized([84.0, 18.0], egui::Label::new(""));
-            if let Some(status) = status {
-                ui.label(RichText::new(status).size(11.0).color(MUTED));
-            }
-            if !models.is_empty() {
-                let count = |capability| {
-                    models
-                        .iter()
-                        .filter(|model| model.capabilities.contains(&capability))
-                        .count()
-                };
-                ui.label(
-                    RichText::new(format!(
-                        "（语言 {} · 图片 {} · 视频 {} · 多模态 {}）",
-                        count(ModelCapability::Language),
-                        count(ModelCapability::Image),
-                        count(ModelCapability::Video),
-                        count(ModelCapability::Multimodal),
-                    ))
-                    .size(11.0)
-                    .color(DIM),
-                );
-            }
+            ui.label(RichText::new(status).size(11.0).color(MUTED));
         });
     }
     test
@@ -174,18 +150,16 @@ fn key_card(
                 .size(12.0)
                 .color(key_color(source)),
         );
-    });
-    ui.horizontal(|ui| {
-        ui.add_sized([84.0, 24.0], egui::Label::new(""));
         ui.label(
             RichText::new(match source {
-                KeySource::Environment => "来源：环境变量（只读）",
-                KeySource::Keychain => "来源：Windows 凭据管理器",
-                KeySource::Missing => "来源：还没有配置",
+                KeySource::Environment => "环境变量",
+                KeySource::Keychain => "凭据管理器",
+                KeySource::Missing => "待配置",
             })
-            .size(11.0)
-            .color(MUTED),
-        );
+            .size(10.5)
+            .color(DIM),
+        )
+        .on_hover_text("Key 的来源；环境变量只读");
     });
     ui.horizontal(|ui| {
         ui.add_sized([84.0, 28.0], egui::Label::new(""));

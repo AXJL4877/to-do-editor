@@ -390,6 +390,14 @@ impl eframe::App for App {
                     }
                 }
             }
+            todo_ui::ProductionAction::WorkflowRun { extension, script } => {
+                if let Some(host) = &mut self.production {
+                    match host.start_workflow(&extension, script) {
+                        Ok(()) => self.notice("工作流已开始运行".into()),
+                        Err(e) => self.notice(format!("无法运行：{e}")),
+                    }
+                }
+            }
             todo_ui::ProductionAction::WorkflowSave {
                 extension,
                 positions,
@@ -433,6 +441,112 @@ impl eframe::App for App {
                     match host.remove_workflow_media_file(&extension, &node_id, &path) {
                         Ok(()) => self.notice("已从容器移除该文件".into()),
                         Err(e) => self.notice(format!("移除失败：{e}")),
+                    }
+                }
+            }
+            todo_ui::ProductionAction::WorkflowAddNode {
+                extension,
+                node_type,
+                x,
+                y,
+                positions,
+            } => {
+                if let Some(host) = &mut self.production {
+                    match host.add_workflow_node(&extension, &node_type, x, y, &positions) {
+                        Ok(_) => self.notice("已添加节点".into()),
+                        Err(e) => self.notice(format!("添加失败：{e}")),
+                    }
+                }
+            }
+            todo_ui::ProductionAction::WorkflowDuplicateNode {
+                extension,
+                node_id,
+                positions,
+            } => {
+                if let Some(host) = &mut self.production {
+                    match host.duplicate_workflow_node(&extension, &node_id, &positions) {
+                        Ok(_) => self.notice("已复制节点".into()),
+                        Err(e) => self.notice(format!("复制失败：{e}")),
+                    }
+                }
+            }
+            todo_ui::ProductionAction::WorkflowDeleteNode {
+                extension,
+                node_id,
+                positions,
+            } => {
+                if let Some(host) = &mut self.production {
+                    match host.delete_workflow_node(&extension, &node_id, &positions) {
+                        Ok(()) => self.notice("已删除节点".into()),
+                        Err(e) => self.notice(format!("删除失败：{e}")),
+                    }
+                }
+            }
+            todo_ui::ProductionAction::WorkflowPasteNode {
+                extension,
+                node_type,
+                label,
+                params_json,
+                x,
+                y,
+                positions,
+            } => {
+                if let Some(host) = &mut self.production {
+                    match host.paste_workflow_node(
+                        &extension,
+                        &node_type,
+                        label,
+                        &params_json,
+                        x,
+                        y,
+                        &positions,
+                    ) {
+                        Ok(_) => self.notice("已粘贴节点".into()),
+                        Err(e) => self.notice(format!("粘贴失败：{e}")),
+                    }
+                }
+            }
+            todo_ui::ProductionAction::WorkflowConnect {
+                extension,
+                from,
+                to,
+                out,
+                input,
+                positions,
+            } => {
+                if let Some(host) = &mut self.production {
+                    match host.connect_workflow_edge(
+                        &extension,
+                        &from,
+                        &to,
+                        out.as_deref(),
+                        input.as_deref(),
+                        &positions,
+                    ) {
+                        Ok(()) => self.notice("已连线".into()),
+                        Err(e) => self.notice(format!("连线失败：{e}")),
+                    }
+                }
+            }
+            todo_ui::ProductionAction::WorkflowDisconnect {
+                extension,
+                from,
+                to,
+                out,
+                input,
+                positions,
+            } => {
+                if let Some(host) = &mut self.production {
+                    match host.disconnect_workflow_edge(
+                        &extension,
+                        &from,
+                        &to,
+                        out.as_deref(),
+                        input.as_deref(),
+                        &positions,
+                    ) {
+                        Ok(()) => self.notice("已断开连线".into()),
+                        Err(e) => self.notice(format!("断开失败：{e}")),
                     }
                 }
             }
