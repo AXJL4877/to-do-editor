@@ -1,7 +1,7 @@
 use image::{Rgba, RgbaImage};
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, Arc};
-use todo_extensions::{check_extension_fixtures, load, Origin, RuntimePaths};
+use todo_workflow::{check_extension_fixtures, load, Origin, RuntimePaths};
 
 #[test]
 fn built_in_productions_pass_offline_worker_self_check() {

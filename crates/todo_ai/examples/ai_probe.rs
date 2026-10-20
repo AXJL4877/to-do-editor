@@ -1,6 +1,6 @@
 //! One small real request through the service, to confirm provider contracts.
 //! Spends money (fractions of a cent). Results go to `target/ai-probe/`.
-//! `cargo run -p todo_ai --example ai_probe -- tts|chat|chat-json|image`
+//! `cargo run -p todo_ai --example ai_probe -- tts|chat|chat-json|image|vision <png>...`
 use std::collections::HashMap;
 use std::time::Duration;
 use todo_ai::net::{BreakerPolicy, RetryPolicy};
@@ -24,11 +24,31 @@ fn main() {
         }
     }
     let probe = root.join("target/ai-probe");
+    let language = match &config.language_base_url {
+        Some(base) => secrets
+            .language()
+            .ok()
+            .flatten()
+            .map(|(key, _)| todo_ai::LanguageEndpoint {
+                base_url: base.clone(),
+                key,
+            }),
+        None => None,
+    };
     let settings = ServiceSettings {
+        language,
         huniu_base_url: config.huniu.base_url.clone(),
         volc_base_url: config.volc.base_url.clone(),
         huniu_strategy: config.huniu.strategy.clone(),
         keys,
+        bindings: HashMap::from([
+            (Capability::Language, Provider::Huniu),
+            (Capability::Image, Provider::Huniu),
+            (Capability::Video, Provider::Huniu),
+            (Capability::Multimodal, Provider::Huniu),
+            (Capability::Audio, Provider::Volc),
+        ]),
+        models: HashMap::new(),
         journal_dir: probe.join("tasks"),
         artifacts_root: probe.join("blobs"),
         proxy: config.proxy,
@@ -41,18 +61,18 @@ fn main() {
     };
     let spec = match mode.as_str() {
         "tts" => TaskSpec {
-            provider: Provider::Volc,
-            request: TaskRequest::Speech(SpeechRequest {
+                        request: TaskRequest::Audio(AudioRequest {
+                model: config.volc.audio_model.clone(),
                 text: "复利靠的是时间，越早开始越轻松。".into(),
-                speaker: "zh_female_mizai_uranus_bigtts".into(),
-                resource_id: config.volc.resource_id.clone(),
+                speaker: config.volc.speaker.clone(),
+                resource_id: config.volc.audio_model.clone(),
                 sample_rate: 24000,
+                speech_rate: None,
             }),
         },
         "chat" | "chat-json" => TaskSpec {
-            provider: Provider::Huniu,
-            request: TaskRequest::Chat(ChatRequest {
-                model: config.huniu.chat_model.clone(),
+                        request: TaskRequest::Language(LanguageRequest {
+                model: config.huniu.language_model.clone(),
                 messages: vec![ChatMessage {
                     role: ChatRole::User,
                     content: "只回复一个 JSON 对象：{\"ok\": true, \"word\": \"<任意一个中文词>\"}".into(),
@@ -62,16 +82,30 @@ fn main() {
             }),
         },
         "image" => TaskSpec {
-            provider: Provider::Huniu,
-            request: TaskRequest::Image(ImageRequest {
+                        request: TaskRequest::Image(ImageRequest {
                 model: config.huniu.image_model.clone(),
                 prompt: "ONE chalk drawing of a small house on a pure flat black background, centered, clear margin".into(),
                 size: "1024x1024".into(),
                 quality: Some("low".into()),
                 transparent: false,
                 variant: 0,
+                references: Vec::new(),
+                reference_digests: Vec::new(),
             }),
         },
+        "vision" => {
+            let media: Vec<String> = std::env::args().skip(2).collect();
+            assert!(!media.is_empty(), "vision needs at least one picture path");
+            TaskSpec {
+                request: TaskRequest::Multimodal(MultimodalRequest {
+                    model: if config.language_base_url.is_some() { "deepseek-flash".to_string() } else { config.huniu.multimodal_model.clone() },
+                    prompt: r#"你在审一支短视频的节目帧。用 JSON 回答：{"frames":[{"index":0,"layout":"一句话描述版式","subtitle":"画面底部字幕原文或空","problems":[]}]}"#.into(),
+                    digests: todo_ai::providers::vision::media_digests(&media),
+                    media,
+                    json: true,
+                }),
+            }
+        }
         other => panic!("unknown mode {other}"),
     };
     let (service, recovered) = AiService::start(settings).expect("service");

@@ -15,7 +15,9 @@ fn workspace_production_dependencies_respect_layer_boundaries() {
     );
     let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let rules: &[(&str, &[&str])] = &[
-        ("todo_core", &["serde", "serde_json"]),
+        ("todo_core", &["todo_motion", "serde", "serde_json"]),
+        // Motion presets: format, evaluation and the on-disk library.
+        ("todo_motion", &["serde", "serde_json"]),
         (
             "todo_application",
             &["todo_core", "todo_production", "serde", "serde_json"],
@@ -59,7 +61,7 @@ fn workspace_production_dependencies_respect_layer_boundaries() {
         ("todo_process", &["thiserror", "windows-sys"]),
         // Extension packages and worker processes; services are answered by the app.
         (
-            "todo_extensions",
+            "todo_workflow",
             &[
                 "todo_production",
                 "todo_process",
@@ -96,13 +98,14 @@ fn workspace_production_dependencies_respect_layer_boundaries() {
             &[
                 "todo_application",
                 "todo_ai",
-                "todo_extensions",
+                "todo_workflow",
                 "todo_production",
                 "todo_interaction",
                 "todo_ui",
                 "todo_storage",
                 "todo_media",
                 "todo_preview",
+                "todo_motion",
                 "eframe",
                 "egui",
                 "raw-window-handle",

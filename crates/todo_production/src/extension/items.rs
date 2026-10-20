@@ -75,7 +75,7 @@ impl Default for ItemTransform {
     }
 }
 
-pub use todo_core::{Intro, IntroKind};
+pub use todo_core::{Intro, MotionRef};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -96,6 +96,12 @@ pub struct Item {
     pub transform: Option<ItemTransform>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intro: Option<Intro>,
+    /// Exit motion of a picture item; overrides `fade.out`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outro: Option<MotionRef>,
+    /// Transition from the item that ends where this one starts on its lane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition: Option<MotionRef>,
     /// Moves with the item of this key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
@@ -187,12 +193,25 @@ pub fn validate_items(
                 return Err(format!("音频条目 {at} 不能有 transform"));
             }
         }
-        if let Some(intro) = item.intro {
-            if !(intro.duration.is_finite()
-                && intro.duration > 0.0
-                && intro.duration <= item.duration)
-            {
-                return Err(format!("条目 {at} 的 intro 时长不合法"));
+        for (name, motion) in [
+            ("intro", &item.intro),
+            ("outro", &item.outro),
+            ("transition", &item.transition),
+        ] {
+            let Some(motion) = motion else { continue };
+            if item.role.is_audio() {
+                return Err(format!("音频条目 {at} 不能有 {name}"));
+            }
+            if !todo_core::motion::valid_motion_id(&motion.kind) {
+                return Err(format!("条目 {at} 的 {name} 动效 id 不合法"));
+            }
+            let limit = if name == "transition" {
+                10.0
+            } else {
+                item.duration
+            };
+            if !(motion.duration.is_finite() && motion.duration > 0.0 && motion.duration <= limit) {
+                return Err(format!("条目 {at} 的 {name} 时长不合法"));
             }
         }
         if let Some(gain) = item.gain {

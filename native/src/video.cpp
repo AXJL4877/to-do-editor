@@ -251,16 +251,57 @@ void VideoEngine::setLayers(std::vector<LayerSpec> layers, uint64_t generation) 
   {
     std::lock_guard<std::mutex> lock(state_->mutex);
     if (state_->stopping.load()) return;
-    bool structure_changed = layers.size() != state_->request.layers.size();
-    for (size_t index = 0; index < kMaxLayers; ++index) {
-      const bool had = index < state_->request.layers.size();
-      const bool have = index < layers.size();
-      if (had != have || (have && state_->request.layers[index].path != layers[index].path)) {
-        state_->request.epochs[index] = ++state_->epochs[index];
-        state_->outcomes[index] = {};
-        structure_changed = true;
+
+    // The compositor receives a stack whose length changes while a transition
+    // is active: [A, B] becomes [A, A', B, B']. Matching streams by array
+    // position would cancel B as it moves from slot 1 to slot 2, clear its
+    // decoded frame, and briefly expose the black render target. Reuse the
+    // previous lease by media identity instead. A path may occur more than
+    // once, so prefer the same slot and then consume the first unmatched
+    // occurrence. Source changes still cancel the worker for the affected
+    // physical slot; only an unchanged source carries its frame across the
+    // stack reshuffle.
+    const auto previous_layers = state_->request.layers;
+    const auto previous_outcomes = state_->outcomes;
+    std::array<bool, kMaxLayers> matched{};
+    std::array<std::optional<size_t>, kMaxLayers> match{};
+    const auto same_source = [](const LayerSpec& a, const LayerSpec& b) {
+      return a.kind == b.kind && a.path == b.path;
+    };
+    for (size_t index = 0; index < layers.size(); ++index) {
+      if (index < previous_layers.size() && !matched[index] &&
+          same_source(previous_layers[index], layers[index])) {
+        match[index] = index;
+        matched[index] = true;
+        continue;
+      }
+      for (size_t old = 0; old < previous_layers.size(); ++old) {
+        if (!matched[old] && same_source(previous_layers[old], layers[index])) {
+          match[index] = old;
+          matched[old] = true;
+          break;
+        }
       }
     }
+
+    bool structure_changed = layers.size() != previous_layers.size();
+    for (size_t index = 0; index < kMaxLayers; ++index) {
+      const bool had = index < previous_layers.size();
+      const bool have = index < layers.size();
+      const bool same_slot = had && have && same_source(previous_layers[index], layers[index]);
+      // A worker is owned by its physical index. Cancel it whenever that
+      // index receives a different source, even if the source is retained in
+      // another slot below.
+      const bool slot_changed = had != have || (had && have && !same_slot);
+      if (slot_changed) state_->request.epochs[index] = ++state_->epochs[index];
+      if (slot_changed) structure_changed = true;
+    }
+
+    std::array<State::LayerOutcome, kMaxLayers> next_outcomes{};
+    for (size_t index = 0; index < layers.size(); ++index) {
+      if (match[index]) next_outcomes[index] = previous_outcomes[*match[index]];
+    }
+    state_->outcomes = std::move(next_outcomes);
     if (structure_changed) ++state_->request.structure;
     state_->request.layers = std::move(layers);
     state_->request.generation = generation;

@@ -171,8 +171,12 @@ pub fn mix_audio(
         return Ok(None);
     }
     let graph = filter_graph(clips);
+    // Pad to the video length with `apad=whole_dur` (the mix never runs
+    // longer than the timeline). An `apad,atrim` pair misbehaves after
+    // `atempo` in FFmpeg 9: `atrim` ended the audio, and through
+    // `-shortest` the video, at the first clip's length.
     let base = format!(
-        "{graph};[outa]apad,atrim=0:{duration:.6},aresample=48000,aformat=channel_layouts=stereo"
+        "{graph};[outa]apad=whole_dur={duration:.6},aresample=48000,aformat=channel_layouts=stereo"
     );
     let mut measure: Vec<OsString> = vec!["-hide_banner".into(), "-nostats".into()];
     measure.extend(audio_inputs(clips));
@@ -316,6 +320,59 @@ pub fn timeline_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Real FFmpeg: a retimed, delayed clip must not cut the mix short.
+    #[test]
+    fn mixed_audio_lasts_the_whole_timeline_with_retimed_and_delayed_clips() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let tools = MediaTools::discover(&root);
+        if !tools.ffmpeg.is_file() || !tools.ffprobe.is_file() {
+            eprintln!("skipped: no FFmpeg");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("todo-mix-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tone = |name: &str, seconds: u32, rate: u32| {
+            let path = dir.join(name);
+            let status = std::process::Command::new(&tools.ffmpeg)
+                .args(["-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
+                .arg(format!("sine=f=440:d={seconds}:sample_rate={rate}"))
+                .arg(&path)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            path.to_string_lossy().into_owned()
+        };
+        let clip = |id: &str, path: String, start: f64, duration: f64, rate: f64| {
+            ResolvedAudioClip {
+                id: id.into(),
+                path,
+                start,
+                duration,
+                offset: 0.0,
+                rate,
+                gain: 0.3,
+                fade_in: 0.5,
+                fade_out: 0.5,
+            }
+        };
+        // The first clip is the shortest and starts late; one clip is retimed.
+        let clips = vec![
+            clip("late", tone("a.wav", 10, 44100), 6.0, 3.0, 1.0),
+            clip("bed", tone("b.wav", 10, 44100), 0.0, 5.0, 1.5),
+            clip("voice", tone("c.wav", 12, 24000), 0.5, 9.0, 1.0),
+        ];
+        let out = dir.join("mix.wav");
+        mix_audio(&tools, &clips, 10.0, &out).unwrap().unwrap();
+        let probe = std::process::Command::new(&tools.ffprobe)
+            .args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"])
+            .arg(&out)
+            .output()
+            .unwrap();
+        let seconds: f64 = String::from_utf8_lossy(&probe.stdout).trim().parse().unwrap();
+        assert!((seconds - 10.0).abs() < 0.05, "mix lasted {seconds}s");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn loudnorm_measurements_are_parsed_from_ffmpeg_output() {

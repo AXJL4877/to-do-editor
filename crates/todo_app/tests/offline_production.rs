@@ -154,7 +154,7 @@ impl Run {
                     let key = spec.key();
                     let dir = self.root.join(&workdir);
                     let output = match &spec.request {
-                        TaskRequest::Speech(speech) => {
+                        TaskRequest::Audio(speech) => {
                             let (raw, samples, rate) = fake_voice(&speech.text);
                             let file = format!("services/{}.wav", key.0);
                             wav(&dir.join(&file), &samples, rate);
@@ -165,7 +165,7 @@ impl Run {
                                 pcm: Some(Pcm16 { samples, rate }),
                             }
                         }
-                        TaskRequest::Chat(_) => ProductionOutput::TaskDone {
+                        TaskRequest::Language(_) => ProductionOutput::TaskDone {
                             key,
                             output: Some(json!({"text": json!({"notes": "", "scenes": [
                                 {"start": 0, "elements": [
@@ -184,6 +184,14 @@ impl Run {
                                 key,
                                 output: None,
                                 file: Some(file),
+                                pcm: None,
+                            }
+                        }
+                        TaskRequest::Video(_) | TaskRequest::Multimodal(_) => {
+                            ProductionOutput::TaskDone {
+                                key,
+                                output: None,
+                                file: None,
                                 pcm: None,
                             }
                         }
@@ -242,6 +250,10 @@ impl Run {
                         self.pending.push(AppEvent::Production(output));
                     }
                     HostReport::Notice(message) => eprintln!("notice: {message}"),
+                    HostReport::Models { .. }
+                    | HostReport::ModelsFailed { .. }
+                    | HostReport::Connection { .. }
+                    | HostReport::AgentReply { .. } => {}
                 }
             }
             let status = &self.ws.production_status()[0];
@@ -439,7 +451,11 @@ fn spongebob_workflow_runs_offline_and_emits_editable_multishot_items() {
     let mut project = create_project(None, None, None, None, None);
     project.width = 960;
     project.height = 540;
-    let ws = Workspace::with_project(project, "e2e");
+    let mut ws = Workspace::with_project(project, "e2e");
+    // As in the app: the motion library includes the extension's card motions.
+    let (motions, warnings) = todo_app::adapters::motions::load(&root);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    ws.set_motion_library(motions.presets().cloned().collect());
     let mut run = Run {
         root: root.clone(),
         ws,
@@ -447,14 +463,14 @@ fn spongebob_workflow_runs_offline_and_emits_editable_multishot_items() {
         pending: Vec::new(),
         images: 0,
     };
-    let script = "第一镜介绍角色和目标，海绵宝宝准备出发。第二镜展示道具与冲突，角色说出关键台词并遇到新的问题。第三镜用泡泡转场收束观点，第四镜给出行动提示和结尾。".repeat(3);
+    // Offline: the worker answers its service calls from tests/fixture.json.
     let (doc, mut setup) = run
         .host
         .create(
             "e2e",
             "studio.spongebob-koubo",
-            &BTreeMap::new(),
-            &script,
+            &BTreeMap::from([("topic".to_string(), ParamValue::Text("沉没成本".into()))]),
+            "",
             Canvas {
                 width: 960,
                 height: 540,
@@ -469,61 +485,78 @@ fn spongebob_workflow_runs_offline_and_emits_editable_multishot_items() {
     run.answer(update);
     run.settle(Duration::from_secs(120));
     let project = run.ws.editor().unwrap().project().clone();
-    let production_file = std::fs::read_dir(root.join("data/e2e/productions"))
-        .unwrap()
-        .flatten()
-        .map(|entry| entry.path().join("production.json"))
-        .find(|path| path.is_file())
-        .expect("saved workflow document");
-    let saved: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(production_file).unwrap()).unwrap();
-    let items = saved["workflow"]["items"].as_array().unwrap();
-    let keys: Vec<String> = items
-        .iter()
-        .filter_map(|item| item["key"].as_str().map(str::to_owned))
-        .collect();
+    let keyed = |key: &str| {
+        project
+            .tracks
+            .iter()
+            .enumerate()
+            .find_map(|(index, track)| {
+                track
+                    .clips
+                    .iter()
+                    .find(|c| c.origin.as_ref().is_some_and(|o| o.key == key))
+                    .map(|clip| (index, track, clip.clone()))
+            })
+    };
     for expected in [
-        "intro_red",
-        "voice/0",
-        "shot/0/character",
-        "shot/0/prop",
-        "shot/0/bubble",
-        "shot/1/wipe",
-        "shot/1/wipe/sfx",
+        "voice",
         "sub/0",
-        "bgm/intro",
-        "bgm/mid",
-        "bgm/outro",
+        "title/card",
+        "title/text",
+        "bg/0",
+        "bg/1",
+        "shot/0/card",
+        "shot/0/el/0",
+        "shot/1/card",
+        "shot/1/el/0",
+        "shot/2/card",
+        "shot/5/card",
+        "shot/6/line",
+        "shot/6/backdrop",
+        "bgm/0",
+        "bgm/1",
     ] {
-        assert!(
-            keys.iter().any(|key| key == expected),
-            "missing {expected}: {keys:?}"
-        );
+        assert!(keyed(expected).is_some(), "missing {expected}");
     }
-    assert!(
-        keys.iter().any(|key| key.starts_with("shot/1/")),
-        "multishot: {keys:?}"
-    );
-    let find = |key: &str| items.iter().find(|item| item["key"] == key).unwrap();
-    assert_eq!(find("intro_red")["role"], "visual");
-    assert_eq!(find("voice/0")["role"], "voice");
-    assert_eq!(find("shot/1/wipe")["role"], "visual");
-    assert_eq!(find("shot/1/wipe/sfx")["role"], "sfx");
-    assert_eq!(find("shot/1/wipe/sfx")["link"], "shot/1/character");
-    assert_eq!(find("sub/0")["role"], "subtitle");
-    let bgm_lanes: Vec<_> = ["bgm/intro", "bgm/mid", "bgm/outro"]
-        .iter()
-        .map(|key| find(key)["lane"].as_u64().unwrap())
-        .collect();
-    assert_eq!(bgm_lanes, vec![1, 2, 3]);
-    let bgm_starts: Vec<_> = ["bgm/intro", "bgm/mid", "bgm/outro"]
-        .iter()
-        .map(|key| find(key)["start"].as_f64().unwrap())
-        .collect();
-    assert!(
-        bgm_starts.windows(2).all(|pair| pair[0] < pair[1]),
-        "{bgm_starts:?}"
-    );
+    // The plate dissolves in from the title card on the same track.
+    let (plate_index, plate_track, plate) = keyed("bg/0").unwrap();
+    assert_eq!(plate.transition.as_ref().unwrap().kind, "dissolve");
+    assert!(todo_core::transition_is_active(
+        &project,
+        plate_track,
+        &plate.id
+    ));
+    // The extension's motions were copied into the project and play: shot 1
+    // drops in over shot 0 (pictures arrived one by one, the crossing still
+    // works), elements pop in with their own motions.
+    assert!(project.motions.iter().any(|m| m.id == "sb.cardDrop"));
+    assert!(project.motions.iter().any(|m| m.id.starts_with("sb.el")));
+    let (card_index, track, clip) = keyed("shot/1/card").unwrap();
+    assert_eq!(clip.transition.as_ref().unwrap().kind, "sb.cardDrop");
+    assert!(todo_core::transition_is_active(&project, track, &clip.id));
+    let (element_index, _, coins) = keyed("shot/1/el/0").unwrap();
+    assert!(coins.intro.as_ref().unwrap().kind.starts_with("sb.el"));
+    assert!(element_index < card_index, "elements draw above the card");
+    // Pictures draw above the plate.
+    for (index, track) in project.tracks.iter().enumerate() {
+        for clip in &track.clips {
+            let Some(key) = clip.origin.as_ref().map(|o| o.key.as_str()) else {
+                continue;
+            };
+            if key.starts_with("shot/") && clip.media_id().is_some() {
+                assert!(index < plate_index, "{key} is under the plate");
+            }
+        }
+    }
+    // The sublime shot: the red line over its blurred picture, no card.
+    let (line_index, _, line) = keyed("shot/6/line").unwrap();
+    assert_eq!(line.text().unwrap().style_id, "sublime-red-brush");
+    let (backdrop_index, _, backdrop) = keyed("shot/6/backdrop").unwrap();
+    assert_eq!(backdrop.intro.as_ref().unwrap().kind, "sb.backdropZoom");
+    assert!(line_index < backdrop_index && backdrop_index < plate_index);
+    assert!(keyed("shot/6/card").is_none());
+    let (_, _, sub) = keyed("sub/0").unwrap();
+    assert_eq!(sub.text().unwrap().style_id, "subtitle-kuaile");
     assert!(project.media.len() >= 8, "all workflow files were adopted");
     assert!(root.join("data/e2e/productions").is_dir());
 }

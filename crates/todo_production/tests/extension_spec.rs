@@ -2,6 +2,7 @@
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use todo_production::extension::graph::{Graph, GRAPH_SPEC};
 use todo_production::extension::items::{validate_items, Item};
 use todo_production::extension::manifest::{Kind, Manifest, Service};
 use todo_production::extension::protocol::{
@@ -63,6 +64,53 @@ fn the_chalk_hand_package_is_valid() {
     assert_eq!(params["voice"], "zh_female_mizai_uranus_bigtts");
     assert_eq!(params["subtitles"], true);
     assert!(manifest.prompt_vars(&params)["palette"].contains("chalk"));
+}
+
+#[test]
+fn the_spongebob_package_declares_a_valid_graph() {
+    let dir = package("spongebob-koubo");
+    let text = std::fs::read_to_string(dir.join("extension.json")).unwrap();
+    let manifest: Manifest = serde_json::from_str(&text).unwrap();
+    assert_eq!(manifest.kind, Kind::Workflow);
+    assert_eq!(manifest.graph.as_deref(), Some("graph.json"));
+    let found = manifest.validate(&read_in(dir.clone()));
+    assert!(found.is_empty(), "{found:?}");
+    let graph_text = std::fs::read_to_string(dir.join("graph.json")).unwrap();
+    let graph: Graph = serde_json::from_str(&graph_text).unwrap();
+    assert_eq!(graph.spec, GRAPH_SPEC);
+    let order = graph.topo_order().expect("DAG");
+    assert_eq!(order.first().copied(), Some("script"));
+    assert_eq!(order.last().copied(), Some("done"));
+    assert!(order.iter().any(|id| *id == "picture_batch"));
+}
+
+#[test]
+fn a_workflow_graph_must_be_a_dag() {
+    let mut m = animation();
+    m["graph"] = json!("graph.json");
+    let files = |path: &str| match path {
+        "graph.json" => Some(
+            json!({
+                "spec": "todo-graph/1",
+                "nodes": [
+                    {"id": "a", "type": "emit"},
+                    {"id": "b", "type": "emit"}
+                ],
+                "edges": [
+                    {"from": "a", "to": "b", "out": "items", "in": "payload"},
+                    {"from": "b", "to": "a", "out": "items", "in": "payload"}
+                ]
+            })
+            .to_string(),
+        ),
+        _ => None,
+    };
+    let manifest: Manifest = serde_json::from_value(m).unwrap();
+    let found = manifest.validate(&files);
+    assert!(
+        found.iter().any(|p| p.path.starts_with("graph") && p.message.contains("环")),
+        "{found:?}"
+    );
 }
 
 #[test]
@@ -325,9 +373,7 @@ fn the_chalk_hand_recipe_drives_the_pipeline() {
         serde_json::from_str(&std::fs::read_to_string(dir.join("extension.json")).unwrap())
             .unwrap();
     let host = HostDefaults {
-        chat_model: "gpt-6-astra".into(),
-        image_model: "gpt-image-2".into(),
-        voice_resource: "seed-tts-2.0".into(),
+        audio_model: "seed-tts-2.0".into(),
         sample_rate: 24000,
     };
     let given: BTreeMap<String, Value> = serde_json::from_value(

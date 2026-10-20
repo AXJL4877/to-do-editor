@@ -44,6 +44,8 @@ fn item(key: &str, rev: &str, role: ItemRole, lane: u32, start: f64, file: &str)
         },
         transform: None,
         intro: None,
+        outro: None,
+        transition: None,
         link: None,
         gain: None,
         fade: None,
@@ -123,7 +125,10 @@ fn places_once_and_is_idempotent() {
         "elements draw above the plate"
     );
     let element = clip(&p, "b1/e1").unwrap();
-    assert_eq!(element.outro, Some(0.5));
+    assert_eq!(
+        element.outro,
+        Some(todo_core::MotionRef::new("fadeOut", 0.5))
+    );
     assert_eq!(element.transform.scale, 0.5);
     // Audio duration is clamped to the media.
     assert_eq!(clip(&p, "g1/voice").unwrap().duration, 3.0);
@@ -245,4 +250,23 @@ fn files_without_media_are_adopted_first() {
     let (p, planned) = round(project(), &mut placement, &list, false);
     assert_eq!(planned.adopt, vec![format!("{WORK}/new.png")]);
     assert!(clip(&p, "b2/e1").is_none() && clip(&p, "plate").is_some());
+}
+
+#[test]
+fn a_clip_on_the_timeline_but_missing_from_the_record_is_adopted() {
+    let mut placement = Placement::default();
+    let (p, _) = round(project(), &mut placement, &items(), false);
+    // The record lost the voice (an older save raced the placement) and
+    // even holds a stale tombstone for it.
+    let rev = placement.placed.remove("g1/voice").unwrap();
+    placement
+        .tombstones
+        .insert(("g1/voice".into(), rev.clone()));
+    let (p, planned) = round(p, &mut placement, &items(), false);
+    assert!(planned.edits.is_empty(), "{planned:?}");
+    assert!(clip(&p, "g1/voice").is_some());
+    assert_eq!(placement.placed.get("g1/voice"), Some(&rev));
+    assert!(placement.tombstones.is_empty());
+    let (_, again) = round(p, &mut placement, &items(), false);
+    assert!(again.is_empty(), "{again:?}");
 }

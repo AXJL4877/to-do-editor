@@ -1,7 +1,7 @@
 use crate::{AppUpdate, Project};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use todo_core::{Clip, DomainError, TextContent, TrackKind, Transform};
+use todo_core::{Clip, ClipAudio, DomainError, MotionRef, TextContent, TrackKind, Transform};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -21,6 +21,12 @@ pub struct ControlRequest {
 )]
 pub enum ControlCommand {
     GetContext,
+    /// Element-level snapshot with derived geometry, optionally evaluated at
+    /// `at` seconds (entrance curves and on-screen visibility included).
+    Describe {
+        #[serde(default)]
+        at: Option<f64>,
+    },
     GetImportJob {
         job_id: u64,
     },
@@ -119,6 +125,9 @@ pub enum ControlEdit {
         timeline_start: f64,
         duration: f64,
         content: TextContent,
+        /// Optional placement applied atomically after the text clip is made.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        transform: Option<Transform>,
     },
     /// Replace a text clip's content; timing and transform are kept.
     SetText {
@@ -145,6 +154,47 @@ pub enum ControlEdit {
         media_id: String,
         folder_id: Option<String>,
     },
+    /// Entrance of a picture or text clip; `kind` is an intro preset id
+    /// (built-in, or from the motion library), `null` removes it.
+    SetIntro {
+        clip: ClipRef,
+        intro: Option<MotionRef>,
+    },
+    /// Exit of a picture or text clip (an outro preset), `null` removes it.
+    SetOutro {
+        clip: ClipRef,
+        outro: Option<MotionRef>,
+    },
+    /// Transition into the clip from the clip ending where it starts on the
+    /// same track (a transition preset, window centred on the cut).
+    SetTransition {
+        clip: ClipRef,
+        transition: Option<MotionRef>,
+    },
+    /// Gain (0..4) and fades of an audio clip.
+    SetAudio {
+        clip: ClipRef,
+        audio: Option<ClipAudio>,
+    },
+    /// Show another library item in a media clip; a picture keeps its height.
+    ReplaceMedia {
+        clip: ClipRef,
+        media_id: String,
+    },
+}
+
+impl ControlEdit {
+    /// The motion preset this edit names, if any.
+    pub fn motion(&self) -> Option<&MotionRef> {
+        match self {
+            Self::SetIntro { intro: motion, .. }
+            | Self::SetOutro { outro: motion, .. }
+            | Self::SetTransition {
+                transition: motion, ..
+            } => motion.as_ref(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -186,6 +236,7 @@ pub enum ControlStatus {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlResult {
     Context { context: Box<ControlContext> },
+    Document { document: Box<super::ProjectView> },
     Edits { receipt: EditReceipt },
     ImportStarted { job: ImportJob },
     ImportJob { job: ImportJob },

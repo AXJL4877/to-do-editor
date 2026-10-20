@@ -14,12 +14,10 @@ use crate::segment::{
 use crate::storyboard::{
     asset_prompt, build_board_messages, fallback_plan, sanitize_plan, BoardPrompt, Phrase,
 };
-use crate::subtitles::{cues, detect_silences, PAUSE_GAP};
-use crate::tasks::{
-    ChatRequest, ImageRequest, Provider, SpeechRequest, TaskKey, TaskRequest, TaskSpec,
-};
+use crate::subtitles::timeline_cues;
+use crate::tasks::{AudioRequest, ImageRequest, LanguageRequest, TaskKey, TaskRequest, TaskSpec};
 use crate::text::js_slice;
-use crate::voice::{build_timeline, sanitize_for_speech, Pcm, Word};
+use crate::voice::{sanitize_for_speech, speech_timeline, Pcm, Word};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -30,7 +28,6 @@ pub const OUTLINE_CHUNK_CHARS: usize = 2400;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductionSpec {
-    pub chat_model: String,
     pub planner_system: String,
     pub max_elements: usize,
     pub board_sec: f64,
@@ -54,7 +51,6 @@ pub struct AssetSpec {
     pub avoid: Vec<String>,
     /// Other `{{name}}` values (from select parameters).
     pub vars: BTreeMap<String, String>,
-    pub model: String,
     pub size: String,
     pub quality: Option<String>,
     pub transparent: bool,
@@ -66,6 +62,9 @@ pub struct VoiceSpec {
     pub speaker: String,
     pub resource_id: String,
     pub sample_rate: u32,
+    /// Percent speed change, the narration recipe's `speech_rate`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speech_rate: Option<i32>,
 }
 
 /// Where a result goes.
@@ -132,11 +131,10 @@ pub fn chunk_units(units: &[Unit], max: usize) -> Vec<std::ops::Range<usize>> {
     out
 }
 
-fn chat(spec: &ProductionSpec, messages: Vec<crate::tasks::ChatMessage>) -> TaskSpec {
+fn chat(messages: Vec<crate::tasks::ChatMessage>) -> TaskSpec {
     TaskSpec {
-        provider: Provider::Huniu,
-        request: TaskRequest::Chat(ChatRequest {
-            model: spec.chat_model.clone(),
+        request: TaskRequest::Language(LanguageRequest {
+            model: String::new(),
             messages,
             temperature: 0.3,
             json: true,
@@ -146,12 +144,13 @@ fn chat(spec: &ProductionSpec, messages: Vec<crate::tasks::ChatMessage>) -> Task
 
 pub fn voice_spec(spec: &ProductionSpec, text: &str) -> TaskSpec {
     TaskSpec {
-        provider: Provider::Volc,
-        request: TaskRequest::Speech(SpeechRequest {
+        request: TaskRequest::Audio(AudioRequest {
+            model: String::new(),
             text: sanitize_for_speech(text).spoken,
             speaker: spec.voice.speaker.clone(),
             resource_id: spec.voice.resource_id.clone(),
             sample_rate: spec.voice.sample_rate,
+            speech_rate: spec.voice.speech_rate,
         }),
     }
 }
@@ -183,7 +182,6 @@ pub fn storyboard_inputs(spec: &ProductionSpec, doc: &Production, g: usize) -> O
         "boardSec": spec.board_sec,
         "maxElements": spec.max_elements,
         "system": spec.planner_system,
-        "model": spec.chat_model,
         "cast": doc.cast,
     })))
 }
@@ -217,7 +215,7 @@ pub fn storyboard_spec(spec: &ProductionSpec, doc: &Production, g: usize) -> Opt
             next: &next,
         },
     );
-    Some(chat(spec, messages))
+    Some(chat(messages))
 }
 
 /// The image request of an element's `ordinal`-th AI candidate. The first
@@ -239,14 +237,15 @@ pub fn image_spec(
             .unwrap_or_default(),
     );
     TaskSpec {
-        provider: Provider::Huniu,
         request: TaskRequest::Image(ImageRequest {
-            model: spec.asset.model.clone(),
+            model: String::new(),
             prompt: asset_prompt(&spec.asset.template, &vars, &spec.asset.avoid),
             size: spec.asset.size.clone(),
             quality: spec.asset.quality.clone(),
             transparent: spec.asset.transparent,
             variant: ordinal,
+            references: Vec::new(),
+            reference_digests: Vec::new(),
         }),
     }
 }
@@ -312,10 +311,11 @@ pub fn plan_work(doc: &Production, spec: &ProductionSpec) -> Vec<Work> {
                 };
                 out.push(Work {
                     target: Target::Outline { chunk },
-                    spec: chat(
-                        spec,
-                        build_segment_messages(&units[range.clone()], doc.limits, title),
-                    ),
+                    spec: chat(build_segment_messages(
+                        &units[range.clone()],
+                        doc.limits,
+                        title,
+                    )),
                 });
             }
         }
@@ -507,23 +507,13 @@ pub fn apply_voice(
         .position(|s| s.id == segment)
         .ok_or("口播段已不存在")?;
     let spoken = sanitize_for_speech(&doc.segments[g].text).spoken;
-    let mut timeline = build_timeline(&spoken, sentences_raw, words);
+    let timeline = speech_timeline(&spoken, sentences_raw, words, pcm);
     if timeline.chars.is_empty() {
         return Err("配音没有返回时间戳，无法对时".into());
     }
-    timeline.retime(pcm);
-    timeline.snap_sentence_edges(pcm);
-    let subtitles = spec.subtitle_chars.map(|max| {
-        let chars: Vec<(char, f64, f64)> = timeline
-            .chars
-            .iter()
-            .filter_map(|c| c.text.chars().next().map(|ch| (ch, c.start, c.end)))
-            .collect();
-        let silences = detect_silences(pcm.samples, pcm.rate, -30.0, PAUSE_GAP);
-        Subtitles {
-            fingerprint: format!("{task}:{max}"),
-            cues: cues(&spoken, &chars, timeline.duration, &silences, max),
-        }
+    let subtitles = spec.subtitle_chars.map(|max| Subtitles {
+        fingerprint: format!("{task}:{max}"),
+        cues: timeline_cues(&spoken, &timeline, pcm, max),
     });
     let segment = &mut doc.segments[g];
     segment.voice = Some(Voice {

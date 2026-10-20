@@ -5,6 +5,8 @@ use todo_core::{EditCommand, MediaItem, Project};
 #[derive(Debug, Clone)]
 pub enum EditorCommand {
     Edit(EditCommand),
+    /// Several edits applied in order as one undo step; any failure applies none.
+    EditAll(Vec<EditCommand>),
     BeginEdit,
     CommitEdit,
     CancelEdit,

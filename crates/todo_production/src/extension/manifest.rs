@@ -48,6 +48,10 @@ pub struct Manifest {
     pub worker: Option<Worker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub narration: Option<Narration>,
+    /// Optional workflow graph IR path (`todo-graph/1`), package-relative.
+    /// Declares nodes/edges for future host runners; today validated at install.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<String>,
     #[serde(default)]
     pub budget: BTreeMap<Service, u32>,
     #[serde(default)]
@@ -94,6 +98,9 @@ pub struct ScriptInput {
     pub max_length: usize,
     #[serde(default)]
     pub placeholder: String,
+    /// The extension can work without a script (it writes one from params).
+    #[serde(default)]
+    pub optional: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -561,6 +568,30 @@ impl Manifest {
             .iter()
             .flat_map(|w| w.ops.iter().map(String::as_str))
             .collect();
+        // Optional graph IR (workflow only).
+        match (self.kind, &self.graph) {
+            (Kind::Narration, Some(_)) => {
+                problem("graph", "只用于 kind = workflow".into());
+            }
+            (_, Some(path)) => {
+                if !valid_relative_path(path) || !path.ends_with(".json") {
+                    problem("graph", "须为包内 .json 相对路径".into());
+                } else {
+                    match read(path) {
+                        None => problem("graph", format!("找不到 {path}")),
+                        Some(text) => match crate::extension::graph::Graph::parse(&text, "graph") {
+                            Err(p) => problem(&p.path, p.message),
+                            Ok(graph) => {
+                                for p in graph.validate(&ops) {
+                                    problem(&format!("graph.{}", p.path), p.message);
+                                }
+                            }
+                        },
+                    }
+                }
+            }
+            (_, None) => {}
+        }
         // Kind specifics.
         match (self.kind, &self.narration) {
             (Kind::Workflow, None) => {

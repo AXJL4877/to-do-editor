@@ -8,15 +8,15 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::protocol::{
-    encode_aspect, encode_audio, encode_gizmo, encode_guides, encode_hwnd, encode_layers,
-    encode_layout, encode_path, encode_path_token, encode_seek, encode_size_screen,
+    encode_aspect, encode_audio, encode_clip, encode_gizmo, encode_guides, encode_hwnd,
+    encode_layers, encode_layout, encode_path, encode_path_token, encode_seek, encode_size_screen,
     encode_transform, encode_transport, encode_visual_transform, parse_host_line, ParsedLine,
     HOST_RELATIVE, MAX_STDOUT_LINE,
 };
 use crate::viewport::encode_viewport;
 use crate::{
-    AlignGuide, AudioClip, ClockSample, HostEvent, LayoutRect, PreviewBounds, PreviewError,
-    PreviewLayer, PreviewPointerKind, ScreenSlot, TransformGizmo, VisualTransform,
+    AlignGuide, AudioClip, ClipRect, ClockSample, HostEvent, LayoutRect, PreviewBounds,
+    PreviewError, PreviewLayer, PreviewPointerKind, ScreenSlot, TransformGizmo, VisualTransform,
 };
 use crate::{PreviewNavigationKind, PreviewViewport};
 
@@ -151,6 +151,12 @@ impl PreviewHost {
     /// `size-screen <x> <y> <w> <h> <visible>`.
     pub fn size_screen(&self, slot: ScreenSlot) -> Result<(), PreviewError> {
         self.send(|buf| encode_size_screen(buf, slot))
+    }
+
+    /// `clip …`: leave these rectangles of the preview window transparent so
+    /// editor popups underneath stay visible. An empty list restores it.
+    pub fn clip(&self, rects: &[ClipRect]) -> Result<(), PreviewError> {
+        self.send(|buf| encode_clip(buf, rects))
     }
 
     /// `audio-begin`, one `audio-clip` line per clip, then `audio-commit`.

@@ -11,7 +11,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::time::Duration;
-use todo_production::SpeechRequest;
+use todo_production::AudioRequest;
 
 const PATH: &str = "/api/v3/tts/unidirectional";
 const END_CODE: i64 = 20_000_000;
@@ -25,18 +25,23 @@ pub struct Word {
 }
 
 /// Request body; `speaker` ids starting with `S_` are cloned voices.
-pub fn request_body(request: &SpeechRequest) -> serde_json::Value {
+pub fn request_body(request: &AudioRequest) -> serde_json::Value {
     let additions = serde_json::json!({ "disable_markdown_filter": true }).to_string();
+    let mut audio_params = serde_json::json!({
+        "format": "pcm",
+        "sample_rate": request.sample_rate,
+        "enable_subtitle": true,
+    });
+    if let Some(rate) = request.speech_rate {
+        // Same field the 密匙 toolkit sends (`--speech-rate`), in percent.
+        audio_params["speech_rate"] = serde_json::json!(rate.clamp(-50, 100));
+    }
     serde_json::json!({
         "user": { "uid": "todo-editor" },
         "req_params": {
             "text": request.text,
             "speaker": request.speaker,
-            "audio_params": {
-                "format": "pcm",
-                "sample_rate": request.sample_rate,
-                "enable_subtitle": true,
-            },
+            "audio_params": audio_params,
             // The API expects this one as a JSON string.
             "additions": additions,
         }
@@ -184,7 +189,7 @@ pub async fn synthesize(
     http: &Http,
     base_url: &str,
     key: &Secret,
-    request: &SpeechRequest,
+    request: &AudioRequest,
     store: &ArtifactStore,
     owner: &str,
 ) -> Result<Outcome, AttemptError> {
@@ -253,18 +258,37 @@ mod tests {
 
     #[test]
     fn body_matches_the_toolkit_contract() {
-        let body = request_body(&SpeechRequest {
+        let body = request_body(&AudioRequest {
+            model: "seed-tts-2.0".into(),
             text: "你好".into(),
             speaker: "zh_female_mizai_uranus_bigtts".into(),
             resource_id: "seed-tts-2.0".into(),
             sample_rate: 24000,
+            speech_rate: None,
         });
         assert_eq!(body["req_params"]["audio_params"]["enable_subtitle"], true);
         assert_eq!(body["req_params"]["audio_params"]["format"], "pcm");
+        assert!(body["req_params"]["audio_params"]
+            .get("speech_rate")
+            .is_none());
         assert_eq!(
             body["req_params"]["additions"],
             r#"{"disable_markdown_filter":true}"#
         );
+    }
+
+    #[test]
+    fn cloned_voice_keeps_its_speaker_and_rate() {
+        let body = request_body(&AudioRequest {
+            model: "seed-icl-2.0".into(),
+            text: "你好".into(),
+            speaker: "S_RksT6Z6g2".into(),
+            resource_id: "seed-icl-2.0".into(),
+            sample_rate: 24000,
+            speech_rate: Some(16),
+        });
+        assert_eq!(body["req_params"]["speaker"], "S_RksT6Z6g2");
+        assert_eq!(body["req_params"]["audio_params"]["speech_rate"], 16);
     }
 
     #[test]

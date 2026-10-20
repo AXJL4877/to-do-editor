@@ -4,16 +4,21 @@ use egui::{CursorIcon, Id, Rect, Sense, Ui, UiBuilder};
 use todo_interaction::{EditorViewModel, Intent};
 
 use super::{
-    inspector, library, monitor, project_settings, shortcuts, timeline, toolbar, MonitorHole,
+    assets, inspector, library, monitor, production, project_settings, shortcuts, timeline,
+    toolbar, MonitorHole,
 };
 use crate::format::band_heights;
 use crate::peaks::PeaksCache;
-use crate::theme::{BG, BORDER, BRAND, DIM, PANEL, TOOLBAR_H};
+use crate::theme::{BG, BORDER, BRAND, DIM, MUTED, PANEL, TEXT, TOOLBAR_H};
 use crate::thumbs::ThumbCache;
 
 const LIBRARY_ID: &str = "todo_ui_library_width";
 const HEIGHT_ID: &str = "todo_ui_monitor_height";
 const INSPECTOR_ID: &str = "todo_ui_inspector_width";
+/// The AI production tab needs more room than clip properties; it keeps
+/// its own preferred width.
+const DOCK_ID: &str = "todo_ui_production_dock_width";
+const SIDE_HEADER_H: f32 = 34.0;
 const SPLIT: f32 = 7.0;
 pub(super) const MONITOR_MIN: f32 = 96.0;
 
@@ -25,6 +30,7 @@ pub fn draw_editor(
 ) -> (Vec<Intent>, Option<MonitorHole>) {
     let mut intents = Vec::new();
     let settings_was_open = project_settings::is_open(ui.ctx());
+    let workflow_was_open = production::workflow_fullscreen_open(ui.ctx());
     let full = ui.available_rect_before_wrap();
     ui.allocate_rect(full, Sense::hover());
     ui.painter().rect_filled(full, 0.0, BG);
@@ -41,10 +47,17 @@ pub fn draw_editor(
     let mut upper_h = preferred_h.clamp(min_upper, max_upper);
 
     let available_w = (full.width() - SPLIT * 2.0).max(0.0);
-    let min_inspector = 220.0_f32.min(available_w * 0.25);
-    let max_inspector = 400.0_f32.min(available_w * 0.38).max(min_inspector);
-    let default_inspector = 280.0_f32.clamp(min_inspector, max_inspector);
-    let mut preferred_inspector = remembered(ui, INSPECTOR_ID, default_inspector);
+    let tab = production::side_tab(ui.ctx());
+    let docked = tab == production::SideTab::Production;
+    let (side_id, min_w, max_w, max_share, default_w) = if docked {
+        (DOCK_ID, 320.0_f32, 560.0_f32, 0.42_f32, 400.0_f32)
+    } else {
+        (INSPECTOR_ID, 220.0, 400.0, 0.38, 280.0)
+    };
+    let min_inspector = min_w.min(available_w * 0.25);
+    let max_inspector = max_w.min(available_w * max_share).max(min_inspector);
+    let default_inspector = default_w.clamp(min_inspector, max_inspector);
+    let mut preferred_inspector = remembered(ui, side_id, default_inspector);
     let mut inspector_w = preferred_inspector.clamp(min_inspector, max_inspector);
     let inspector_split = Rect::from_min_size(
         egui::pos2(full.right() - inspector_w - SPLIT, upper_top),
@@ -105,7 +118,7 @@ pub fn draw_editor(
         ui.ctx().data_mut(|data| {
             data.insert_persisted(Id::new(HEIGHT_ID), preferred_h);
             data.insert_persisted(Id::new(LIBRARY_ID), preferred_library);
-            data.insert_persisted(Id::new(INSPECTOR_ID), preferred_inspector);
+            data.insert_persisted(Id::new(side_id), preferred_inspector);
         });
     }
 
@@ -115,16 +128,35 @@ pub fn draw_editor(
         vm,
     ));
     let settings_intents = project_settings::draw(ui.ctx(), vm);
-    let settings_blocks_input = settings_was_open || project_settings::is_open(ui.ctx());
+    let settings_blocks_input = settings_was_open
+        || project_settings::is_open(ui.ctx())
+        || workflow_was_open
+        || production::is_blocking_input(ui.ctx());
     let library_rect = Rect::from_min_size(
         egui::pos2(full.left(), upper_top),
         egui::vec2(library_w, upper_h),
     );
-    intents.extend(library::draw(
-        &mut pane(ui, library_rect, "editor_library"),
-        vm,
-        thumbs,
-    ));
+    // Media, motions or fonts; the app draws the motion and font panels.
+    let left_header = Rect::from_min_size(
+        library_rect.min,
+        egui::vec2(library_rect.width(), assets::HEADER_H.min(library_rect.height())),
+    );
+    assets::header(ui, left_header);
+    let left_body = Rect::from_min_max(egui::pos2(library_rect.left(), left_header.bottom()), library_rect.max);
+    match assets::left_tab(ui.ctx()) {
+        assets::LeftTab::Media => {
+            assets::set_dock(ui.ctx(), None);
+            intents.extend(library::draw(
+                &mut pane(ui, left_body, "editor_library"),
+                vm,
+                thumbs,
+            ));
+        }
+        tab => {
+            ui.painter().rect_filled(left_body, 0.0, PANEL);
+            assets::set_dock(ui.ctx(), Some((left_body, tab)));
+        }
+    }
     let monitor_rect = Rect::from_min_max(
         egui::pos2(library_rect.right() + SPLIT, upper_top),
         egui::pos2(full.right() - inspector_w - SPLIT, upper_top + upper_h),
@@ -135,10 +167,28 @@ pub fn draw_editor(
         egui::pos2(full.right() - inspector_w, upper_top),
         egui::pos2(full.right(), upper_top + upper_h),
     );
-    intents.extend(inspector::draw(
-        &mut pane(ui, inspector_rect, "editor_inspector"),
-        vm.properties.as_ref(),
-    ));
+    ui.painter().rect_filled(inspector_rect, 0.0, PANEL);
+    let header = Rect::from_min_size(
+        inspector_rect.min,
+        egui::vec2(
+            inspector_rect.width(),
+            SIDE_HEADER_H.min(inspector_rect.height()),
+        ),
+    );
+    side_header(ui, header, tab);
+    let side_body = Rect::from_min_max(
+        egui::pos2(inspector_rect.left(), header.bottom()),
+        inspector_rect.max,
+    );
+    if docked {
+        production::set_dock(ui.ctx(), Some(side_body));
+    } else {
+        production::set_dock(ui.ctx(), None);
+        intents.extend(inspector::draw(
+            &mut pane(ui, side_body, "editor_inspector"),
+            vm.properties.as_ref(),
+        ));
+    }
     if let Some(hole) = hole {
         intents.push(Intent::PreviewViewport {
             width: f64::from(hole.w),
@@ -190,6 +240,72 @@ pub fn draw_editor(
         (settings_intents, hole)
     } else {
         (intents, hole)
+    }
+}
+
+/// Tabs over the right-hand column: clip properties or the AI production dock.
+fn side_header(ui: &mut Ui, rect: Rect, tab: production::SideTab) {
+    let painter = ui.painter_at(rect);
+    painter.line_segment(
+        [rect.left_bottom(), rect.right_bottom()],
+        egui::Stroke::new(1.0_f32, BORDER),
+    );
+    let mut x = rect.left() + 4.0;
+    let badge = production::dock_badge(ui.ctx());
+    for (label, target) in [
+        ("属性", production::SideTab::Properties),
+        ("工作流", production::SideTab::Production),
+    ] {
+        let galley =
+            ui.painter()
+                .layout_no_wrap(label.to_owned(), egui::FontId::proportional(12.5), TEXT);
+        let width = galley.size().x + 24.0;
+        let tab_rect = Rect::from_min_size(
+            egui::pos2(x, rect.top()),
+            egui::vec2(width, rect.height() - 1.0),
+        );
+        let response = ui.interact(
+            tab_rect,
+            Id::new(("todo_ui_side_tab", label)),
+            Sense::click(),
+        );
+        let active = tab == target;
+        let color = if active {
+            TEXT
+        } else if response.hovered() {
+            TEXT.gamma_multiply(0.85)
+        } else {
+            MUTED
+        };
+        painter.text(
+            tab_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::proportional(12.5),
+            color,
+        );
+        if active {
+            painter.line_segment(
+                [
+                    egui::pos2(tab_rect.left() + 8.0, rect.bottom() - 1.0),
+                    egui::pos2(tab_rect.right() - 8.0, rect.bottom() - 1.0),
+                ],
+                egui::Stroke::new(2.0_f32, BRAND),
+            );
+        }
+        if target == production::SideTab::Production {
+            if let Some(color) = badge {
+                painter.circle_filled(
+                    egui::pos2(tab_rect.right() - 7.0, tab_rect.top() + 10.0),
+                    3.0,
+                    color,
+                );
+            }
+        }
+        if response.clicked() && !active {
+            production::set_side_tab(ui.ctx(), target);
+        }
+        x += width;
     }
 }
 

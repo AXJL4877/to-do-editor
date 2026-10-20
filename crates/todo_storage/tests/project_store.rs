@@ -481,3 +481,39 @@ fn linked_project_and_trash_directories_cannot_escape_data() {
     assert!(repo.data().join("local/project.json").is_file());
     assert_eq!(outside.store().load("project").unwrap(), original);
 }
+
+fn owner_file(repo: &TestRepo) -> PathBuf {
+    fs::read_dir(repo.data().join(".locks"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "owner"))
+        .expect("the holder writes its process id")
+}
+
+#[test]
+fn one_process_holds_a_project_and_others_cannot_write_it() {
+    let repo = TestRepo::new();
+    let store = repo.store();
+    let project = store.create("lock").unwrap();
+    let held = store.lock("lock").unwrap();
+    assert_eq!(held.name(), "lock");
+    // A second holder is refused (file locks are per handle, as for another process).
+    assert!(matches!(store.lock("lock"), Err(StorageError::Busy(..))));
+    // The holder's own process keeps saving.
+    store.save("lock", &project).unwrap();
+    // Seen from another process: saving and deleting are refused.
+    let owner = owner_file(&repo);
+    fs::write(&owner, "1\nother.exe\n").unwrap();
+    let busy = store.save("lock", &project).unwrap_err();
+    assert!(matches!(busy, StorageError::Busy(..)), "{busy}");
+    assert!(busy.to_string().contains("other.exe"), "{busy}");
+    assert!(matches!(store.delete("lock"), Err(StorageError::Busy(..))));
+    // Released: anyone may write again, and the lock files stay out of the list.
+    drop(held);
+    store.save("lock", &project).unwrap();
+    assert_eq!(store.list().unwrap(), vec!["lock".to_owned()]);
+    let again = store.lock("lock").unwrap();
+    drop(again);
+    store.delete("lock").unwrap();
+}

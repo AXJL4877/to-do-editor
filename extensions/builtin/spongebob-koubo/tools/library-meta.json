@@ -1,0 +1,180 @@
+[
+ {
+  "id": "krabs-explain",
+  "kind": "cast",
+  "name": "蟹老板·讲解",
+  "desc": "举起一只钳子讲道理，自信"
+ },
+ {
+  "id": "krabs-worried",
+  "kind": "cast",
+  "name": "蟹老板·发愁",
+  "desc": "冒汗、钳子紧握，担心"
+ },
+ {
+  "id": "krabs-shock",
+  "kind": "cast",
+  "name": "蟹老板·震惊",
+  "desc": "眼睛弹出、张大嘴"
+ },
+ {
+  "id": "krabs-money",
+  "kind": "cast",
+  "name": "蟹老板·抱钱袋",
+  "desc": "抱着钱袋，贪财得意"
+ },
+ {
+  "id": "spongebob-happy",
+  "kind": "cast",
+  "name": "海绵宝宝·开心",
+  "desc": "大笑挥手"
+ },
+ {
+  "id": "spongebob-think",
+  "kind": "cast",
+  "name": "海绵宝宝·思考",
+  "desc": "手托下巴想问题"
+ },
+ {
+  "id": "spongebob-sad",
+  "kind": "cast",
+  "name": "海绵宝宝·难过",
+  "desc": "垂头丧气、流泪"
+ },
+ {
+  "id": "spongebob-point",
+  "kind": "cast",
+  "name": "海绵宝宝·指向",
+  "desc": "兴奋地指向一侧"
+ },
+ {
+  "id": "patrick-confused",
+  "kind": "cast",
+  "name": "派大星·困惑",
+  "desc": "挠头，不明白"
+ },
+ {
+  "id": "patrick-happy",
+  "kind": "cast",
+  "name": "派大星·开心",
+  "desc": "举起双手咧嘴笑"
+ },
+ {
+  "id": "squidward-annoyed",
+  "kind": "cast",
+  "name": "章鱼哥·不耐烦",
+  "desc": "抱臂翻白眼"
+ },
+ {
+  "id": "fish-customer",
+  "kind": "cast",
+  "name": "鱼顾客",
+  "desc": "普通比奇堡居民，好奇"
+ },
+ {
+  "id": "shell-coins",
+  "kind": "prop",
+  "name": "贝壳币",
+  "desc": "一堆金贝壳，代表钱"
+ },
+ {
+  "id": "sign-blank",
+  "kind": "prop",
+  "name": "空白木牌",
+  "desc": "可配牌面字"
+ },
+ {
+  "id": "clock",
+  "kind": "prop",
+  "name": "闹钟",
+  "desc": "时间、期限"
+ },
+ {
+  "id": "abacus",
+  "kind": "prop",
+  "name": "算盘",
+  "desc": "算账、计算成本"
+ },
+ {
+  "id": "magnifier",
+  "kind": "prop",
+  "name": "放大镜",
+  "desc": "仔细看、找问题"
+ },
+ {
+  "id": "mark-x",
+  "kind": "prop",
+  "name": "红叉",
+  "desc": "错误、否定",
+  "float": true
+ },
+ {
+  "id": "mark-arrow",
+  "kind": "prop",
+  "name": "红箭头",
+  "desc": "指向、变化",
+  "float": true
+ },
+ {
+  "id": "mark-question",
+  "kind": "prop",
+  "name": "问号",
+  "desc": "疑问",
+  "float": true
+ },
+ {
+  "id": "lightbulb",
+  "kind": "prop",
+  "name": "灯泡",
+  "desc": "想到了、恍然大悟",
+  "float": true
+ },
+ {
+  "id": "scale",
+  "kind": "prop",
+  "name": "天平",
+  "desc": "权衡、比较"
+ },
+ {
+  "id": "chart-down",
+  "kind": "prop",
+  "name": "下跌图表",
+  "desc": "亏损、变差"
+ },
+ {
+  "id": "chart-up",
+  "kind": "prop",
+  "name": "上涨图表",
+  "desc": "赚钱、变好"
+ },
+ {
+  "id": "ticket",
+  "kind": "prop",
+  "name": "票",
+  "desc": "门票、已经付出的钱"
+ },
+ {
+  "id": "krabby-patty",
+  "kind": "prop",
+  "name": "蟹黄堡",
+  "desc": "商品、食物"
+ },
+ {
+  "id": "trash-can",
+  "kind": "prop",
+  "name": "垃圾桶",
+  "desc": "扔掉、放弃"
+ },
+ {
+  "id": "money-bag",
+  "kind": "prop",
+  "name": "钱袋",
+  "desc": "钱、投入"
+ },
+ {
+  "id": "plate-grass",
+  "kind": "plate",
+  "name": "比奇堡草地背景",
+  "desc": "全片背景板"
+ }
+]

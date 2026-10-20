@@ -1,0 +1,50 @@
+[
+ {
+  "id": "chart-down",
+  "prompt": "a small wooden easel holding a white board with a red line chart going down. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single inanimate object only, no characters, no people, no face, no eyes, no arms or legs, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium",
+  "variant": 1
+ },
+ {
+  "id": "chart-up",
+  "prompt": "a small wooden easel holding a white board with a green line chart going up. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single inanimate object only, no characters, no people, no face, no eyes, no arms or legs, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium",
+  "variant": 1
+ },
+ {
+  "id": "money-bag",
+  "prompt": "a brown cloth money bag tied with rope, with a green dollar sign printed on it. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single inanimate object only, no characters, no people, no face, no eyes, no arms or legs, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium",
+  "variant": 1
+ },
+ {
+  "id": "clock",
+  "prompt": "a plain red twin-bell alarm clock with a white dial and black hands. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single inanimate object only, no characters, no people, no face, no eyes, no arms or legs, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium",
+  "variant": 1
+ },
+ {
+  "id": "spongebob-happy",
+  "prompt": "SpongeBob SquarePants smiling widely and waving one hand. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1536",
+  "transparent": true,
+  "quality": "high",
+  "variant": 1
+ },
+ {
+  "id": "spongebob-point",
+  "prompt": "SpongeBob SquarePants pointing to the side with one arm, excited. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1536",
+  "transparent": true,
+  "quality": "high",
+  "variant": 1
+ }
+]

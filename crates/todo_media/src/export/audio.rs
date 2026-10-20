@@ -41,8 +41,13 @@ pub fn filter_graph(clips: &[ResolvedAudioClip]) -> String {
             "[{index}:a]atrim=start={}:duration={},asetpts=PTS-STARTPTS",
             clip.offset, clip.duration
         );
-        for factor in atempo_factors(clip.rate) {
-            let _ = write!(graph, ",atempo={factor}");
+        // `atempo` only when the clip is actually retimed: besides costing
+        // a resampler pass, it leaves timestamps that make a later `atrim`
+        // cut the mix short (FFmpeg 9; see `mix_audio`).
+        if (clip.rate - 1.0).abs() > 1e-9 {
+            for factor in atempo_factors(clip.rate) {
+                let _ = write!(graph, ",atempo={factor}");
+            }
         }
         let _ = write!(graph, ",volume={}", clip.gain);
         if clip.fade_in > 0.0 {

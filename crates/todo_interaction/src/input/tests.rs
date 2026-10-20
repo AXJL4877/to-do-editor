@@ -63,7 +63,7 @@ impl TestEditor {
         self.workspace.editor().unwrap().project()
     }
     fn view(&self) -> crate::EditorViewModel {
-        self.controller.view(self.workspace.editor().unwrap())
+        self.controller.view(self.workspace.editor().unwrap(), &[])
     }
     fn playing(&self) -> bool {
         self.workspace.editor().unwrap().playing()

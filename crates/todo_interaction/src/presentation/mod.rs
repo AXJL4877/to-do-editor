@@ -1,5 +1,9 @@
-pub use crate::inspector::{ClipProperties, SourceProperties, StyleOption, TextProperties};
+pub use crate::inspector::{
+    ClipProperties, MotionOption, MotionProperties, MotionSlot, SourceProperties, StyleOption,
+    TextProperties,
+};
 pub mod ai_settings;
+pub mod assets;
 mod library;
 mod messages;
 pub mod production;
@@ -57,6 +61,18 @@ pub struct ClipView {
     pub wave_left: f64,
     pub wave_width: f64,
     pub transform: ClipTransform,
+    /// Transition into this clip, drawn across its left edge.
+    pub transition: Option<TransitionMark>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransitionMark {
+    /// Preset name for the tooltip.
+    pub name: String,
+    /// Half the window in lane pixels (the window is centred on the cut).
+    pub half_px: f64,
+    /// False while the previous clip is not adjacent.
+    pub active: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -270,6 +286,12 @@ impl TimelineViewModel {
                             wave_left,
                             wave_width,
                             transform: clip.transform,
+                            transition: clip.transition.as_ref().map(|motion| TransitionMark {
+                                name: todo_core::find_motion(project, &motion.kind)
+                                    .map_or_else(|| motion.kind.clone(), |p| p.name.clone()),
+                                half_px: motion.duration.min(clip.duration) * 0.5 * px_per_sec,
+                                active: todo_core::transition_is_active(project, track, &clip.id),
+                            }),
                         }
                     })
                     .collect();

@@ -15,7 +15,8 @@ pub(super) fn minimum_piece(fps: f64) -> f64 {
 
 /// Split at timeline `time`. The right piece of a media clip continues the source;
 /// the right piece of a text clip keeps the content but not its intro, so a cut
-/// never replays the entrance.
+/// never replays the entrance. Entrance and incoming transition stay on the
+/// left piece, the exit moves to the right one: the cut between them is straight.
 pub(super) fn split_clip(
     clip: &Clip,
     time: f64,
@@ -28,7 +29,10 @@ pub(super) fn split_clip(
     }
     let mut left = clip.clone();
     left.duration = local;
+    left.outro = None;
     let mut right = clip.clone();
+    right.intro = None;
+    right.transition = None;
     right.id = new_id;
     right.start = time;
     right.duration = clip.duration - local;

@@ -21,11 +21,11 @@ fn main() {
     let h = &config.huniu;
     println!(
         "huniu  : {} chat={} image={} size={} strategy={:?}",
-        h.base_url, h.chat_model, h.image_model, h.image_size, h.strategy
+        h.base_url, h.language_model, h.image_model, h.image_size, h.strategy
     );
     println!(
         "volc   : {} {} speaker={}",
-        config.volc.base_url, config.volc.resource_id, config.volc.speaker
+        config.volc.base_url, config.volc.audio_model, config.volc.speaker
     );
     println!("limits : {:?}  proxy={:?}", config.limits, config.proxy);
     for provider in [Provider::Huniu, Provider::Volc] {

@@ -275,7 +275,7 @@ pub fn picture_layers(
     // (layer, is a chalk hand)
     let mut layers: Vec<(PreviewLayer, bool)> = Vec::new();
     for hit in hits {
-        let mut transform = todo_core::picture_transform(&hit.clip, hit.local_time);
+        let mut transform = todo_core::hit_transform(project, &hit);
         let mut soft = None;
         let mut hand = None;
         let (path, media_time, kind) = match hit.source {

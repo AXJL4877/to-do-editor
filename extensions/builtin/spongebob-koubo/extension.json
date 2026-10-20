@@ -2,22 +2,110 @@
   "spec": "todo-extension/1",
   "id": "studio.spongebob-koubo",
   "name": "海绵宝宝口播",
-  "version": "2.1.0",
-  "description": "将口播、角色、道具、花字和音乐编排成可编辑的工作流成片。",
+  "version": "5.0.0",
+  "description": "工作流扩展（graph.json）：口播一句一个镜头。开头黑底红字标题；故事镜固定背景板+场景卡+0–2 元素；升华黑底黄毛笔字（≤20%）。节点进度上报到工作流面板；配音与片头先入轨，画面齐了再入轨。",
   "kind": "workflow",
-  "input": { "script": { "label": "口播文案", "maxLength": 12000, "placeholder": "粘贴口播文案" } },
-  "params": [
-    { "id": "voice", "type": "voice", "label": "音色", "group": "voice", "default": "zh_female_mizai_uranus_bigtts" },
-    { "id": "layout", "type": "select", "label": "版式", "group": "scene", "default": "auto", "options": [{ "value": "auto", "label": "自动" }] },
-    { "id": "tone", "type": "select", "label": "笔色", "group": "scene", "default": "chalk", "options": [{ "value": "chalk", "label": "粉笔" }] },
-    { "id": "enter", "type": "select", "label": "进场", "group": "scene", "default": "mix", "options": [{ "value": "mix", "label": "混合" }] },
-    { "id": "drawSpeed", "type": "number", "label": "书写速度", "group": "timing", "default": 1, "min": 0.5, "max": 3, "step": 0.25 }
-  ],
-  "quick": ["voice", "layout", "tone", "enter"],
-  "requires": {
-    "services": ["chat", "image", "speech", "subtitles", "encode"],
-    "runtime": { "type": "python", "version": ">=3.12" }
+  "input": {
+    "script": {
+      "label": "口播文案",
+      "maxLength": 6000,
+      "placeholder": "粘贴口播文案，或留空并在参数里填写主题",
+      "optional": true
+    }
   },
-  "worker": { "entry": "worker/main.py", "ops": ["run"], "timeoutSec": 1800, "maxProcesses": 1, "memoryMiB": 3000 },
-  "budget": { "image": 80, "chat": 60, "speech": 60 }
+  "params": [
+    {
+      "id": "topic",
+      "type": "text",
+      "label": "主题",
+      "group": "story",
+      "default": "",
+      "maxLength": 200,
+      "placeholder": "例如：什么是沉没成本"
+    },
+    {
+      "id": "seconds",
+      "type": "select",
+      "label": "目标时长",
+      "group": "timing",
+      "default": "30",
+      "options": [
+        {
+          "value": "30",
+          "label": "30 秒"
+        },
+        {
+          "value": "60",
+          "label": "1 分钟"
+        },
+        {
+          "value": "90",
+          "label": "1 分半"
+        },
+        {
+          "value": "180",
+          "label": "3 分钟"
+        }
+      ]
+    },
+    {
+      "id": "voice",
+      "type": "voice",
+      "label": "音色",
+      "group": "voice",
+      "default": "S_RksT6Z6g2"
+    },
+    {
+      "id": "rate",
+      "type": "number",
+      "label": "语速",
+      "group": "voice",
+      "default": 16,
+      "min": -50,
+      "max": 100,
+      "step": 1,
+      "unit": "%"
+    },
+    {
+      "id": "redraw",
+      "type": "text",
+      "label": "重画画面",
+      "group": "other",
+      "default": "",
+      "maxLength": 600,
+      "hint": "要重画的图片和第几版，例如 shot/3/card:1 或 shot/5/el/0:1"
+    }
+  ],
+  "quick": [
+    "topic",
+    "seconds",
+    "voice"
+  ],
+  "requires": {
+    "services": [
+      "chat",
+      "image",
+      "speech",
+      "subtitles"
+    ],
+    "runtime": {
+      "type": "python",
+      "version": ">=3.12"
+    }
+  },
+  "worker": {
+    "entry": "worker/main.py",
+    "ops": [
+      "run"
+    ],
+    "timeoutSec": 3600,
+    "maxProcesses": 1,
+    "memoryMiB": 2000
+  },
+  "graph": "graph.json",
+  "budget": {
+    "image": 120,
+    "chat": 4,
+    "speech": 4
+  }
 }

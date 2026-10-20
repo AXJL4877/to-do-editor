@@ -383,6 +383,11 @@ impl EditorController {
             Intent::ResetTransform { clip_id } => {
                 self.property_transform(workspace, clip_id, ClipTransform::default())
             }
+            Intent::SetClipMotion {
+                clip_id,
+                slot,
+                motion,
+            } => self.property_motion(workspace, clip_id, slot, motion),
             Intent::AddText => {
                 let time = workspace.editor().map_or(0.0, |editor| editor.playhead());
                 workspace.dispatch(AppAction::Editor(EditorCommand::Edit(

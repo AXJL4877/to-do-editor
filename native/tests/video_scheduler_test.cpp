@@ -95,6 +95,29 @@ void TestIndependentSourceChanges(const std::wstring& video, const std::wstring&
         "source cancellation never resurrects a frame from the cleared video");
 }
 
+void TestLayerReorderingRetainsStreams(const std::wstring& video, const std::wstring& still) {
+  VideoEngine engine;
+  engine.start(nullptr, WM_APP + 3);
+  engine.setLayers({{VideoFrame::Kind::Video, still, 0, {}},
+                    {VideoFrame::Kind::Video, video, 7.9, {}}}, 30);
+  auto original = WaitExact(engine, 30, 2);
+  if (!original) return;
+
+  // Transition stacks insert the incoming clip between existing layers. The
+  // unchanged sources must move with their decoded leases instead of going
+  // cold for one compositor frame.
+  engine.setLayers({{VideoFrame::Kind::Video, video, 7.9, {}},
+                    {VideoFrame::Kind::Video, still, 0, {}}}, 31);
+  auto reordered = engine.latest();
+  Check(reordered && reordered->size() == 2,
+        "reordering a transition stack keeps a visible composed frame");
+  Check(reordered && (*reordered)[0].texture == (*original)[1].texture &&
+            (*reordered)[1].texture == (*original)[0].texture,
+        "reordering reuses each source's decoded texture by identity");
+  Check(reordered && reordered->front().generation == 31,
+        "reordered retained frames carry the current generation");
+}
+
 void TestLargeJumpsAndFinalCoherence(const std::wstring& video, const std::wstring& still) {
   VideoEngine engine;
   engine.start(nullptr, WM_APP + 3);
@@ -128,6 +151,8 @@ int wmain(int argc, wchar_t** argv) {
   TestColdFastLayer(argv[1], argv[2]);
   std::fprintf(stderr, "scheduler: independent source changes\n");
   TestIndependentSourceChanges(argv[1], argv[2]);
+  std::fprintf(stderr, "scheduler: layer reordering\n");
+  TestLayerReorderingRetainsStreams(argv[1], argv[2]);
   std::fprintf(stderr, "scheduler: large jumps\n");
   TestLargeJumpsAndFinalCoherence(argv[1], argv[2]);
   return failures ? 1 : 0;

@@ -10,6 +10,46 @@ pub struct MonitorHole {
     pub h: f32,
 }
 
+impl MonitorHole {
+    pub fn rect(&self) -> egui::Rect {
+        egui::Rect::from_min_size(egui::pos2(self.x, self.y), egui::vec2(self.w, self.h))
+    }
+}
+
+/// Floating egui surfaces (menus, combo lists, tooltips, windows) drawn this
+/// frame that overlap the monitor hole. The native preview is a separate
+/// window above the editor, so the desktop adapter must cut these out of it.
+/// Rects include a small margin for popup shadows.
+pub fn overlays_over(ctx: &egui::Context, hole: &MonitorHole) -> Vec<egui::Rect> {
+    const SHADOW: f32 = 8.0;
+    let hole = hole.rect();
+    ctx.memory(|memory| {
+        let mut rects: Vec<egui::Rect> = memory
+            .areas()
+            .visible_layer_ids()
+            .into_iter()
+            .filter(|layer| {
+                matches!(
+                    layer.order,
+                    egui::Order::Middle | egui::Order::Foreground | egui::Order::Tooltip
+                )
+            })
+            .filter_map(|layer| memory.area_rect(layer.id))
+            .filter(|rect| rect.is_finite() && rect.is_positive())
+            .map(|rect| rect.expand(SHADOW))
+            .filter(|rect| rect.intersects(hole))
+            .map(|rect| rect.intersect(hole))
+            .collect();
+        // Deterministic order so an unchanged set is not resent.
+        rects.sort_by(|a, b| {
+            (a.min.y, a.min.x, a.max.y, a.max.x)
+                .partial_cmp(&(b.min.y, b.min.x, b.max.y, b.max.x))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        rects
+    })
+}
+
 pub fn draw(ui: &mut Ui, vm: &EditorViewModel) -> (Vec<Intent>, Option<MonitorHole>) {
     let mut intents = Vec::new();
     let rect = ui.available_rect_before_wrap();

@@ -54,6 +54,10 @@ pub(super) fn draw(ui: &mut Ui, properties: &ClipProperties) -> Vec<Intent> {
             if properties.visual {
                 intents.extend(super::transform::draw(ui, properties));
             }
+            if let Some(motion) = &properties.motion {
+                ui.separator();
+                intents.extend(super::motion::draw(ui, &properties.clip_id, motion));
+            }
         });
     });
     intents
@@ -84,6 +88,7 @@ mod tests {
                 scale_y: 1.2,
                 opacity: 0.45,
             },
+            motion: None,
         }
     }
 

@@ -16,7 +16,7 @@ use crate::production::Placement;
 use std::collections::{BTreeMap, BTreeSet};
 use todo_core::{
     is_image_media, Anchor, ClipAudio, ClipOrigin, GeneratedClip, GeneratedEdit, GeneratedSource,
-    LaneHint, Project, TrackKind, Transform,
+    LaneHint, MotionRef, Project, TrackKind, Transform,
 };
 
 const EPSILON: f64 = 1e-6;
@@ -73,11 +73,16 @@ pub struct PlacementPlan {
     pub tombstones: Vec<(String, String)>,
     /// Keys no longer tracked (deleted by the user, or removed by the batch).
     pub forget: Vec<String>,
+    /// Tombstones contradicted by a clip that is on the timeline after all.
+    pub tombstones_cleared: Vec<(String, String)>,
 }
 
 impl PlacementPlan {
     pub fn is_empty(&self) -> bool {
-        self.edits.is_empty() && self.tombstones.is_empty() && self.forget.is_empty()
+        self.edits.is_empty()
+            && self.tombstones.is_empty()
+            && self.forget.is_empty()
+            && self.placed.is_empty()
     }
 }
 
@@ -204,9 +209,16 @@ pub fn plan(input: &PlacementInput) -> PlacementPlan {
             fade_out: item.fade.map_or(0.0, |f| f.out),
         });
         let outro = (!audible)
-            .then(|| item.fade.map(|f| f.out))
-            .flatten()
-            .filter(|s| *s > 0.0);
+            .then(|| {
+                item.outro.clone().or_else(|| {
+                    item.fade
+                        .map(|f| f.out)
+                        .filter(|s| *s > 0.0)
+                        .map(|s| MotionRef::new(todo_core::motion::FADE_OUT, s))
+                })
+            })
+            .flatten();
+        let transition = (!audible).then(|| item.transition.clone()).flatten();
         let produced = transform(item.transform);
         let new_origin = origin(production, &item.key, &item.rev);
         if let Some((clip, _)) = clips.get(item.key.as_str()) {
@@ -234,8 +246,9 @@ pub fn plan(input: &PlacementInput) -> PlacementPlan {
                     duration,
                     source,
                     transform: untouched.then_some(produced),
-                    intro: item.intro,
+                    intro: item.intro.clone(),
                     outro,
+                    transition,
                     audio,
                     origin: new_origin,
                 });
@@ -247,6 +260,15 @@ pub fn plan(input: &PlacementInput) -> PlacementPlan {
                 });
                 out.positions.push((item.key.clone(), start));
                 out.placed.push((item.key.clone(), item.rev.clone()));
+            } else if placement.placed.get(&item.key) != Some(&item.rev) {
+                // On the timeline but missing from the record (an older
+                // save raced the placement): adopt it as placed, as it is.
+                out.placed.push((item.key.clone(), item.rev.clone()));
+                out.positions.push((item.key.clone(), clip.start));
+                out.transforms
+                    .push((item.key.clone(), pack(&clip.transform)));
+                out.tombstones_cleared
+                    .push((item.key.clone(), item.rev.clone()));
             }
             continue;
         }
@@ -304,8 +326,9 @@ pub fn plan(input: &PlacementInput) -> PlacementPlan {
                 duration,
                 source,
                 transform: produced,
-                intro: item.intro,
+                intro: item.intro.clone(),
                 outro,
+                transition,
                 audio,
                 origin: new_origin,
             },
@@ -351,6 +374,9 @@ pub fn record(placement: &mut Placement, plan: &PlacementPlan) {
         placement.placed.remove(key);
         placement.positions.remove(key);
         placement.transforms.remove(key);
+    }
+    for stale in &plan.tombstones_cleared {
+        placement.tombstones.remove(stale);
     }
     placement.tombstones.extend(plan.tombstones.iter().cloned());
     for (key, rev) in &plan.placed {

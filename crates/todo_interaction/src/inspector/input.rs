@@ -1,6 +1,7 @@
 use crate::EditorController;
 use todo_application::{AppAction, AppUpdate, EditorCommand, Workspace};
-use todo_core::{find_clip, ClipTransform, EditCommand, TextContent, TrimEdge};
+use super::MotionSlot;
+use todo_core::{find_clip, ClipTransform, EditCommand, MotionRef, TextContent, TrimEdge};
 impl EditorController {
     pub(crate) fn property_duration(
         &self,
@@ -31,6 +32,41 @@ impl EditorController {
         workspace.dispatch(AppAction::Editor(EditorCommand::Edit(
             EditCommand::SetText { clip_id, content },
         )))
+    }
+    /// Set or clear one motion of a clip; a library preset is copied into the
+    /// project in the same step by the workspace.
+    pub(crate) fn property_motion(
+        &self,
+        workspace: &mut Workspace,
+        clip_id: String,
+        slot: MotionSlot,
+        motion: Option<MotionRef>,
+    ) -> AppUpdate {
+        let copy = motion
+            .as_ref()
+            .and_then(|motion| {
+                let project = workspace.editor()?.project();
+                let missing = todo_application::control::motions::missing_motions(
+                    project,
+                    workspace.motion_library(),
+                    [motion],
+                );
+                (!missing.is_empty()).then_some(missing)
+            });
+        let edit = match slot {
+            MotionSlot::Intro => EditCommand::SetIntro { clip_id, intro: motion },
+            MotionSlot::Outro => EditCommand::SetOutro { clip_id, outro: motion },
+            MotionSlot::Transition => EditCommand::SetTransition {
+                clip_id,
+                transition: motion,
+            },
+        };
+        let commands = match copy {
+            // One undo step: copy the preset in, then use it.
+            Some(presets) => vec![EditCommand::AddMotions { presets }, edit],
+            None => vec![edit],
+        };
+        workspace.dispatch(AppAction::Editor(EditorCommand::EditAll(commands)))
     }
     pub(crate) fn property_transform(
         &self,

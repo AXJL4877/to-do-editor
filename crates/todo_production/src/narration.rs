@@ -6,9 +6,7 @@
 //! Keys use document ids, so editing one segment never renames another
 //! segment's clips: `<segment>/voice`, `<segment>/sub/<n>`, `plate`,
 //! `<board>/<element>` (and extra baked layers below it).
-use crate::extension::items::{
-    Intro, IntroKind, Item, ItemFade, ItemRole, ItemSource, ItemTransform,
-};
+use crate::extension::items::{Intro, Item, ItemFade, ItemRole, ItemSource, ItemTransform};
 use crate::extension::protocol::Canvas;
 use crate::pacing::{schedule, TimedBoard};
 use crate::production::{Production, Segment};
@@ -314,6 +312,8 @@ pub fn host_items(
                     },
                     transform: None,
                     intro: None,
+                    outro: None,
+                    transition: None,
                     link: None,
                     gain: None,
                     fade: None,
@@ -340,6 +340,8 @@ pub fn host_items(
             },
             transform: None,
             intro: None,
+            outro: None,
+            transition: None,
             link: None,
             gain: None,
             fade: None,
@@ -361,6 +363,8 @@ pub fn host_items(
                         ..ItemTransform::default()
                     }),
                     intro: None,
+                    outro: None,
+                    transition: None,
                     link: Some(voice_key.clone()),
                     gain: None,
                     fade: None,
@@ -417,10 +421,9 @@ pub fn host_items(
                     duration,
                     source: ItemSource::File { file, r#in: 0.0 },
                     transform: None,
-                    intro: Some(Intro {
-                        kind: IntroKind::Fade,
-                        duration: 0.4f64.min(duration),
-                    }),
+                    intro: Some(Intro::new("fade", 0.4f64.min(duration))),
+                    outro: None,
+                    transition: None,
                     link: Some(voice_key.clone()),
                     gain: None,
                     fade: (timing.fade_out > 0.0).then(|| ItemFade {

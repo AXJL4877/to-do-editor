@@ -9,7 +9,7 @@ use std::{
 };
 use todo_application::{AudioClockSample, PreviewCommand};
 use todo_preview::{
-    AlignGuide, AudioClip, HostEvent, PreviewHost, PreviewLayer as HostLayer, ScreenSlot,
+    AlignGuide, AudioClip, ClipRect, HostEvent, PreviewHost, PreviewLayer as HostLayer, ScreenSlot,
     TransformGizmo, VisualTransform,
 };
 use todo_ui::MonitorHole;
@@ -21,6 +21,8 @@ pub struct PreviewBridge {
     repo: PathBuf,
     hwnd: Option<u64>,
     slot: Option<ScreenSlot>,
+    /// Last cut-outs sent for egui popups over the preview window.
+    clip: Option<Vec<ClipRect>>,
     gizmo: Option<Option<TransformGizmo>>,
     guides: Option<Vec<AlignGuide>>,
     viewport: Option<todo_preview::PreviewViewport>,
@@ -40,6 +42,7 @@ impl PreviewBridge {
             repo: repo.to_owned(),
             hwnd: None,
             slot: None,
+            clip: None,
             gizmo: None,
             guides: None,
             viewport: None,
@@ -60,6 +63,7 @@ impl PreviewBridge {
             Some(PreviewHost::spawn_at(preview_host_exe(&self.repo)).map_err(|e| e.to_string())?);
         self.hwnd = None;
         self.slot = None;
+        self.clip = None;
         self.gizmo = None;
         self.guides = None;
         self.viewport = None;
@@ -200,11 +204,15 @@ impl PreviewBridge {
             .collect();
         host.set_layers(&host_layers).map_err(|e| e.to_string())
     }
+    /// Place the native preview over the monitor hole. `overlays` are egui
+    /// popups drawn over the hole this frame (see `todo_ui::overlays_over`):
+    /// the preview window leaves them transparent instead of covering them.
     pub fn sync_popup(
         &mut self,
         ctx: &egui::Context,
         frame: &eframe::Frame,
         hole: Option<MonitorHole>,
+        overlays: &[egui::Rect],
         active: bool,
     ) {
         let (Some(host), Some(hwnd)) = (&self.host, viewport_hwnd(frame)) else {
@@ -249,7 +257,41 @@ impl PreviewBridge {
             h: screen.h,
             visible: screen.visible && visible,
         };
-        if self.slot != Some(slot) && host.size_screen(slot).is_ok() {
+        let ppp = ctx.pixels_per_point();
+        let cuts: Vec<ClipRect> = overlays
+            .iter()
+            .filter_map(|overlay| {
+                let local = overlay.translate(-rect.min.to_vec2());
+                let x0 = (local.min.x * ppp).floor() as i32;
+                let y0 = (local.min.y * ppp).floor() as i32;
+                let x1 = (local.max.x * ppp).ceil() as i32;
+                let y1 = (local.max.y * ppp).ceil() as i32;
+                (x1 > x0 && y1 > y0).then_some(ClipRect {
+                    x: x0,
+                    y: y0,
+                    w: x1 - x0,
+                    h: y1 - y0,
+                })
+            })
+            .collect();
+        // Too many popups at once: hide rather than cover any of them.
+        let too_many = cuts.len() > todo_preview::MAX_CLIP_RECTS;
+        let slot = ScreenSlot {
+            visible: slot.visible && !too_many,
+            ..slot
+        };
+        if slot.visible && self.clip.as_deref() != Some(cuts.as_slice()) && host.clip(&cuts).is_ok()
+        {
+            self.clip = Some(cuts);
+        }
+        if !slot.visible {
+            // A modal may open without changing the monitor geometry. Always
+            // resend the hide command in that state; relying only on the
+            // cached slot lets the independent HWND remain above egui.
+            if host.size_screen(slot).is_ok() {
+                self.slot = Some(slot);
+            }
+        } else if self.slot != Some(slot) && host.size_screen(slot).is_ok() {
             self.slot = Some(slot);
         }
     }

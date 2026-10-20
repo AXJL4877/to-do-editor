@@ -20,6 +20,8 @@ pub enum StorageError {
     UnsupportedVersion(u64),
     #[error("invalid project: {0}")]
     InvalidProject(String),
+    #[error("工程「{0}」正在被另一个程序使用：{1}")]
+    Busy(String, String),
     #[error("unsafe project path: {0}")]
     UnsafePath(PathBuf),
 }

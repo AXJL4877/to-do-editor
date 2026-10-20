@@ -6,8 +6,8 @@
 
 ## 已完成
 
-- `todo_extensions::runtime`、`Job`、`Duplex::spawn_in`、`Budget` 和 `WorkerPool`：安全入口、环境清洗、Windows Job Object、FIFO/复用、call/reply、预算、超时、取消和资源故障重试。
-- `todo_extensions::check` 与 `check_extension` 示例：清单、工作程序握手和可选离线样例的统一自检；内置 `chalk-hand` 已补齐标准库 Python 工作程序入口。
+- `todo_workflow::runtime`、`Job`、`Duplex::spawn_in`、`Budget` 和 `WorkerPool`：安全入口、环境清洗、Windows Job Object、FIFO/复用、call/reply、预算、超时、取消和资源故障重试。
+- `todo_workflow::check` 与 `check_extension` 示例：清单、工作程序握手和可选离线样例的统一自检；内置 `chalk-hand` 已补齐标准库 Python 工作程序入口。
 - `extensions/sdk/python/todo_worker.py`：标准库 SDK，支持装饰器 op、进度、条目、同步/异步服务调用、取消、错误分类和工作目录路径围栏；作者的 `print` 重定向到 stderr，不污染协议。
 - `todo_production::narration` / `placement`：段间 0.4 秒排期、稳定 key/rev 的口播/字幕/画面条目与烘焙请求、来源对账和墓碑规则。
 - `todo_app::adapters::production::ServiceBridge`：将 worker 服务调用接到 `AiService`，复用缓存 key；图像/配音产物写入 run workdir，配音复用统一时间轴与字幕转换。
@@ -19,8 +19,8 @@
 - `cargo fmt --all`：通过。
 - `cargo test --workspace --quiet`：通过。
 - `cargo clippy --workspace --lib --bins --examples --all-targets -- -D warnings`：通过。
-- `cargo run -p todo_extensions --example check_extension -- extensions/builtin/chalk-hand`：握手、自检通过。
-- `cargo run -p todo_extensions --example check_extension -- extensions/builtin/spongebob-koubo`：迁移包清单与工作程序握手通过。
+- `cargo run -p todo_workflow --example check_extension -- extensions/builtin/chalk-hand`：握手、自检通过。
+- `cargo run -p todo_workflow --example check_extension -- extensions/builtin/spongebob-koubo`：迁移包清单与工作程序握手通过。
 - `cmd /c native\\build.cmd build\\verify-v2`：通过，独立生成 `native/build/verify-v2/preview_host.exe`。
 - `TODO_PREVIEW_HOST=native/build/bin/preview_host.exe python -m unittest discover -s native/tests -v`：当前原生回归与 `--render` 夹具共 26 项通过。
 

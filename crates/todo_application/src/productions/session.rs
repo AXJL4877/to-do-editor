@@ -74,18 +74,106 @@ pub struct StatusNode {
     pub children: Vec<StatusNode>,
 }
 
+/// The pipeline steps a production goes through, in order. Not every
+/// recipe has every step (a workflow only has `Generate` and `Timeline`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StageKind {
+    /// Split the script into segments.
+    Outline,
+    /// One voice-over per segment.
+    Voice,
+    /// Subtitle cues from the voice timing.
+    Subtitles,
+    /// Boards and elements planned per segment.
+    Storyboard,
+    /// One picture per element.
+    Images,
+    /// Elements turned into animated layers (bake, background plate).
+    Compose,
+    /// An extension's own run (workflow recipes).
+    Generate,
+    /// Results put on the timeline.
+    Timeline,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StageStatus {
+    pub kind: StageKind,
+    pub done: usize,
+    pub total: usize,
+    pub state: StatusState,
+    /// What a running extension reports it is doing, and how far (0..=1).
+    pub phase: Option<(String, f64)>,
+}
+
+/// What a failed request was for, so the panel can name it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FailedWork {
+    Outline,
+    Voice { segment: usize },
+    Storyboard { segment: usize },
+    Image { label: String },
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FailureStatus {
+    pub key: TaskKey,
+    pub work: FailedWork,
+    /// Error class from the service (`auth`, `billing`, `network`, …).
+    pub class: String,
+    pub message: String,
+    pub possibly_billed: bool,
+}
+
 /// What the production panel shows.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProductionStatus {
     pub id: String,
     pub title: String,
     pub extension: String,
+    /// The start of the script, for productions without a title yet.
+    pub script: String,
     pub done: usize,
     pub total: usize,
+    pub stages: Vec<StageStatus>,
     pub nodes: Vec<StatusNode>,
     pub attention: Vec<String>,
-    /// Failed requests the user may retry: (key, message, possibly billed).
-    pub failures: Vec<(TaskKey, String, bool)>,
+    /// Failed requests the user may retry.
+    pub failures: Vec<FailureStatus>,
+    /// Failed bakes / runs (retried together).
+    pub run_failures: usize,
+    /// Generated clips the user deleted from the timeline.
+    pub deleted: usize,
+}
+
+/// Fold member states into one stage state: a failure needs the user,
+/// then whatever is still moving, and done only when everything is.
+fn fold_states(states: &[StatusState]) -> StatusState {
+    let any = |s: StatusState| states.contains(&s);
+    if any(StatusState::Failed) {
+        StatusState::Failed
+    } else if !states.is_empty() && states.iter().all(|s| *s == StatusState::Done) {
+        StatusState::Done
+    } else if any(StatusState::Waiting) {
+        StatusState::Waiting
+    } else if any(StatusState::Attention) {
+        StatusState::Attention
+    } else if any(StatusState::Running) {
+        StatusState::Running
+    } else {
+        StatusState::Queued
+    }
+}
+
+fn stage(kind: StageKind, states: &[StatusState]) -> StageStatus {
+    StageStatus {
+        kind,
+        done: states.iter().filter(|s| **s == StatusState::Done).count(),
+        total: states.len(),
+        state: fold_states(states),
+        phase: None,
+    }
 }
 
 fn seed_of(id: &str) -> u64 {
@@ -754,6 +842,7 @@ impl ProductionSession {
 
     pub fn status(&self) -> ProductionStatus {
         let mut nodes = Vec::new();
+        let mut stages = Vec::new();
         let mut done = 0;
         let mut total = 0;
         let mut count = |state: StatusState| {
@@ -775,17 +864,23 @@ impl ProductionSession {
                 Some(TaskState::Waiting(reason)) => (StatusState::Waiting, Some(reason.clone())),
                 Some(TaskState::Downloading) => (StatusState::Running, Some("下载中".into())),
                 Some(TaskState::Generating) => (StatusState::Running, None),
-                None if self.in_flight.contains_key(key) => (StatusState::Queued, None),
+                None if self.in_flight.contains_key(key) => (StatusState::Running, None),
                 None => (StatusState::Queued, None),
             }
         };
         match &self.setup.recipe {
-            Recipe::Narration { spec, bake, .. } => {
+            Recipe::Narration { spec, bake, plate } => {
                 let bake_inputs: BTreeMap<String, String> =
                     narration::bake_requests(&self.doc, spec, &self.layout(), &self.setup.canvas)
                         .into_iter()
                         .map(|r| (r.board, r.fingerprint))
                         .collect();
+                let mut outline_states = Vec::new();
+                let mut voice_states = Vec::new();
+                let mut subtitle_states = Vec::new();
+                let mut story_states = Vec::new();
+                let mut image_states = Vec::new();
+                let mut compose_states = Vec::new();
                 if self.doc.segments.is_empty() {
                     let state = if self.failed.is_empty() {
                         StatusState::Running
@@ -793,6 +888,7 @@ impl ProductionSession {
                         StatusState::Failed
                     };
                     count(state);
+                    outline_states.push(state);
                     nodes.push(StatusNode {
                         key: "outline".into(),
                         label: "分段".into(),
@@ -800,6 +896,8 @@ impl ProductionSession {
                         detail: None,
                         children: Vec::new(),
                     });
+                } else {
+                    outline_states.push(StatusState::Done);
                 }
                 for (g, segment) in self.doc.segments.iter().enumerate() {
                     let voice_key = work::voice_spec(spec, &segment.text).key();
@@ -810,6 +908,22 @@ impl ProductionSession {
                             request_state(&voice_key)
                         };
                     count(state);
+                    voice_states.push(state);
+                    if spec.subtitle_chars.is_some() {
+                        subtitle_states.push(if segment.subtitles.is_some() {
+                            StatusState::Done
+                        } else if state == StatusState::Done {
+                            StatusState::Running
+                        } else {
+                            StatusState::Queued
+                        });
+                    }
+                    story_states.push(if !segment.boards.is_empty() {
+                        StatusState::Done
+                    } else {
+                        work::storyboard_spec(spec, &self.doc, g)
+                            .map_or(StatusState::Queued, |s| request_state(&s.key()).0)
+                    });
                     let mut children = vec![StatusNode {
                         key: format!("{}/voice", segment.id),
                         label: "配音".into(),
@@ -820,26 +934,15 @@ impl ProductionSession {
                     for (b, board) in segment.boards.iter().enumerate() {
                         let mut elements = Vec::new();
                         for element in &board.elements {
-                            let picked = element.picked();
-                            let (state, detail) = match picked {
+                            let (state, detail) = match element.picked() {
                                 Some(v) if v.file.is_some() => (StatusState::Done, None),
                                 Some(v) if v.error.is_some() => {
                                     (StatusState::Failed, v.error.clone())
                                 }
-                                _ => {
-                                    let key = work::image_spec(spec, element, 0).key();
-                                    let (state, detail) = request_state(&key);
-                                    (
-                                        if state == StatusState::Failed {
-                                            StatusState::Failed
-                                        } else {
-                                            state
-                                        },
-                                        detail,
-                                    )
-                                }
+                                _ => request_state(&work::image_spec(spec, element, 0).key()),
                             };
                             count(state);
+                            image_states.push(state);
                             elements.push(StatusNode {
                                 key: element.id.clone(),
                                 label: element.label.clone(),
@@ -848,10 +951,9 @@ impl ProductionSession {
                                 children: Vec::new(),
                             });
                         }
-                        let baking = self
-                            .runs
-                            .values()
-                            .find(|(p, _)| matches!(p, RunPurpose::Bake { board: id, .. } if *id == board.id));
+                        let baking = self.runs.values().find(
+                            |(p, _)| matches!(p, RunPurpose::Bake { board: id, .. } if *id == board.id),
+                        );
                         let (state, detail) = if bake.is_none() {
                             (StatusState::Done, None)
                         } else if let Some((_, buffer)) = baking {
@@ -871,10 +973,11 @@ impl ProductionSession {
                         };
                         if bake.is_some() {
                             count(state);
+                            compose_states.push(state);
                         }
                         children.push(StatusNode {
                             key: board.id.clone(),
-                            label: format!("黑板 {}", b + 1),
+                            label: format!("画面 {}", b + 1),
                             state,
                             detail,
                             children: elements,
@@ -887,16 +990,39 @@ impl ProductionSession {
                         } else {
                             segment.title.clone()
                         },
-                        state: if children.iter().all(|c| c.state == StatusState::Done) {
-                            StatusState::Done
-                        } else if children.iter().any(|c| c.state == StatusState::Failed) {
-                            StatusState::Failed
-                        } else {
-                            StatusState::Running
-                        },
+                        state: fold_states(&children.iter().map(|c| c.state).collect::<Vec<_>>()),
                         detail: None,
                         children,
                     });
+                }
+                if plate.is_some() {
+                    if let Some((fingerprint, _)) =
+                        narration::plate_request(&self.doc, &self.setup.canvas)
+                    {
+                        let running = self
+                            .runs
+                            .values()
+                            .any(|(p, _)| matches!(p, RunPurpose::Plate { .. }));
+                        compose_states.push(if self.doc.plate.is_some() {
+                            StatusState::Done
+                        } else if running {
+                            StatusState::Running
+                        } else if self.run_failures.contains_key(&fingerprint) {
+                            StatusState::Failed
+                        } else {
+                            StatusState::Queued
+                        });
+                    }
+                }
+                stages.push(stage(StageKind::Outline, &outline_states));
+                stages.push(stage(StageKind::Voice, &voice_states));
+                if spec.subtitle_chars.is_some() {
+                    stages.push(stage(StageKind::Subtitles, &subtitle_states));
+                }
+                stages.push(stage(StageKind::Storyboard, &story_states));
+                stages.push(stage(StageKind::Images, &image_states));
+                if bake.is_some() || plate.is_some() {
+                    stages.push(stage(StageKind::Compose, &compose_states));
                 }
             }
             Recipe::Workflow { .. } => {
@@ -912,6 +1038,9 @@ impl ProductionSession {
                     _ => (StatusState::Queued, None),
                 };
                 count(state);
+                let mut generate = stage(StageKind::Generate, &[state]);
+                generate.phase = run.map(|(_, buffer)| (buffer.phase.clone(), buffer.fraction));
+                stages.push(generate);
                 nodes.push(StatusNode {
                     key: "run".into(),
                     label: format!("生成（已出 {} 条）", record.map_or(0, |r| r.items.len())),
@@ -921,23 +1050,183 @@ impl ProductionSession {
                 });
             }
         }
+        // Results reach the timeline as they are produced: a placed item or
+        // one the user deleted is settled; the rest is on its way.
+        let (items, _) = self.items();
+        let placement = &self.doc.placement;
+        let deleted_item = |i: &Item| {
+            placement
+                .tombstones
+                .contains(&(i.key.clone(), i.rev.clone()))
+        };
+        let deleted = items.iter().filter(|i| deleted_item(i)).count();
+        let timeline: Vec<StatusState> = items
+            .iter()
+            .map(|i| {
+                if placement.placed.get(&i.key) == Some(&i.rev) || deleted_item(i) {
+                    StatusState::Done
+                } else {
+                    StatusState::Running
+                }
+            })
+            .collect();
+        stages.push(stage(StageKind::Timeline, &timeline));
         ProductionStatus {
             id: self.doc.id.clone(),
-            title: if self.doc.title.is_empty() {
-                "未命名成片".into()
-            } else {
-                self.doc.title.clone()
-            },
+            title: self.doc.title.clone(),
             extension: self.setup.extension.clone(),
+            script: self.doc.script.chars().take(40).collect(),
             done,
             total,
+            stages,
             nodes,
             attention: self.attention.clone(),
             failures: self
                 .failed
                 .iter()
-                .map(|(k, f)| (k.clone(), f.message.clone(), f.possibly_billed))
+                .map(|(k, f)| FailureStatus {
+                    key: k.clone(),
+                    work: self.failed_work(k),
+                    class: f.class.clone(),
+                    message: f.message.clone(),
+                    possibly_billed: f.possibly_billed,
+                })
                 .collect(),
+            run_failures: self.run_failures.len()
+                + usize::from(
+                    self.doc
+                        .workflow
+                        .as_ref()
+                        .is_some_and(|r| r.error.is_some()),
+                ),
+            deleted,
+        }
+    }
+
+    fn failed_work(&self, key: &TaskKey) -> FailedWork {
+        let segment = |id: &str| self.doc.segments.iter().position(|s| s.id == id);
+        match self.targets(key).into_iter().next() {
+            Some(Target::Outline { .. }) => FailedWork::Outline,
+            Some(Target::Voice { segment: id }) => {
+                segment(&id).map_or(FailedWork::Other, |segment| FailedWork::Voice { segment })
+            }
+            Some(Target::Storyboard { segment: id }) => segment(&id)
+                .map_or(FailedWork::Other, |segment| FailedWork::Storyboard {
+                    segment,
+                }),
+            Some(Target::Image { element, .. }) => self
+                .doc
+                .segments
+                .iter()
+                .flat_map(|s| &s.boards)
+                .flat_map(|b| &b.elements)
+                .find(|e| e.id == element)
+                .map_or(FailedWork::Other, |e| FailedWork::Image {
+                    label: e.label.clone(),
+                }),
+            None => FailedWork::Other,
+        }
+    }
+
+    /// A readable library name for a generated file this production placed:
+    /// "第 1 段配音", "黑板底", "画面 · 存钱罐" — never the content hash.
+    pub fn media_name(&self, path: &str) -> Option<String> {
+        let (items, _) = self.items();
+        let item = items.iter().find(|item| {
+            matches!(&item.source, todo_production::extension::items::ItemSource::File { file, .. }
+                if placement::media_path(&self.setup.workdir, file) == path)
+        })?;
+        Some(self.key_name(&item.key, item.role))
+    }
+
+    fn key_name(&self, key: &str, role: todo_production::extension::items::ItemRole) -> String {
+        use todo_production::extension::items::ItemRole;
+        let segment = |id: &str| {
+            self.doc
+                .segments
+                .iter()
+                .position(|s| s.id == id)
+                .map(|g| g + 1)
+        };
+        let element = |id: &str| {
+            self.doc
+                .segments
+                .iter()
+                .flat_map(|s| &s.boards)
+                .flat_map(|b| &b.elements)
+                .find(|e| e.id == id)
+                .map(|e| e.label.clone())
+        };
+        let parts: Vec<&str> = key.split('/').collect();
+        match parts.as_slice() {
+            ["plate"] => return "黑板底".into(),
+            [g, "voice"] => {
+                if let Some(n) = segment(g) {
+                    return format!("第 {n} 段配音");
+                }
+            }
+            [_, e] => {
+                if let Some(label) = element(e) {
+                    return format!("画面 · {label}");
+                }
+            }
+            [_, e, "dust"] => {
+                if let Some(label) = element(e) {
+                    return format!("粉笔灰 · {label}");
+                }
+            }
+            _ => {}
+        }
+        // Workflow keys (`shot/3/prop`, `bgm/intro`, …): translate the words.
+        let words: Vec<String> = parts
+            .iter()
+            .map(|part| {
+                match *part {
+                    "voice" => "配音",
+                    "shot" => "镜头",
+                    "bgm" => "背景音乐",
+                    "wipe" => "转场",
+                    "sfx" => "音效",
+                    "sub" => "字幕",
+                    "intro" => "开场",
+                    "mid" => "中段",
+                    "outro" => "结尾",
+                    "hero" | "character" => "角色",
+                    "prop" => "道具",
+                    "bubble" => "气泡",
+                    "intro_red" => "开场字",
+                    "card" => "卡片",
+                    "el" => "元素",
+                    "line" => "升华字",
+                    "bg" => "背景",
+                    "title" => "片头",
+                    other => other,
+                }
+                .to_owned()
+            })
+            .collect();
+        let fallback = match role {
+            ItemRole::Voice => "配音",
+            ItemRole::Music => "背景音乐",
+            ItemRole::Sfx => "音效",
+            ItemRole::Visual => "画面",
+            ItemRole::Text | ItemRole::Subtitle => "文字",
+        };
+        if words
+            .iter()
+            .all(|w| w.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        {
+            format!("{fallback} {}", words.join(" "))
+        } else {
+            words.join(" ")
+        }
+    }
+
+    /// Put back every generated clip the user deleted from the timeline.
+    pub fn restore_deleted(&mut self) {
+        if !self.doc.placement.tombstones.is_empty() {
+            self.doc.placement.tombstones.clear();
+            self.dirty = true;
         }
     }
 }

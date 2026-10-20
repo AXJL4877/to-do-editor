@@ -48,6 +48,7 @@ fn selecting_and_clearing_a_clip_keeps_the_program_canvas_unchanged() {
         visual: true,
         locked: false,
         transform: Default::default(),
+        motion: None,
     }));
     assert_eq!(
         empty, selected,
@@ -80,6 +81,7 @@ fn render_at(
             media: Vec::new(),
             tracks: Vec::new(),
             text_styles: Vec::new(),
+            motions: Vec::new(),
             folders: Vec::new(),
         },
         "test",
@@ -470,6 +472,7 @@ fn library_leaves_a_native_monitor_beside_it_at_supported_window_sizes() {
             media: Vec::new(),
             tracks: Vec::new(),
             text_styles: Vec::new(),
+            motions: Vec::new(),
             folders: Vec::new(),
         },
         "test",
@@ -527,6 +530,7 @@ fn selected_clip_inspector_stays_to_the_right_of_the_native_canvas() {
         visual: true,
         locked: false,
         transform: Default::default(),
+        motion: None,
     });
     for size in [egui::vec2(960.0, 640.0), egui::vec2(1440.0, 900.0)] {
         let ctx = egui::Context::default();
@@ -587,6 +591,7 @@ fn small_window_inspector_scroll_reaches_transform_controls_without_resizing_pre
         visual: true,
         locked: false,
         transform: Default::default(),
+        motion: None,
     });
     let render = |events| {
         let mut hole = None;

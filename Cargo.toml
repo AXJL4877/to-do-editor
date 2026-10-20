@@ -13,7 +13,8 @@ members = [
   "crates/todo_process",
   "crates/todo_production",
   "crates/todo_ai",
-  "crates/todo_extensions",
+  "crates/todo_workflow",
+  "crates/todo_motion",
 ]
 
 [workspace.package]
@@ -33,7 +34,8 @@ todo_text = { path = "crates/todo_text" }
 todo_process = { path = "crates/todo_process" }
 todo_production = { path = "crates/todo_production" }
 todo_ai = { path = "crates/todo_ai" }
-todo_extensions = { path = "crates/todo_extensions" }
+todo_workflow = { path = "crates/todo_workflow" }
+todo_motion = { path = "crates/todo_motion" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

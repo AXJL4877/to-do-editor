@@ -20,7 +20,7 @@
    - core 和 application 不做 I/O、不联网、不开线程。
    - `todo_production` 是纯领域代码。
    - 只有 `todo_ai` 联网。
-   - 只有 `todo_process` 启动子进程（`todo_media` 和 `todo_extensions` 都经过它）。
+   - 只有 `todo_process` 启动子进程（`todo_media` 和 `todo_workflow` 都经过它）。
    - app 只做装配。
 
    新增依赖时必须同时修改边界测试，并写明层次归属。同一条规则只能有一份实现：比如入场曲线，预览和导出共用 core 的同一个函数。
@@ -115,7 +115,7 @@
 | `todo_ai` | 见下 | 40 项，含 `tests/service.rs` 本地故障注入；`-- --ignored` 跑真实凭据管理器 |
 | `todo_production` | 见下 | `golden`、`timing_golden`、`pacing`、`flow`、`task_keys`、`extension_spec` |
 | 扩展包 | `extensions/builtin/chalk-hand/`：清单 `builtin.chalk-hand` 4.0.0、`prompts/planner.md`、`prompts/asset.md` | `extension_spec::the_chalk_hand_package_is_valid` |
-| `todo_extensions` | 清单/安装、运行时环境隔离、按请求指纹预算、`todo-worker/1` 进程池 | `tests/install.rs`（3 项）及 pool/runtime/budget 单测 |
+| `todo_workflow` | 清单/安装、运行时环境隔离、按请求指纹预算、`todo-worker/1` 进程池 | `tests/install.rs`（3 项）及 pool/runtime/budget 单测 |
 
 `todo_ai` 内容：
 
@@ -141,7 +141,7 @@
 - 任务规划与回填 `work`（`plan_work`、`apply_outline` / `apply_voice` / `apply_storyboard` / `apply_image`，以任务指纹判断过期）；
 - 扩展规范类型与校验 `extension`（`manifest`、`protocol`、`items`、`narration_spec`）。
 
-`todo_extensions` 内容：
+`todo_workflow` 内容：
 
 - `registry`：扫描内置 / 用户扩展，同 id 时用户版覆盖内置版；坏包列入 `rejected`，不可运行；`Extension::build_key()` 为 `id@version`；
 - `install`：`.todoext` 先在内存里校验路径 / 大小 / 数量 / 重复项 / 清单，再解压到临时目录原子换入，失败回滚；
@@ -178,7 +178,7 @@ UI 线程（eframe）
      ▼                                              │
 app/adapters/production/ ProductionHost（独立线程，只做 I/O 与转发）
   ├─ AiService（todo_ai 线程，tokio）       ← chat / image / speech
-  ├─ WorkerPool（todo_extensions 管理线程） ← 扩展工作程序子进程（Job Object）
+  ├─ WorkerPool（todo_workflow 管理线程） ← 扩展工作程序子进程（Job Object）
   ├─ ServiceBridge                         ← 把工作程序的 call 转成 AiService 任务或本地服务
   ├─ ProductionStore（todo_storage）        ← 成片文档、工作目录
   └─ MediaService（todo_media）             ← probe、encode（packed-alpha / H.264）、素材登记
@@ -251,7 +251,7 @@ data/<工程>/productions/<pid>/work/             工作目录（服务结果副
 | 成片面板与 AI 设置的展示模型、输入翻译 | `todo_interaction/src/presentation/production.rs`、`ai_settings.rs`；`todo_interaction/src/production/` |
 | egui 控件 | `todo_ui/src/widgets/production/`、`todo_ui/src/widgets/ai_settings.rs` |
 | 成片存储 | `todo_storage/src/productions/` |
-| 进程池、服务预算、运行时解析 | `todo_extensions/src/{pool,budget,runtime}.rs` |
+| 进程池、服务预算、运行时解析 | `todo_workflow/src/{pool,budget,runtime}.rs` |
 | 编码（packed-alpha / 短 GOP H.264）、导出混音与质检 | `todo_media/src/{encode,export}/` |
 | 装配、线程、事件转发、服务桥 | `todo_app/src/adapters/production/` |
 | 离线合成 | `native/src/render/` + `preview_host_main.cpp` 的 `--render` 模式 |
@@ -289,7 +289,7 @@ Q（打包与端到端）最后
 
 每步格式：**做什么 → 接口 → 最小验证 → 完成标准**。
 
-### E 扩展运行时（`todo_extensions`）
+### E 扩展运行时（`todo_workflow`）
 
 **E1 运行时解析 `runtime.rs`**
 
@@ -421,7 +421,7 @@ impl WorkerPool {
 - **故障**：进程崩溃、EOF 或输出非法行时，当前 run 记 `Resource`，**在新进程里自动重试一次**；服务调用由 AiService 日志命中，不重复付费。第二次再失败才发 `Failed`。`stderr` 带最后 8 KiB。
 - 收到 `failed{class:resource}` 也重试一次，`invalid_input` / `internal` 不重试。
 
-最小验证：在 `crates/todo_extensions/tests/fixtures/echo/` 放 `extension.json` + `worker/main.py`，用 SDK（R2）或手写行协议。按 `params.mode` 覆盖下列情况，每种一个测试，找不到 Python 时跳过：
+最小验证：在 `crates/todo_workflow/tests/fixtures/echo/` 放 `extension.json` + `worker/main.py`，用 SDK（R2）或手写行协议。按 `params.mode` 覆盖下列情况，每种一个测试，找不到 Python 时跳过：
 
 | mode | 预期 |
 | --- | --- |
@@ -440,12 +440,12 @@ impl WorkerPool {
 - 上述测试全绿；
 - clippy 干净；
 - `lib.rs` 导出 `pool`、`budget`、`runtime`；
-- `dependency_boundaries.rs` 中 `todo_extensions` 的依赖清单同步更新。
+- `dependency_boundaries.rs` 中 `todo_workflow` 的依赖清单同步更新。
 
 **E5 扩展自检 `check.rs` + `examples/check_extension.rs`**
 
 ```text
-cargo run -p todo_extensions --example check_extension -- extensions/builtin/chalk-hand
+cargo run -p todo_workflow --example check_extension -- extensions/builtin/chalk-hand
 ```
 
 依次检查：
@@ -885,7 +885,7 @@ pub enum ProductionOutput {                   // AppEvent::Production(Production
 
 最小验证（Rust 侧）：
 
-- `todo_extensions` 集成测试跑 `bake_board` 样例；
+- `todo_workflow` 集成测试跑 `bake_board` 样例；
 - 用 M3 的 `RevealMeta` 解析输出，`duration` 与窗口一致；
 - 原生测试载入输出的 reveal 文件，在 τ=0 时全透明，τ=duration 时等于最终画面。
 
@@ -1096,7 +1096,7 @@ key 约定：
 
 - 编排：`todo_production::work::{plan_work, refresh, apply_outline, apply_voice, apply_storyboard, apply_image}`；`pacing::schedule`；`extension::narration_spec`。
 - AI：`todo_ai::{AiConfig, Secrets, AiService, default_paths}`；示例 `ai_check`（免费）。
-- 扩展：`todo_extensions::{Registry, load, install, uninstall, pack}`；`todo_production::extension::{manifest::Manifest, protocol::{HostMessage, WorkerMessage, ServiceCall}, items::{Item, validate_items}}`。
+- 扩展：`todo_workflow::{Registry, load, install, uninstall, pack}`；`todo_production::extension::{manifest::Manifest, protocol::{HostMessage, WorkerMessage, ServiceCall}, items::{Item, validate_items}}`。
 - 子进程：`todo_process::{supervise, capture, Duplex, Output, hide_window}`。
 
 ### 7.2 常用命令
@@ -1105,7 +1105,7 @@ key 约定：
 cargo run -p todo_ai --example ai_check                      # 免费：配置与密钥来源自检
 cargo run -p todo_ai --example ai_probe -- chat              # 付费：一次只跑一项，先告知用户
 cargo run -p todo_production --example pacing_report         # 呼吸感指标
-cargo run -p todo_extensions --example check_extension -- extensions/builtin/chalk-hand   # E5 之后
+cargo run -p todo_workflow --example check_extension -- extensions/builtin/chalk-hand   # E5 之后
 ```
 
 ### 7.3 旧项目参考位置（只读）

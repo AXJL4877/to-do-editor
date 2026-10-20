@@ -34,6 +34,21 @@ impl EditorSession {
                     Vec::new()
                 }
             },
+            EditorCommand::EditAll(edits) => {
+                let mut project = self.project.clone();
+                project.playhead = self.playhead;
+                for edit in edits {
+                    match execute_edit(project, edit) {
+                        Ok(next) => project = next,
+                        Err(error) => {
+                            update.error = Some(error.clone());
+                            self.status = Some(Status::Domain(error));
+                            return update;
+                        }
+                    }
+                }
+                return self.commit_project(project);
+            }
             EditorCommand::Undo => {
                 let previous = self
                     .gesture_before

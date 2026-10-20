@@ -1,0 +1,72 @@
+{
+  "spec": "todo-graph/1",
+  "nodes": [
+    {
+      "id": "media_bin",
+      "type": "media_bin",
+      "label": "素材容器",
+      "x": 40,
+      "y": 200,
+      "params": {
+        "accept": ".txt,.md,.mp3,.wav,.m4a,.mp4,.mov,.png,.jpg,.webp",
+        "note": "口播稿 / 参考音视频"
+      }
+    },
+    {
+      "id": "script",
+      "type": "script",
+      "label": "原始口播",
+      "x": 320,
+      "y": 120
+    },
+    {
+      "id": "segment",
+      "type": "segment_script",
+      "label": "口播分段",
+      "x": 320,
+      "y": 320,
+      "params": {
+        "mode": "semantic",
+        "target": 120,
+        "max": 200
+      }
+    },
+    {
+      "id": "speech",
+      "type": "tts",
+      "label": "口播转 TTS",
+      "x": 600,
+      "y": 80,
+      "params": {
+        "voice": "S_RksT6Z6g2",
+        "rate": 16
+      }
+    },
+    { "id": "first_emit", "type": "emit", "label": "首次入轨", "x": 880, "y": 40 },
+    { "id": "subtitles", "type": "subtitles", "label": "字幕断点", "x": 880, "y": 220 },
+    { "id": "split_shots", "type": "split_shots", "label": "一句一镜", "x": 1160, "y": 160 },
+    { "id": "label_shots", "type": "label_shots", "label": "画面标签", "x": 1440, "y": 160 },
+    { "id": "choose_motions", "type": "choose_motions", "label": "动效选择", "x": 1720, "y": 160 },
+    { "id": "ground_emit", "type": "ground_emit", "label": "底板字幕升华字入轨", "x": 2000, "y": 60 },
+    { "id": "picture_batch", "type": "picture_batch", "label": "逐镜画面", "x": 2000, "y": 260 },
+    { "id": "done", "type": "done", "label": "完成", "x": 2280, "y": 160 }
+  ],
+  "edges": [
+    { "from": "media_bin", "to": "script", "out": "text", "in": "text" },
+    { "from": "media_bin", "to": "segment", "out": "text", "in": "text" },
+    { "from": "script", "to": "segment", "out": "script", "in": "text" },
+    { "from": "script", "to": "speech", "out": "script", "in": "text" },
+    { "from": "speech", "to": "first_emit", "out": "audio", "in": "payload" },
+    { "from": "script", "to": "subtitles", "out": "script", "in": "script" },
+    { "from": "speech", "to": "subtitles", "out": "audio", "in": "speech" },
+    { "from": "speech", "to": "split_shots", "out": "audio", "in": "speech" },
+    { "from": "subtitles", "to": "split_shots", "out": "cues", "in": "cues" },
+    { "from": "split_shots", "to": "label_shots", "out": "shots", "in": "shots" },
+    { "from": "label_shots", "to": "choose_motions", "out": "plan", "in": "plan" },
+    { "from": "choose_motions", "to": "ground_emit", "out": "plan", "in": "plan" },
+    { "from": "choose_motions", "to": "picture_batch", "out": "plan", "in": "plan" },
+    { "from": "first_emit", "to": "done", "out": "items", "in": "result" },
+    { "from": "ground_emit", "to": "done", "out": "items", "in": "result" },
+    { "from": "picture_batch", "to": "done", "out": "items", "in": "result" }
+  ]
+}

@@ -1,0 +1,205 @@
+[
+ {
+  "id": "krabs-explain",
+  "prompt": "Mr. Krabs the red crab standing, one claw raised as if explaining a point, confident grin. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1536",
+  "transparent": true,
+  "quality": "high"
+ },
+ {
+  "id": "krabs-worried",
+  "prompt": "Mr. Krabs the red crab looking worried and sweating, claws clasped together nervously. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1536",
+  "transparent": true,
+  "quality": "high"
+ },
+ {
+  "id": "krabs-shock",
+  "prompt": "Mr. Krabs the red crab shocked, eyes popping out, mouth wide open, claws up. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1536",
+  "transparent": true,
+  "quality": "high"
+ },
+ {
+  "id": "krabs-money",
+  "prompt": "Mr. Krabs the red crab hugging a big bag of money with a dollar sign, greedy happy face. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1536",
+  "transparent": true,
+  "quality": "high"
+ },
+ {
+  "id": "spongebob-happy",
+  "prompt": "SpongeBob SquarePants smiling widely and waving one hand. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1536",
+  "transparent": true,
+  "quality": "high"
+ },
+ {
+  "id": "spongebob-think",
+  "prompt": "SpongeBob SquarePants thinking, hand on chin, eyes looking up. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1536",
+  "transparent": true,
+  "quality": "high"
+ },
+ {
+  "id": "spongebob-sad",
+  "prompt": "SpongeBob SquarePants sad and droopy, shoulders down, small tear. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1536",
+  "transparent": true,
+  "quality": "high"
+ },
+ {
+  "id": "spongebob-point",
+  "prompt": "SpongeBob SquarePants pointing to the side with one arm, excited. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1536",
+  "transparent": true,
+  "quality": "high"
+ },
+ {
+  "id": "patrick-confused",
+  "prompt": "Patrick Star the pink starfish scratching his head, confused face. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1536",
+  "transparent": true,
+  "quality": "high"
+ },
+ {
+  "id": "patrick-happy",
+  "prompt": "Patrick Star the pink starfish grinning with both arms up. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1536",
+  "transparent": true,
+  "quality": "high"
+ },
+ {
+  "id": "squidward-annoyed",
+  "prompt": "Squidward Tentacles with arms crossed, annoyed half-closed eyes. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1536",
+  "transparent": true,
+  "quality": "high"
+ },
+ {
+  "id": "fish-customer",
+  "prompt": "a generic Bikini Bottom fish citizen in casual clothes, standing, curious face. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1536",
+  "transparent": true,
+  "quality": "high"
+ },
+ {
+  "id": "shell-coins",
+  "prompt": "a pile of shiny golden seashell coins. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium"
+ },
+ {
+  "id": "sign-blank",
+  "prompt": "a blank wooden sign board on a post with an empty light wood panel. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium"
+ },
+ {
+  "id": "clock",
+  "prompt": "a red cartoon alarm clock with two bells. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium"
+ },
+ {
+  "id": "abacus",
+  "prompt": "a wooden abacus with brown beads. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium"
+ },
+ {
+  "id": "magnifier",
+  "prompt": "a magnifying glass with a brown handle. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium"
+ },
+ {
+  "id": "mark-x",
+  "prompt": "a big bold red X mark, hand painted brush stroke. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium"
+ },
+ {
+  "id": "mark-arrow",
+  "prompt": "a big bold red curved arrow pointing right, hand painted. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium"
+ },
+ {
+  "id": "mark-question",
+  "prompt": "a big yellow question mark with black outline. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium"
+ },
+ {
+  "id": "lightbulb",
+  "prompt": "a glowing yellow light bulb idea symbol with rays. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium"
+ },
+ {
+  "id": "scale",
+  "prompt": "a golden balance scale with two pans. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium"
+ },
+ {
+  "id": "chart-down",
+  "prompt": "a small easel board with a red line chart going down. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium"
+ },
+ {
+  "id": "chart-up",
+  "prompt": "a small easel board with a green line chart going up. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium"
+ },
+ {
+  "id": "ticket",
+  "prompt": "a red and gold movie ticket stub. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium"
+ },
+ {
+  "id": "krabby-patty",
+  "prompt": "a Krabby Patty burger with sesame bun. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium"
+ },
+ {
+  "id": "trash-can",
+  "prompt": "a dented metal trash can with a lid slightly open. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium"
+ },
+ {
+  "id": "money-bag",
+  "prompt": "a brown money bag with a dollar sign. SpongeBob SquarePants TV cartoon style, flat 2D cel animation, thick clean black outlines, bright saturated colors, single subject, full body, centered with margin, isolated on a fully transparent background, no ground, no shadow, no text, no letters",
+  "size": "1024x1024",
+  "transparent": true,
+  "quality": "medium"
+ },
+ {
+  "id": "plate-grass",
+  "size": "1536x1024",
+  "transparent": false,
+  "quality": "high",
+  "prompt": "Background plate for a SpongeBob SquarePants style cartoon: Bikini Bottom underwater scene, turquoise water sky with the iconic flower-shaped clouds, distant purple coral rocks, flat green grass meadow ground in the lower third, empty middle stage area, no characters, no text, flat 2D cel animation with clean outlines, bright saturated colors, wide 3:2 composition"
+ }
+]

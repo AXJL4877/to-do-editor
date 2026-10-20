@@ -159,15 +159,24 @@ pub struct ImageCall {
     pub variant: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Pictures (workdir-relative paths) the result must stay consistent
+    /// with, e.g. a character the scene shows. The host resolves them inside
+    /// the run's workdir and rejects anything else.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SpeechCall {
     pub text: String,
+    /// Builtin voice id or a cloned one (`S_...`); the host picks the resource.
     pub voice: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample_rate: Option<u32>,
+    /// Percent speed change (−50..=100), forwarded to the provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -256,8 +265,8 @@ impl ServiceCall {
                 return bad("prompt 须 1~4000 字")
             }
             Self::Image(c) if !super::valid_size(&c.size) => return bad("size 须为 WxH"),
-            Self::Speech(c) if c.text.trim().is_empty() || c.text.chars().count() > 1200 => {
-                return bad("text 须 1~1200 字")
+            Self::Speech(c) if c.text.trim().is_empty() || c.text.chars().count() > 6000 => {
+                return bad("text 须 1~6000 字")
             }
             Self::Encode(c) if !(c.fps.is_finite() && (1.0..=120.0).contains(&c.fps)) => {
                 return bad("fps 须在 1~120")

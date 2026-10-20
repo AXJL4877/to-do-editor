@@ -1,44 +1,51 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use todo_motion::{MotionKind, MotionPreset, MotionSample, FADE_OUT};
 
-/// A clip's optional entrance animation.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+use super::Project;
+use crate::Transform;
+
+/// A clip's use of a motion preset: which one (`kind`, a preset id) and how
+/// long its window is. Entrances, exits and transitions share this shape.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct Intro {
-    pub kind: IntroKind,
+pub struct MotionRef {
+    pub kind: String,
     pub duration: f64,
 }
 
-/// Built-in entrance curves shared by core, extensions and the host.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum IntroKind {
-    Fade,
-    Rise,
-    Pop,
-    SlideLeft,
-    SlideRight,
-    Drop,
-    Stamp,
-    Grow,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct IntroSample {
-    pub opacity: f64,
-    pub dx: f64,
-    pub dy: f64,
-    pub scale: f64,
-}
-
-impl Default for IntroSample {
-    fn default() -> Self {
+impl MotionRef {
+    pub fn new(kind: impl Into<String>, duration: f64) -> Self {
         Self {
-            opacity: 1.0,
-            dx: 0.0,
-            dy: 0.0,
-            scale: 1.0,
+            kind: kind.into(),
+            duration,
         }
     }
+
+    fn window(&self) -> Option<f64> {
+        (self.duration.is_finite() && self.duration > 0.0).then_some(self.duration)
+    }
+}
+
+/// Entrance of a clip (`kind` names an intro preset such as `pop`).
+pub type Intro = MotionRef;
+
+/// Persisted outros were a bare number of fade seconds; read both shapes.
+pub(crate) fn deserialize_outro<'de, D>(deserializer: D) -> Result<Option<MotionRef>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Wire {
+        Seconds(f64),
+        Motion(MotionRef),
+    }
+    Ok(match Option::<Wire>::deserialize(deserializer)? {
+        None => None,
+        Some(Wire::Seconds(seconds)) => Some(MotionRef::new(FADE_OUT, seconds)),
+        Some(Wire::Motion(motion)) => Some(motion),
+    }
+    .filter(|motion| motion.window().is_some()))
 }
 
 /// Per-clip audio controls. Values are normalized at construction and checked
@@ -69,166 +76,90 @@ pub struct ClipOrigin {
     pub rev: String,
 }
 
-/// Evaluate an intro at seconds from the beginning of a clip.
-///
-/// Values after the intro are exactly the identity sample, which makes seeking
-/// and export use the same deterministic function.
-pub fn intro_at(intro: &Intro, time: f64) -> IntroSample {
-    if !intro.duration.is_finite() || intro.duration <= 0.0 || !time.is_finite() {
-        return IntroSample::default();
-    }
-    let u = (time / intro.duration).clamp(0.0, 1.0);
-    if u >= 1.0 {
-        return IntroSample::default();
-    }
-    let ease_out = 1.0 - (1.0 - u).powi(3);
-    let fade = (2.0 * u).min(1.0);
-    let mut sample = IntroSample {
-        opacity: 1.0,
-        dx: 0.0,
-        dy: 0.0,
-        scale: 1.0,
+/// The preset a project resolves `id` to: its own copy first, then the
+/// built-ins. Unknown ids play as no motion.
+pub fn find_motion<'a>(project: &'a Project, id: &str) -> Option<&'a MotionPreset> {
+    project
+        .motions
+        .iter()
+        .find(|preset| preset.id == id)
+        .or_else(|| {
+            todo_motion::builtin_motions()
+                .iter()
+                .find(|preset| preset.id == id)
+        })
+}
+
+fn find_kind<'a>(project: &'a Project, id: &str, kind: MotionKind) -> Option<&'a MotionPreset> {
+    find_motion(project, id).filter(|preset| preset.kind == kind)
+}
+
+/// Entrance sample `time` seconds after the clip became visible.
+pub fn intro_sample(project: &Project, intro: &MotionRef, time: f64) -> MotionSample {
+    let (Some(window), Some(preset)) = (
+        intro.window(),
+        find_kind(project, &intro.kind, MotionKind::Intro),
+    ) else {
+        return MotionSample::default();
     };
-    match intro.kind {
-        IntroKind::Fade => sample.opacity = ease_out,
-        IntroKind::Rise => {
-            sample.dy = 0.06 * (1.0 - ease_out);
-            sample.opacity = fade;
-        }
-        IntroKind::Pop => {
-            let s = 1.70158;
-            let x = u - 1.0;
-            let back_out = 1.0 + (s + 1.0) * x.powi(3) + s * x.powi(2);
-            sample.scale = 0.6 + 0.4 * back_out;
-            sample.opacity = (3.0 * u).min(1.0);
-        }
-        IntroKind::SlideLeft => {
-            sample.dx = -0.25 * (1.0 - ease_out);
-            sample.opacity = fade;
-        }
-        IntroKind::SlideRight => {
-            sample.dx = 0.25 * (1.0 - ease_out);
-            sample.opacity = fade;
-        }
-        IntroKind::Drop => {
-            let bounce = bounce_out(u);
-            sample.dy = -0.15 * (1.0 - bounce);
-            sample.opacity = (4.0 * u).min(1.0);
-        }
-        IntroKind::Stamp => {
-            if u < 0.7 {
-                let v = (u / 0.7).clamp(0.0, 1.0);
-                sample.scale = 1.3 - 0.3 * v.powi(3);
-            } else {
-                sample.scale = 1.0 - 0.03 * (std::f64::consts::PI * (u - 0.7) / 0.3).sin();
-            }
-            sample.opacity = (4.0 * u).min(1.0);
-        }
-        IntroKind::Grow => sample.scale = ease_out.max(0.01),
+    if !time.is_finite() || time >= window {
+        return MotionSample::default();
     }
-    sample
+    preset.sample((time / window).clamp(0.0, 1.0))
+}
+
+/// Exit sample with `left` seconds of visibility remaining.
+pub fn outro_sample(project: &Project, outro: &MotionRef, left: f64) -> MotionSample {
+    let (Some(window), Some(preset)) = (
+        outro.window(),
+        find_kind(project, &outro.kind, MotionKind::Outro),
+    ) else {
+        return MotionSample::default();
+    };
+    if !left.is_finite() || left >= window {
+        return MotionSample::default();
+    }
+    preset.sample((1.0 - left / window).clamp(0.0, 1.0))
+}
+
+/// Multiply opacity and scales, add offsets.
+pub fn apply_motion(transform: &mut Transform, sample: MotionSample) {
+    transform.x += sample.dx;
+    transform.y += sample.dy;
+    transform.scale *= sample.scale;
+    transform.scale_x *= sample.scale_x;
+    transform.scale_y *= sample.scale_y;
+    transform.opacity = (transform.opacity * sample.opacity).clamp(0.0, 1.0);
+}
+
+/// Extra visibility a transition gives a clip around its own span: `lead`
+/// seconds before its start and `tail` after its end.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct VisibleSpan {
+    pub lead: f64,
+    pub tail: f64,
 }
 
 /// The transform a picture clip is drawn with at `local_time` seconds from its
-/// start: its own transform with the intro curve and the outro fade applied.
-/// Preview and export both use this, so they cannot drift apart.
-pub fn picture_transform(clip: &crate::Clip, local_time: f64) -> crate::Transform {
+/// start: its own transform with the intro and outro applied. Their clocks run
+/// on the visible span, so a clip entering through a transition starts its
+/// entrance as soon as it appears. Preview, export and `describe` use this.
+pub fn picture_transform(
+    project: &Project,
+    clip: &crate::Clip,
+    local_time: f64,
+    span: VisibleSpan,
+) -> Transform {
     let mut transform = clip.transform;
-    if let Some(intro) = clip.intro {
-        let sample = intro_at(&intro, local_time);
-        transform.x += sample.dx;
-        transform.y += sample.dy;
-        transform.scale *= sample.scale;
-        transform.opacity *= sample.opacity;
+    if let Some(intro) = &clip.intro {
+        apply_motion(
+            &mut transform,
+            intro_sample(project, intro, local_time + span.lead),
+        );
     }
-    if let Some(outro) = clip.outro.filter(|s| s.is_finite() && *s > 0.0) {
-        let left = (clip.duration - local_time).max(0.0);
-        if left < outro {
-            let u = left / outro;
-            // Ease-in on the way out mirrors the intro's ease-out.
-            transform.opacity *= u * u * (3.0 - 2.0 * u);
-        }
+    if let Some(outro) = &clip.outro {
+        let left = (clip.duration + span.tail - local_time).max(0.0);
+        apply_motion(&mut transform, outro_sample(project, outro, left));
     }
     transform
-}
-
-fn bounce_out(mut u: f64) -> f64 {
-    const N1: f64 = 7.5625;
-    const D1: f64 = 2.75;
-    if u < 1.0 / D1 {
-        N1 * u * u
-    } else if u < 2.0 / D1 {
-        u -= 1.5 / D1;
-        N1 * u * u + 0.75
-    } else if u < 2.5 / D1 {
-        u -= 2.25 / D1;
-        N1 * u * u + 0.9375
-    } else {
-        u -= 2.625 / D1;
-        N1 * u * u + 0.984375
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn curves_are_identity_after_duration() {
-        for kind in [
-            IntroKind::Fade,
-            IntroKind::Rise,
-            IntroKind::Pop,
-            IntroKind::SlideLeft,
-            IntroKind::SlideRight,
-            IntroKind::Drop,
-            IntroKind::Stamp,
-            IntroKind::Grow,
-        ] {
-            assert_eq!(
-                intro_at(
-                    &Intro {
-                        kind,
-                        duration: 1.0
-                    },
-                    1.0
-                ),
-                IntroSample::default()
-            );
-            assert_eq!(
-                intro_at(
-                    &Intro {
-                        kind,
-                        duration: 1.0
-                    },
-                    2.0
-                ),
-                IntroSample::default()
-            );
-        }
-    }
-
-    #[test]
-    fn representative_curve_values_are_finite_and_visible() {
-        for kind in [
-            IntroKind::Fade,
-            IntroKind::Rise,
-            IntroKind::Pop,
-            IntroKind::SlideLeft,
-            IntroKind::SlideRight,
-            IntroKind::Drop,
-            IntroKind::Stamp,
-            IntroKind::Grow,
-        ] {
-            let sample = intro_at(
-                &Intro {
-                    kind,
-                    duration: 2.0,
-                },
-                1.0,
-            );
-            assert!(sample.opacity.is_finite() && sample.scale.is_finite());
-            assert!(sample.scale > 0.0 && (0.0..=1.0).contains(&sample.opacity));
-        }
-    }
 }

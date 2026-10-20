@@ -848,7 +848,8 @@ fn json_text_edits_create_split_and_restyle_text_with_raster_jobs() {
     let edits: Vec<ControlEdit> = serde_json::from_value(serde_json::json!([
         { "type": "add_text", "trackId": null, "timelineStart": 1.0, "duration": 4.0,
           "content": { "text": "钱越来越 不值钱了", "styleId": "grunge-red-echo",
-                       "animation": { "intro": { "kind": "perChar", "duration": 1.0, "charDuration": 0.2 } } } },
+                       "animation": { "intro": { "kind": "perChar", "duration": 1.0, "charDuration": 0.2 } } },
+          "transform": { "x": 0.0, "y": 0.4, "scale": 1.0, "scaleX": 1.0, "scaleY": 1.0, "opacity": 1.0 } },
         { "type": "split", "clips": [{ "type": "created", "step": 0 }], "timelineTime": 3.0 },
         { "type": "set_text", "clip": { "type": "created", "step": 0 },
           "content": { "text": "新的", "styleId": "clean-white-outline" } }
@@ -865,6 +866,7 @@ fn json_text_edits_create_split_and_restyle_text_with_raster_jobs() {
     let text = find_clip(project, text_id).unwrap();
     assert_eq!(text.track.kind, TrackKind::Text);
     assert_eq!(text.clip.text().unwrap().text, "新的");
+    assert_eq!(text.clip.transform.y, 0.4);
     assert_eq!(project.text_styles.len(), 2);
     let right = &receipt.steps[1].splits[0].right_id;
     assert!(find_clip(project, right)
@@ -881,4 +883,55 @@ fn json_text_edits_create_split_and_restyle_text_with_raster_jobs() {
           "content": { "text": "x", "styleId": "s" }, "color": "red" }
     ]));
     assert!(rejected.is_err(), "unknown fields are refused");
+}
+
+#[test]
+fn split_then_transition_and_library_presets_copy_into_the_project() {
+    let mut ws = workspace();
+    let mut custom = todo_core::motion::builtin_motions()
+        .iter()
+        .find(|preset| preset.id == "crossfade")
+        .unwrap()
+        .clone();
+    custom.id = "studio.bubbleFade".into();
+    ws.set_motion_library(vec![custom.clone()]);
+    // Wire format as an agent writes it.
+    let edits: Vec<ControlEdit> = serde_json::from_value(serde_json::json!([
+        { "type": "place_media", "mediaId": "m", "trackId": "v1", "timelineStart": 0.0,
+          "sourceRange": { "sourceIn": 0.0, "sourceOut": 6.0 } },
+        { "type": "split", "clips": [{ "type": "created", "step": 0 }], "timelineTime": 3.0 },
+        { "type": "set_intro", "clip": { "type": "created", "step": 0 },
+          "intro": { "kind": "pop", "duration": 0.3 } }
+    ]))
+    .unwrap();
+    let outcome = ws.control(request(&ws, "cut", batch(edits)));
+    let ControlResult::Edits { receipt } = ok(&outcome.response) else {
+        panic!()
+    };
+    let right = receipt.steps[1].splits[0].right_id.clone();
+    let transition: ControlEdit = serde_json::from_value(serde_json::json!(
+        { "type": "set_transition", "clip": { "type": "id", "id": right },
+          "transition": { "kind": "studio.bubbleFade", "duration": 0.4 } }
+    ))
+    .unwrap();
+    let outcome = ws.control(request(&ws, "fade", batch(vec![transition])));
+    ok(&outcome.response);
+    let project = ws.editor().unwrap().project();
+    assert_eq!(project.motions, vec![custom]);
+    let layers = todo_core::resolve_layers(project, 3.0);
+    assert_eq!(layers.len(), 2, "both sides of the cut are drawn");
+
+    let view = project_view(project, Some(3.0));
+    let incoming = view.elements.iter().find(|e| e.clip_id == right).unwrap();
+    assert!(incoming.transition.as_ref().unwrap().active);
+    assert_eq!(incoming.visible, Some(true));
+
+    // An unknown preset is rejected with the motion's id.
+    let bad: ControlEdit = serde_json::from_value(serde_json::json!(
+        { "type": "set_transition", "clip": { "type": "id", "id": right },
+          "transition": { "kind": "nope", "duration": 0.4 } }
+    ))
+    .unwrap();
+    let outcome = ws.control(request(&ws, "bad", batch(vec![bad])));
+    assert_eq!(error(&outcome.response).code, "motion_not_found");
 }

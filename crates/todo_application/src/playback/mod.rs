@@ -6,6 +6,32 @@ impl EditorSession {
         if (self.importing || !self.can_play_at(self.picture().active)) && !self.playing {
             return Vec::new();
         }
+        let restart_source = !self.playing && self.showing_source() && {
+            let media_id = self
+                .source_monitor
+                .as_ref()
+                .map(|source| source.media_id.as_str())
+                .unwrap_or_default();
+            let end = self
+                .project
+                .media
+                .iter()
+                .find(|media| media.id == media_id)
+                .map(|media| media.duration.max(0.0))
+                .unwrap_or(0.0);
+            let at_end = self
+                .source_monitor
+                .as_ref()
+                .is_some_and(|source| source.time >= (end - 1e-4).max(0.0));
+            if at_end {
+                if let Some(source) = self.source_monitor.as_mut() {
+                    source.time = 0.0;
+                }
+                true
+            } else {
+                false
+            }
+        };
         self.playing = !self.playing;
         self.last_tick = None;
         self.audio_unavailable = false;
@@ -13,7 +39,7 @@ impl EditorSession {
         self.emit(Want {
             audio: false,
             transport: true,
-            picture: false,
+            picture: restart_source,
         })
     }
 
@@ -182,5 +208,49 @@ impl EditorSession {
             self.clock = None;
         }
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::EditorCommand;
+    use todo_core::{create_project, MediaItem, MediaKind};
+
+    fn source_session() -> EditorSession {
+        let mut project = create_project(None, None, None, None, None);
+        project.media.push(MediaItem {
+            id: "source-1".into(),
+            name: "source.mp4".into(),
+            path: Some("source.mp4".into()),
+            duration: 3.0,
+            has_audio: Some(false),
+            width: Some(1920),
+            height: Some(1080),
+            kind: Some(MediaKind::Video),
+            alpha: None,
+            reveal: None,
+            folder_id: None,
+        });
+        let mut session = EditorSession::new(project, "source-test");
+        let _ = session.apply(EditorCommand::OpenSourceMonitor {
+            media_id: "source-1".into(),
+        });
+        session
+    }
+
+    #[test]
+    fn source_playback_restarts_from_zero_after_reaching_end() {
+        let mut session = source_session();
+        session.source_monitor.as_mut().unwrap().time = 3.0;
+
+        let commands = session.apply(EditorCommand::TogglePlay).commands;
+
+        assert!(session.playing);
+        assert_eq!(session.source_monitor.as_ref().unwrap().time, 0.0);
+        assert!(commands.iter().any(|command| matches!(
+            command,
+            PreviewCommand::Transport { time, playing: true } if *time == 0.0
+        )));
     }
 }

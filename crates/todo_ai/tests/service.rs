@@ -4,6 +4,7 @@ mod support;
 use base64::Engine;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use support::{Behaviour, FakeServer};
@@ -29,6 +30,7 @@ fn scratch(name: &str) -> PathBuf {
 
 fn settings(server: &FakeServer, dir: &Path) -> ServiceSettings {
     ServiceSettings {
+        language: None,
         huniu_base_url: server.base.clone(),
         volc_base_url: server.base.clone(),
         huniu_strategy: None,
@@ -36,6 +38,14 @@ fn settings(server: &FakeServer, dir: &Path) -> ServiceSettings {
             (Provider::Huniu, Secret::new("sk-good").unwrap()),
             (Provider::Volc, Secret::new("volc-key").unwrap()),
         ]),
+        bindings: HashMap::from([
+            (Capability::Language, Provider::Huniu),
+            (Capability::Image, Provider::Huniu),
+            (Capability::Video, Provider::Huniu),
+            (Capability::Multimodal, Provider::Huniu),
+            (Capability::Audio, Provider::Volc),
+        ]),
+        models: HashMap::new(),
         journal_dir: dir.join("tasks"),
         artifacts_root: dir.join("blobs"),
         proxy: ProxyMode::Direct,
@@ -45,6 +55,7 @@ fn settings(server: &FakeServer, dir: &Path) -> ServiceSettings {
             image_rate_per_second: 50.0,
             speech_inflight: 2,
             image_paid_retries: 2,
+            image_resubmit_after: Duration::from_millis(300),
         },
         retry: RetryPolicy {
             base: Duration::from_millis(10),
@@ -62,8 +73,7 @@ fn settings(server: &FakeServer, dir: &Path) -> ServiceSettings {
 
 fn chat_spec(prompt: &str) -> TaskSpec {
     TaskSpec {
-        provider: Provider::Huniu,
-        request: TaskRequest::Chat(ChatRequest {
+        request: TaskRequest::Language(LanguageRequest {
             model: "gpt-6-astra".into(),
             messages: vec![ChatMessage {
                 role: ChatRole::User,
@@ -77,7 +87,6 @@ fn chat_spec(prompt: &str) -> TaskSpec {
 
 fn image_spec(prompt: &str) -> TaskSpec {
     TaskSpec {
-        provider: Provider::Huniu,
         request: TaskRequest::Image(ImageRequest {
             model: "gpt-image-2".into(),
             prompt: prompt.into(),
@@ -85,6 +94,8 @@ fn image_spec(prompt: &str) -> TaskSpec {
             quality: None,
             transparent: false,
             variant: 0,
+            references: Vec::new(),
+            reference_digests: Vec::new(),
         }),
     }
 }
@@ -141,7 +152,7 @@ fn model_discovery_lists_and_classifies_gateway_models() {
         {
             assert_eq!(event_id, id);
             assert!(models.iter().any(|model| {
-                model.id == "geminiflash3.1" && model.supports(todo_ai::ModelCapability::Text)
+                model.id == "geminiflash3.1" && model.supports(todo_ai::ModelCapability::Language)
             }));
             assert!(models.iter().any(|model| {
                 model.id == "seedream-4" && model.supports(todo_ai::ModelCapability::Image)
@@ -177,6 +188,34 @@ fn finished_requests_are_answered_from_the_journal() {
     assert_eq!(server.count("POST", "/v1/chat/completions"), 1);
     let sent = &server.recorded("/v1/chat/completions")[0];
     assert_eq!(sent.headers["authorization"], "Bearer sk-good");
+}
+
+#[test]
+fn empty_model_is_resolved_from_the_capability_binding_at_send_time() {
+    let server = FakeServer::start();
+    server.on("/v1/chat/completions", vec![Behaviour::text(200, SSE_OK)]);
+    let dir = scratch("bound-model");
+    let mut config = settings(&server, &dir);
+    config
+        .models
+        .insert(Capability::Language, "bound-language-model".into());
+    let (service, _) = AiService::start(config).unwrap();
+    let key = service.submit(TaskSpec {
+        request: TaskRequest::Language(LanguageRequest {
+            model: String::new(),
+            messages: vec![ChatMessage {
+                role: ChatRole::User,
+                content: "hello".into(),
+            }],
+            temperature: 0.0,
+            json: false,
+        }),
+    });
+    let (done, _) = until_final(&service, &key, Duration::from_secs(10));
+    assert!(matches!(done, AiEvent::Done { .. }));
+    let sent = &server.recorded("/v1/chat/completions")[0];
+    let body: serde_json::Value = serde_json::from_slice(&sent.body).unwrap();
+    assert_eq!(body["model"], "bound-language-model");
 }
 
 #[test]
@@ -234,6 +273,57 @@ fn an_image_is_generated_once_and_its_download_resumes() {
     );
     // Same-origin result URLs carry the key, third-party CDNs would not.
     assert_eq!(downloads[0].headers["authorization"], "Bearer sk-good");
+}
+
+#[test]
+fn a_slow_image_is_sent_again_and_the_first_answer_wins() {
+    let server = FakeServer::start();
+    let image = png();
+    let url = format!("{}/files/fast.png", server.base);
+    let sends = Arc::new(AtomicUsize::new(0));
+    let counter = sends.clone();
+    // The first send hangs past `image_resubmit_after` (300 ms here); the
+    // second answers at once.
+    server.on(
+        "/v1/images/generations",
+        vec![Behaviour::Custom(Arc::new(move |_| {
+            if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+                std::thread::sleep(Duration::from_secs(3));
+            }
+            (200, format!(r#"{{"data":[{{"url":"{url}"}}]}}"#).into_bytes())
+        }))],
+    );
+    server.on("/files/fast.png", vec![Behaviour::File { body: image.clone() }]);
+    let dir = scratch("hedged");
+    let (service, _) = AiService::start(settings(&server, &dir)).unwrap();
+    let key = service.submit(image_spec("slow crab"));
+    let started = std::time::Instant::now();
+    let (done, _) = until_final(&service, &key, Duration::from_secs(10));
+    assert!(matches!(done, AiEvent::Done { artifact: Some(_), .. }), "{done:?}");
+    assert!(started.elapsed() < Duration::from_secs(2), "waited for the slow send");
+    assert_eq!(server.count("POST", "/v1/images/generations"), 2);
+    drop(service);
+    let (journal, _) = Journal::open(dir.join("tasks"), 2, 0).unwrap();
+    let record = journal.get(&key).unwrap();
+    assert_eq!((record.submits, record.paid_retries), (2, 1), "the resend is billed");
+}
+
+#[test]
+fn an_unanswered_image_is_sent_at_most_three_times() {
+    let server = FakeServer::start();
+    server.on(
+        "/v1/images/generations",
+        vec![Behaviour::Custom(Arc::new(|_| {
+            std::thread::sleep(Duration::from_secs(3));
+            (502, b"busy".to_vec())
+        }))],
+    );
+    let dir = scratch("hedged-cap");
+    let (service, _) = AiService::start(settings(&server, &dir)).unwrap();
+    let _key = service.submit(image_spec("never"));
+    // Sends at 0, 300 and 600 ms; the paid budget (2) allows no fourth.
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(server.count("POST", "/v1/images/generations"), 3);
 }
 
 #[test]
@@ -379,12 +469,13 @@ fn speech_streams_audio_and_word_times_into_a_wav() {
     let dir = scratch("speech");
     let (service, _) = AiService::start(settings(&server, &dir)).unwrap();
     let key = service.submit(TaskSpec {
-        provider: Provider::Volc,
-        request: TaskRequest::Speech(SpeechRequest {
+        request: TaskRequest::Audio(AudioRequest {
+            model: "seed-tts-2.0".into(),
             text: "你好".into(),
             speaker: "zh_female_mizai_uranus_bigtts".into(),
             resource_id: "seed-tts-2.0".into(),
             sample_rate: 24000,
+            speech_rate: None,
         }),
     });
     let (done, _) = until_final(&service, &key, Duration::from_secs(10));
@@ -423,4 +514,48 @@ fn invalid_requests_fail_at_once() {
         "{failed:?}"
     );
     assert_eq!(server.count("POST", "/v1/chat/completions"), 1);
+}
+
+#[test]
+fn two_programs_sharing_the_journal_pay_for_a_picture_once() {
+    // The editor and a command-line run each start their own service on the
+    // same journal; the same request must be sent once.
+    let server = FakeServer::start();
+    let image = png();
+    let url = format!("{}/files/shared.png", server.base);
+    server.on(
+        "/v1/images/generations",
+        vec![Behaviour::Custom(Arc::new(move |_| {
+            // Under `image_resubmit_after` (300 ms): one send per program.
+            std::thread::sleep(Duration::from_millis(250));
+            (200, format!(r#"{{"data":[{{"url":"{url}"}}]}}"#).into_bytes())
+        }))],
+    );
+    server.on("/files/shared.png", vec![Behaviour::File { body: image.clone() }]);
+    let dir = scratch("two-programs");
+    let (first, _) = AiService::start(settings(&server, &dir)).unwrap();
+    let (second, _) = AiService::start(settings(&server, &dir)).unwrap();
+    let key = first.submit(image_spec("shared crab"));
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(second.submit(image_spec("shared crab")), key);
+    let (done_first, _) = until_final(&first, &key, Duration::from_secs(10));
+    let (done_second, seen) = until_final(&second, &key, Duration::from_secs(10));
+    assert!(matches!(done_first, AiEvent::Done { artifact: Some(_), .. }), "{done_first:?}");
+    assert!(matches!(done_second, AiEvent::Done { artifact: Some(_), .. }), "{done_second:?}");
+    assert!(
+        seen.iter().any(|e| matches!(e, AiEvent::Waiting { reason: WaitReason::Elsewhere, .. })),
+        "the second program waits for the first"
+    );
+    assert_eq!(server.count("POST", "/v1/images/generations"), 1);
+
+    // A program started before the result existed still reuses it.
+    let (third, _) = AiService::start(settings(&server, &dir)).unwrap();
+    let other = image_spec("another crab");
+    let (fourth, _) = AiService::start(settings(&server, &dir)).unwrap();
+    let other_key = fourth.submit(other.clone());
+    let _ = until_final(&fourth, &other_key, Duration::from_secs(10));
+    third.submit(other);
+    let (done_third, _) = until_final(&third, &other_key, Duration::from_secs(10));
+    assert!(matches!(done_third, AiEvent::Done { .. }), "{done_third:?}");
+    assert_eq!(server.count("POST", "/v1/images/generations"), 2, "one per distinct request");
 }

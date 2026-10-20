@@ -8,8 +8,8 @@ use super::tracks::empty_track;
 use super::validate_placement;
 use crate::model::clip::{normalize_clip, text_clip};
 use crate::{
-    find_clip, ClipAudio, ClipOrigin, DomainError, Intro, Project, TextContent, TrackKind,
-    Transform,
+    find_clip, ClipAudio, ClipOrigin, DomainError, Intro, MotionRef, Project, TextContent,
+    TrackKind, Transform,
 };
 use std::collections::HashMap;
 
@@ -30,7 +30,9 @@ pub struct GeneratedClip {
     pub source: GeneratedSource,
     pub transform: Transform,
     pub intro: Option<Intro>,
-    pub outro: Option<f64>,
+    pub outro: Option<MotionRef>,
+    /// Transition from the clip ending where this one starts on its lane.
+    pub transition: Option<MotionRef>,
     pub audio: Option<ClipAudio>,
     pub origin: ClipOrigin,
 }
@@ -72,7 +74,8 @@ pub enum GeneratedEdit {
         source: GeneratedSource,
         transform: Option<Transform>,
         intro: Option<Intro>,
-        outro: Option<f64>,
+        outro: Option<MotionRef>,
+        transition: Option<MotionRef>,
         audio: Option<ClipAudio>,
         origin: ClipOrigin,
     },
@@ -83,6 +86,25 @@ pub enum GeneratedEdit {
     Remove {
         clip_id: String,
     },
+    /// Library presets the batch's clips name, copied in first.
+    AddMotions(Vec<crate::MotionPreset>),
+}
+
+impl GeneratedEdit {
+    /// Motion presets the edit names (intro, outro, transition).
+    pub fn motions(&self) -> Vec<&MotionRef> {
+        let (intro, outro, transition) = match self {
+            Self::Place { clip, .. } => (&clip.intro, &clip.outro, &clip.transition),
+            Self::Update {
+                intro,
+                outro,
+                transition,
+                ..
+            } => (intro, outro, transition),
+            _ => return Vec::new(),
+        };
+        [intro, outro, transition].into_iter().flatten().collect()
+    }
 }
 
 fn build_clip(project: &Project, generated: GeneratedClip) -> crate::Clip {
@@ -103,6 +125,7 @@ fn build_clip(project: &Project, generated: GeneratedClip) -> crate::Clip {
     clip.transform = generated.transform;
     clip.intro = generated.intro;
     clip.outro = generated.outro;
+    clip.transition = generated.transition;
     clip.audio = generated.audio;
     clip.origin = Some(generated.origin);
     clip
@@ -141,9 +164,14 @@ fn place_lane(
             slots.insert(lane.slot.clone(), id.clone());
             return id;
         }
-        // The slot's lane is taken here (the user put something there):
-        // any free lane of the kind keeps the clip on the timeline.
-        return allocate(project, kind, None, &[(start, duration)]);
+        // The slot's lane is taken here (the user put something there): a
+        // new lane directly above it keeps the clip in the slot's place in
+        // the stack, so it cannot end up under a backdrop.
+        let index = track_position(project, &id, kind).expect("checked above");
+        let track = empty_track(project, kind, true);
+        let new_id = track.id.clone();
+        project.tracks.insert(index, track);
+        return new_id;
     }
     let anchor = |anchor: &Option<Anchor>| {
         let id = match anchor.as_ref()? {
@@ -228,6 +256,7 @@ pub fn apply_generated(
     edits: Vec<GeneratedEdit>,
 ) -> Result<Project, DomainError> {
     let rank = |edit: &GeneratedEdit| match edit {
+        GeneratedEdit::AddMotions(_) => 0,
         GeneratedEdit::Remove { .. } => 0,
         GeneratedEdit::Update { .. } | GeneratedEdit::Move { .. } => 1,
         GeneratedEdit::Place { .. } => 2,
@@ -237,6 +266,9 @@ pub fn apply_generated(
     let mut slots = HashMap::new();
     for edit in edits {
         match edit {
+            GeneratedEdit::AddMotions(presets) => {
+                project = super::motion::add_motions(project, presets)?;
+            }
             GeneratedEdit::Remove { clip_id } => {
                 take_clip(&mut project, &clip_id)?;
             }
@@ -253,6 +285,7 @@ pub fn apply_generated(
                 transform,
                 intro,
                 outro,
+                transition,
                 audio,
                 origin,
             } => {
@@ -269,6 +302,7 @@ pub fn apply_generated(
                         transform: transform.unwrap_or(old.transform),
                         intro,
                         outro,
+                        transition,
                         audio,
                         origin,
                     },

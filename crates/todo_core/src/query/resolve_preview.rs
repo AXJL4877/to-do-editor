@@ -1,8 +1,13 @@
 use crate::model::clip::{clip_end, Clip, ClipSource};
+use crate::model::effects::{apply_motion, find_motion, picture_transform, VisibleSpan};
 use crate::model::media::{is_video_media, MediaItem};
 use crate::model::text::{TextFrame, TextStyle};
 use crate::model::track::{Track, TrackKind};
 use crate::model::Project;
+use crate::{MotionKind, MotionPreset, Transform};
+
+/// Clips closer than this are adjacent: a transition between them plays.
+pub const ADJACENT_EPSILON: f64 = 1e-4;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreviewHit {
@@ -13,7 +18,26 @@ pub struct PreviewHit {
     /// Intrinsic picture size in pixels. Text is composed on a canvas-sized frame.
     pub source_size: Option<(u32, u32)>,
     pub timeline_time: f64,
+    /// Seconds from the clip start; negative while a transition shows the
+    /// clip early, past `duration` while one keeps it after its end.
     pub local_time: f64,
+    /// Extra visibility transitions give this clip around its own span.
+    pub span: VisibleSpan,
+    /// Set while the hit takes part in a transition.
+    pub transition: Option<TransitionPhase>,
+}
+
+/// Where a hit is inside a transition window.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransitionPhase {
+    /// Preset id.
+    pub kind: String,
+    /// 0..1 across the window, which is centred on the cut.
+    pub progress: f64,
+    /// The clip being cut to (`false`: the one being left).
+    pub incoming: bool,
+    /// Effective window length after clamping to both clips.
+    pub duration: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -169,7 +193,7 @@ pub fn resolve_preview(
         if track.muted {
             continue;
         }
-        if let Some(hit) = hit_on_track(project, track, t) {
+        if let Some(hit) = track_hits(project, track, t).pop() {
             return Some(hit);
         }
     }
@@ -189,9 +213,7 @@ pub fn resolve_layers(project: &Project, timeline_time: f64) -> Vec<PreviewHit> 
         if track.muted || !track.kind.is_visual() {
             continue;
         }
-        if let Some(hit) = hit_on_track(project, track, t) {
-            layers.push(hit);
-        }
+        layers.extend(track_hits(project, track, t));
     }
     let decoded = |hit: &PreviewHit| hit.media().is_some_and(is_video_media);
     let text = |hit: &PreviewHit| hit.track_kind == TrackKind::Text;
@@ -206,16 +228,7 @@ pub fn resolve_layers(project: &Project, timeline_time: f64) -> Vec<PreviewHit> 
 /// drop decoded-video or text layers; callers get an actionable error when the
 /// composition exceeds the protocol's hard 16-layer limit.
 pub fn export_layers(project: &Project, timeline_time: f64) -> Result<Vec<PreviewHit>, String> {
-    let t = timeline_time.max(0.0);
-    let mut layers = Vec::new();
-    for track in project.tracks.iter().rev() {
-        if track.muted || !track.kind.is_visual() {
-            continue;
-        }
-        if let Some(hit) = hit_on_track(project, track, t) {
-            layers.push(hit);
-        }
-    }
+    let layers = visible_hits(project, timeline_time);
     if layers.len() > MAX_PREVIEW_LAYERS {
         return Err(format!(
             "export frame has {} visual layers; maximum is {}",
@@ -224,6 +237,20 @@ pub fn export_layers(project: &Project, timeline_time: f64) -> Result<Vec<Previe
         ));
     }
     Ok(layers)
+}
+
+/// Every visible picture hit at `timeline_time`, bottom → top, without any
+/// budget: what export draws and what the control view reports.
+pub fn visible_hits(project: &Project, timeline_time: f64) -> Vec<PreviewHit> {
+    let t = timeline_time.max(0.0);
+    let mut layers = Vec::new();
+    for track in project.tracks.iter().rev() {
+        if track.muted || !track.kind.is_visual() {
+            continue;
+        }
+        layers.extend(track_hits(project, track, t));
+    }
+    layers
 }
 
 /// Keep at most `cap` matching layers of a bottom → top stack, dropping the deepest.
@@ -242,55 +269,173 @@ fn drop_deepest(layers: &mut Vec<PreviewHit>, cap: usize, matches: impl Fn(&Prev
     });
 }
 
-fn hit_on_track(project: &Project, track: &Track, t: f64) -> Option<PreviewHit> {
-    for clip in &track.clips {
-        if t < clip.start || t >= clip_end(clip) {
+/// The transform a hit is drawn with: the clip's own transform, its intro and
+/// outro on the visible span, and its side of an active transition. One rule
+/// for preview, export and the control `describe` view.
+pub fn hit_transform(project: &Project, hit: &PreviewHit) -> Transform {
+    let mut transform = picture_transform(project, &hit.clip, hit.local_time, hit.span);
+    if let Some(phase) = &hit.transition {
+        if let Some(preset) = transition_preset(project, &phase.kind) {
+            let sample = if phase.incoming {
+                preset.sample(phase.progress)
+            } else {
+                preset.sample_outgoing(phase.progress)
+            };
+            apply_motion(&mut transform, sample);
+        }
+    }
+    transform
+}
+
+fn transition_preset<'a>(project: &'a Project, id: &str) -> Option<&'a MotionPreset> {
+    find_motion(project, id).filter(|preset| preset.kind == MotionKind::Transition)
+}
+
+/// The transition into `clips[index]` from its adjacent predecessor, with its
+/// window clamped so it never exceeds either clip (two windows on one clip
+/// therefore never overlap).
+fn incoming_transition<'a>(
+    project: &'a Project,
+    clips: &[&Clip],
+    index: usize,
+) -> Option<(&'a MotionPreset, f64)> {
+    let clip = clips.get(index)?;
+    let motion = clip.transition.as_ref()?;
+    let previous = clips.get(index.checked_sub(1)?)?;
+    if (clip_end(previous) - clip.start).abs() > ADJACENT_EPSILON {
+        return None;
+    }
+    let preset = transition_preset(project, &motion.kind)?;
+    let duration = motion.duration.min(previous.duration).min(clip.duration);
+    (duration.is_finite() && duration > 1e-6).then_some((preset, duration))
+}
+
+/// Whether the transition stored on `clip_id` plays: its predecessor on
+/// `track` is adjacent and the preset resolves.
+pub fn transition_is_active(project: &Project, track: &Track, clip_id: &str) -> bool {
+    let clips = sorted_clips(track);
+    clips
+        .iter()
+        .position(|clip| clip.id == clip_id)
+        .is_some_and(|index| incoming_transition(project, &clips, index).is_some())
+}
+
+/// The clip a transition into `clip_id` would come from: the one ending
+/// where it starts on `track`.
+pub fn adjacent_predecessor<'a>(track: &'a Track, clip_id: &str) -> Option<&'a Clip> {
+    let clip = track.clips.iter().find(|clip| clip.id == clip_id)?;
+    track.clips.iter().find(|other| {
+        other.id != clip.id && (clip_end(other) - clip.start).abs() <= ADJACENT_EPSILON
+    })
+}
+
+fn sorted_clips(track: &Track) -> Vec<&Clip> {
+    let mut clips: Vec<&Clip> = track.clips.iter().collect();
+    clips.sort_by(|a, b| a.start.total_cmp(&b.start));
+    clips
+}
+
+/// Visible hits of one track at `t`, bottom → top: one clip, or two inside a
+/// transition window (the incoming one on top unless the preset says otherwise).
+fn track_hits(project: &Project, track: &Track, t: f64) -> Vec<PreviewHit> {
+    let clips = sorted_clips(track);
+    let mut hits = Vec::new();
+    let mut outgoing_on_top = false;
+    for index in 0..clips.len() {
+        let clip = clips[index];
+        let into = incoming_transition(project, &clips, index);
+        let out_of = incoming_transition(project, &clips, index + 1);
+        let span = VisibleSpan {
+            lead: into.map_or(0.0, |(_, d)| d / 2.0),
+            tail: out_of.map_or(0.0, |(_, d)| d / 2.0),
+        };
+        if t < clip.start - span.lead || t >= clip_end(clip) + span.tail {
             continue;
         }
-        let local_time = t - clip.start;
-        let (source, source_size) = match &clip.source {
-            ClipSource::Media(source) => {
-                let Some(media) = project.media.iter().find(|m| m.id == source.media_id) else {
-                    continue;
-                };
-                let media_time = source.offset + local_time * source.rate;
-                let size = match (media.width, media.height) {
-                    (Some(w), Some(h)) if w > 0 && h > 0 => Some((w, h)),
-                    _ => None,
-                };
-                let media_time = clamp_media_time(media_time, media.duration);
-                (
-                    HitSource::Media {
-                        media: media.clone(),
-                        media_time,
-                    },
-                    size,
-                )
+        let phase = match (into, out_of) {
+            (Some((preset, d)), _) if t < clip.start + d / 2.0 => Some(TransitionPhase {
+                kind: preset.id.clone(),
+                progress: ((t - (clip.start - d / 2.0)) / d).clamp(0.0, 1.0),
+                incoming: true,
+                duration: d,
+            }),
+            (_, Some((preset, d))) if t >= clip_end(clip) - d / 2.0 => {
+                outgoing_on_top = preset.outgoing_on_top;
+                Some(TransitionPhase {
+                    kind: preset.id.clone(),
+                    progress: ((t - (clip_end(clip) - d / 2.0)) / d).clamp(0.0, 1.0),
+                    incoming: false,
+                    duration: d,
+                })
             }
-            ClipSource::Text(content) => {
-                let Some(style) = project.text_style(&content.style_id) else {
-                    continue;
-                };
-                (
-                    HitSource::Text {
-                        style: style.clone(),
-                        frame: content.animation.frame_at(local_time),
-                    },
-                    Some(project.output_size()),
-                )
-            }
+            _ => None,
         };
-        return Some(PreviewHit {
-            track_id: track.id.clone(),
-            track_kind: track.kind,
-            clip: clip.clone(),
-            source,
-            source_size,
-            timeline_time: t,
-            local_time,
-        });
+        if let Some(hit) = make_hit(project, track, clip, t, span, phase) {
+            hits.push(hit);
+        }
+        if hits.len() == 2 {
+            break;
+        }
     }
-    None
+    if outgoing_on_top && hits.len() == 2 {
+        hits.swap(0, 1);
+    }
+    hits
+}
+
+fn make_hit(
+    project: &Project,
+    track: &Track,
+    clip: &Clip,
+    t: f64,
+    span: VisibleSpan,
+    transition: Option<TransitionPhase>,
+) -> Option<PreviewHit> {
+    let local_time = t - clip.start;
+    let (source, source_size) = match &clip.source {
+        ClipSource::Media(source) => {
+            let media = project.media.iter().find(|m| m.id == source.media_id)?;
+            // Outside the clip (transition handles) the source runs on and
+            // holds its first or last frame where it has no more material.
+            let media_time = source.offset + local_time * source.rate;
+            let size = match (media.width, media.height) {
+                (Some(w), Some(h)) if w > 0 && h > 0 => Some((w, h)),
+                _ => None,
+            };
+            let media_time = clamp_media_time(media_time, media.duration);
+            (
+                HitSource::Media {
+                    media: media.clone(),
+                    media_time,
+                },
+                size,
+            )
+        }
+        ClipSource::Text(content) => {
+            let style = project.text_style(&content.style_id)?;
+            (
+                HitSource::Text {
+                    style: style.clone(),
+                    // Text animation runs on the visible span, like intros.
+                    frame: content
+                        .animation
+                        .frame_at((local_time + span.lead).max(0.0)),
+                },
+                Some(project.output_size()),
+            )
+        }
+    };
+    Some(PreviewHit {
+        track_id: track.id.clone(),
+        track_kind: track.kind,
+        clip: clip.clone(),
+        source,
+        source_size,
+        timeline_time: t,
+        local_time,
+        span,
+        transition,
+    })
 }
 
 fn clamp_media_time(time: f64, duration: f64) -> f64 {

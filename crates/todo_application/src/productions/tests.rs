@@ -16,7 +16,6 @@ const WORK: &str = "data/p/productions/x/work";
 
 fn spec() -> ProductionSpec {
     ProductionSpec {
-        chat_model: "chat".into(),
         planner_system: "plan boards".into(),
         max_elements: 4,
         board_sec: 10.0,
@@ -30,7 +29,6 @@ fn spec() -> ProductionSpec {
             ]),
             avoid: vec![],
             vars: BTreeMap::new(),
-            model: "image".into(),
             size: "1024x1024".into(),
             quality: None,
             transparent: false,
@@ -39,6 +37,7 @@ fn spec() -> ProductionSpec {
             speaker: "mizai".into(),
             resource_id: "seed-tts-2.0".into(),
             sample_rate: 16000,
+            speech_rate: None,
         },
         subtitle_chars: Some(12),
         pacing: Pacing::default(),
@@ -128,6 +127,10 @@ struct Fake {
     runs: Vec<(String, Value)>,
     saves: usize,
     production_saves: usize,
+    /// Hold project saves on "disk" until released (a slow save).
+    hold_saves: bool,
+    held: Vec<AppEvent>,
+    last_saved: Option<Project>,
     /// Pending answers, delivered one per pump step.
     queue: Vec<AppEvent>,
 }
@@ -139,7 +142,7 @@ impl Fake {
                 let key = spec.key();
                 self.submitted.push(key.clone());
                 let output = match &spec.request {
-                    TaskRequest::Speech(speech) => {
+                    TaskRequest::Audio(speech) => {
                         let (output, pcm) = fake_voice(&speech.text);
                         ProductionOutput::TaskDone {
                             file: Some(format!("services/{}.wav", &key.0[..8])),
@@ -148,7 +151,7 @@ impl Fake {
                             key,
                         }
                     }
-                    TaskRequest::Chat(_) => ProductionOutput::TaskDone {
+                    TaskRequest::Language(_) => ProductionOutput::TaskDone {
                         output: Some(json!({"text": json!({
                             "notes": "",
                             "scenes": [
@@ -167,6 +170,14 @@ impl Fake {
                         pcm: None,
                         key,
                     },
+                    TaskRequest::Video(_) | TaskRequest::Multimodal(_) => {
+                        ProductionOutput::TaskDone {
+                            output: None,
+                            file: None,
+                            pcm: None,
+                            key,
+                        }
+                    }
                 };
                 self.queue.push(AppEvent::Production(output));
             }
@@ -237,10 +248,16 @@ impl Fake {
                 task: ProjectTask::Save { project, .. },
             } => {
                 self.saves += 1;
-                self.queue.push(AppEvent::Project {
+                self.last_saved = Some(project.clone());
+                let event = AppEvent::Project {
                     ticket,
                     result: Ok(ProjectOutput::Saved(project)),
-                });
+                };
+                if self.hold_saves {
+                    self.held.push(event);
+                } else {
+                    self.queue.push(event);
+                }
             }
             Effect::Production(ProductionTask::Save { .. }) => self.production_saves += 1,
             _ => {}
@@ -319,9 +336,35 @@ fn a_narration_runs_to_the_timeline_progressively() {
     );
     assert_eq!(fake.runs.iter().filter(|(op, _)| op == "plate").count(), 1);
     assert!(fake.saves >= 1 && fake.production_saves >= 1);
+    // Generated files get readable library names, not content hashes.
+    let names: Vec<&str> = project.media.iter().map(|m| m.name.as_str()).collect();
+    assert!(names.contains(&"黑板底"), "{names:?}");
+    assert!(names.contains(&"第 1 段配音"), "{names:?}");
+    assert!(names.contains(&"画面 · 存钱罐"), "{names:?}");
     // Voice clips are audio, the plate is the bottom video lane.
     let status = ws.production_status();
     assert_eq!(status[0].done, status[0].total, "{:#?}", status[0].nodes);
+    let kinds: Vec<StageKind> = status[0].stages.iter().map(|s| s.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            StageKind::Outline,
+            StageKind::Voice,
+            StageKind::Subtitles,
+            StageKind::Storyboard,
+            StageKind::Images,
+            StageKind::Compose,
+            StageKind::Timeline
+        ]
+    );
+    assert!(
+        status[0]
+            .stages
+            .iter()
+            .all(|s| s.state == StatusState::Done && s.done == s.total && s.total > 0),
+        "{:#?}",
+        status[0].stages
+    );
     let track_index = |key: &str| {
         let track = &placed.iter().find(|(k, _)| k == key).unwrap().1;
         project.tracks.iter().position(|t| &t.id == track).unwrap()
@@ -394,6 +437,40 @@ fn deleting_a_generated_clip_sticks_and_edits_rebuild_only_their_part() {
         keys.iter().all(|(k, _)| k != "plate"),
         "a deleted clip is not put back"
     );
+    assert_eq!(ws.production_status()[0].deleted, 1);
+    // Until the user asks for it.
+    let update = ws.restore_production("x");
+    fake.pump(&mut ws, update);
+    let keys = clips(ws.editor().unwrap().project());
+    assert!(keys.iter().any(|(k, _)| k == "plate"), "{keys:?}");
+    assert_eq!(ws.production_status()[0].deleted, 0);
+}
+
+#[test]
+fn clips_placed_during_a_slow_save_are_saved_after_it() {
+    let mut ws = workspace();
+    let mut fake = Fake {
+        hold_saves: true,
+        ..Fake::default()
+    };
+    let update = ws.add_production(doc(), setup());
+    fake.pump(&mut ws, update);
+    // Release saves one at a time, as a slow disk would, until none is left.
+    let mut rounds = 0;
+    while !fake.held.is_empty() {
+        rounds += 1;
+        assert!(rounds < 100);
+        let event = fake.held.remove(0);
+        let update = ws.on_event(event);
+        fake.pump(&mut ws, update);
+    }
+    let saved = fake.last_saved.clone().expect("saved");
+    assert_eq!(
+        clips(&saved),
+        clips(ws.editor().unwrap().project()),
+        "the last save holds every generated clip"
+    );
+    assert!(!ws.editor().unwrap().dirty());
 }
 
 #[test]
@@ -426,7 +503,13 @@ fn failed_requests_wait_for_the_user_and_retry_once() {
     assert!(status
         .failures
         .iter()
-        .any(|(k, _, billed)| k == &key && *billed));
+        .any(|f| f.key == key && f.possibly_billed && f.work == FailedWork::Voice { segment: 0 }));
+    let voice = status
+        .stages
+        .iter()
+        .find(|s| s.kind == StageKind::Voice)
+        .unwrap();
+    assert_eq!(voice.state, StatusState::Failed);
     let update = ws.retry_production("x", Some(key.clone()));
     assert!(update
         .effects

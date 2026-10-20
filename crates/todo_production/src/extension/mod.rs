@@ -1,8 +1,10 @@
 //! The extension standard: manifest (`todo-extension/1`), worker protocol
-//! (`todo-worker/1`) and timeline items (`todo-items/1`). Normative text:
-//! `docs/architecture/extension-spec.md`.
+//! (`todo-worker/1`), timeline items (`todo-items/1`) and optional workflow
+//! graph IR (`todo-graph/1`). Normative text: `docs/architecture/extension-spec.md`.
+pub mod graph;
 pub mod items;
 pub mod manifest;
+pub mod nodes;
 pub mod protocol;
 pub mod services;
 
@@ -40,9 +42,7 @@ pub fn pacing_from(value: &serde_json::Value) -> Result<Pacing, String> {
 /// Host defaults a manifest cannot choose (models come from the user's configuration).
 #[derive(Debug, Clone, PartialEq)]
 pub struct HostDefaults {
-    pub chat_model: String,
-    pub image_model: String,
-    pub voice_resource: String,
+    pub audio_model: String,
     pub sample_rate: u32,
 }
 
@@ -75,7 +75,7 @@ pub fn narration_spec(
         .ok_or("缺少音色参数 voice")?
         .to_owned();
     // Cloned voices (S_…) use the voice cloning resource.
-    let resource = services::speech_resource_id(&speaker, &host.voice_resource);
+    let resource = services::speech_resource_id(&speaker, &host.audio_model);
     let split = match params.get("split").and_then(|v| v.as_str()) {
         Some("paragraph") => SplitMode::Paragraph,
         Some("length") => SplitMode::Length,
@@ -103,7 +103,6 @@ pub fn narration_spec(
         .transpose()?
         .unwrap_or_default();
     let spec = crate::work::ProductionSpec {
-        chat_model: host.chat_model.clone(),
         planner_system: text(&n.planner.prompt)?,
         max_elements: n.planner.max_elements,
         board_sec: number("boardSec").unwrap_or(n.board_sec),
@@ -113,7 +112,6 @@ pub fn narration_spec(
             roles: n.assets.roles.clone(),
             avoid: n.assets.avoid.clone(),
             vars: manifest.prompt_vars(params),
-            model: host.image_model.clone(),
             size: n.assets.size.clone(),
             quality: n.assets.quality.clone(),
             transparent: n.assets.transparent,
@@ -122,6 +120,7 @@ pub fn narration_spec(
             speaker,
             resource_id: resource,
             sample_rate: host.sample_rate,
+            speech_rate: number("speech_rate").map(|value| value as i32),
         },
         subtitle_chars,
         pacing,

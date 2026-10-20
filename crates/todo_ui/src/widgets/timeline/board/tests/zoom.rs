@@ -28,7 +28,7 @@ impl Board {
 
     fn view(&self) -> TimelineViewModel {
         self.controller
-            .view(self.workspace.editor().unwrap())
+            .view(self.workspace.editor().unwrap(), &[])
             .timeline
     }
 

@@ -1,4 +1,4 @@
-//! Render the reference frame (s00_intro1_hold.png) to `target/text_reference.png`.
+//! Render the reference frame (docs/assets/s00_intro1_hold.png) to `target/text_reference.png`.
 //!
 //! cargo run -p todo_text --example reference --release
 use std::path::PathBuf;

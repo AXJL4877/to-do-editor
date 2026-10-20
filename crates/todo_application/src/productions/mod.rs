@@ -13,7 +13,10 @@ mod session;
 #[cfg(test)]
 mod tests;
 
-pub use session::{ProductionSession, ProductionStatus, StatusNode, StatusState};
+pub use session::{
+    FailedWork, FailureStatus, ProductionSession, ProductionStatus, StageKind, StageStatus,
+    StatusNode, StatusState,
+};
 
 use serde_json::Value;
 use todo_production::extension::items::Item;

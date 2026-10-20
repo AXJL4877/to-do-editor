@@ -1,19 +1,25 @@
 //! Desktop composition root: render, collect input, and execute application effects.
+mod agent;
+mod ai_settings;
+mod assets;
 mod effects;
 mod frame;
 mod productions;
 mod proxies;
 mod window_state;
+use crate::adapters::agent_bridge::{AgentBridge, AgentRequest};
 use crate::adapters::production::host::ProductionHost;
 use crate::adapters::{
     editing_proxies::EditingProxies, paths, preview::PreviewBridge, workers::Workers,
 };
 use eframe::egui;
+use std::sync::mpsc;
 use std::time::Instant;
 use todo_ai::{AiConfig, Secret, Secrets};
 use todo_application::{AppAction, Ticket, Workspace};
-use todo_interaction::{AiSettingsView, EditorController};
-use todo_ui::{install_theme, ExportView, ThumbCache};
+use todo_interaction::{AiSettingsView, EditorController, FontInput};
+use todo_motion::MotionLibrary;
+use todo_ui::{install_theme, AgentView, ExportView, ThumbCache};
 
 pub struct App {
     workspace: Workspace,
@@ -31,8 +37,23 @@ pub struct App {
     proxy_project: Option<(u64, u64)>,
     ai_settings: AiSettingsView,
     production: Option<ProductionHost>,
+    /// Why the production host did not start (shown in the AI dock).
+    production_error: Option<String>,
     export: ExportView,
     export_ticket: Option<Ticket>,
+    agent_bridge: Option<AgentBridge>,
+    agent_view: AgentView,
+    agent_render_rx: Option<mpsc::Receiver<serde_json::Value>>,
+    /// The built-in Agent's running (or approved) director.
+    director: Option<crate::adapters::director::DirectorDriver>,
+    /// Director log entries already shown in the panel.
+    director_logged: usize,
+    /// Full motion library (built-in / user / extension) for the assets dock.
+    motion_library: MotionLibrary,
+    fonts: Vec<FontInput>,
+    asset_warnings: Vec<String>,
+    motions_dir: String,
+    fonts_dir: String,
 }
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -41,9 +62,16 @@ impl App {
         let mut ai_settings = AiSettingsView::default();
         if let Ok(config) = AiConfig::load(&repo) {
             ai_settings.huniu_base_url = config.huniu.base_url;
-            ai_settings.huniu_chat_model = config.huniu.chat_model;
+            ai_settings.huniu_strategy = config
+                .huniu
+                .strategy
+                .unwrap_or_else(|| "XUE".into());
+            ai_settings.huniu_language_model = config.huniu.language_model;
             ai_settings.huniu_image_model = config.huniu.image_model;
+            ai_settings.huniu_video_model = config.huniu.video_model;
+            ai_settings.huniu_multimodal_model = config.huniu.multimodal_model;
             ai_settings.volc_base_url = config.volc.base_url;
+            ai_settings.volc_audio_model = config.volc.audio_model;
             ai_settings.volc_speaker = config.volc.speaker;
         }
         {
@@ -67,8 +95,18 @@ impl App {
                 };
             }
         }
+        let (production, production_error) = match ProductionHost::start(repo.clone()) {
+            Ok(host) => (Some(host), None),
+            Err(error) => (None, Some(error)),
+        };
+        let (agent_bridge, agent_bridge_error) = match AgentBridge::start(&repo) {
+            Ok(bridge) => (Some(bridge), None),
+            Err(error) => (None, Some(error)),
+        };
+        let loaded = Self::load_asset_libraries(&repo);
+        let workspace = Workspace::default();
         let mut app = Self {
-            workspace: Workspace::default(),
+            workspace,
             controller: EditorController::new(),
             workers: Workers::start(repo.clone()),
             preview: PreviewBridge::new(&repo),
@@ -82,12 +120,30 @@ impl App {
             proxies: EditingProxies::start(repo.clone()),
             proxy_project: None,
             ai_settings,
-            production: ProductionHost::start(repo.clone()).ok(),
+            production,
+            production_error,
             export: ExportView::default(),
             export_ticket: None,
+            agent_bridge,
+            agent_view: AgentView::default(),
+            agent_render_rx: None,
+            director: None,
+            director_logged: 0,
+            motion_library: MotionLibrary::builtin(),
+            fonts: Vec::new(),
+            asset_warnings: Vec::new(),
+            motions_dir: String::new(),
+            fonts_dir: String::new(),
         };
+        for warning in &loaded.warnings {
+            app.notice(format!("资源库：{warning}"));
+        }
+        app.apply_asset_libraries(loaded);
         let update = app.workspace.dispatch(AppAction::RefreshProjects);
         app.handle(update, &cc.egui_ctx);
+        if let Some(error) = agent_bridge_error {
+            app.notice(format!("Agent Bridge：{error}"));
+        }
         app
     }
     fn now(&self) -> f64 {
@@ -101,109 +157,116 @@ impl App {
         let _ = self.workspace.dispatch(AppAction::Notice(message));
     }
 
-    fn save_ai_settings(&mut self) -> bool {
-        let root = paths::repo_root();
-        let mut file = todo_ai::config::AiConfig::load_file(&root).unwrap_or_default();
-        let before = AiConfig::load(&root).ok();
-        file.huniu.base_url = Some(self.ai_settings.huniu_base_url.clone());
-        file.huniu.chat_model = Some(self.ai_settings.huniu_chat_model.clone());
-        file.huniu.image_model = Some(self.ai_settings.huniu_image_model.clone());
-        file.volc.base_url = Some(self.ai_settings.volc_base_url.clone());
-        file.volc.speaker = Some(self.ai_settings.volc_speaker.clone());
-        file.proxy = Some(match self.ai_settings.proxy {
-            todo_interaction::ProxyChoice::Auto => todo_ai::ProxyMode::Auto,
-            todo_interaction::ProxyChoice::System => todo_ai::ProxyMode::System,
-            todo_interaction::ProxyChoice::Direct => todo_ai::ProxyMode::Direct,
-        });
-        let result = AiConfig::save(&root, &file)
-            .map_err(|e| e.to_string())
-            .and_then(|_| {
-                let store = todo_ai::secrets::default_store();
-                let secrets = Secrets {
-                    store: store.as_ref(),
-                    environment: &todo_ai::secrets::process_environment,
+    fn poll_agent_bridge(&mut self, ctx: &egui::Context) {
+        let mut requests = Vec::new();
+        if let Some(bridge) = &self.agent_bridge {
+            for _ in 0..8 {
+                let Some(request) = bridge.try_recv() else {
+                    break;
                 };
-                if self.ai_settings.huniu_key_source != todo_interaction::KeySource::Environment {
-                    if self.ai_settings.huniu_clear_key {
-                        secrets
-                            .save(todo_production::Provider::Huniu, None)
-                            .map_err(|e| e.to_string())?;
-                        self.ai_settings.huniu_key = None;
-                        self.ai_settings.huniu_key_source = todo_interaction::KeySource::Missing;
-                        self.ai_settings.huniu_clear_key = false;
-                        if let Some(host) = self.production.as_mut() {
-                            host.set_key(todo_production::Provider::Huniu, None);
-                        }
-                    }
-                    if let Some(value) = Secret::new(self.ai_settings.huniu_key_entry.clone()) {
-                        secrets
-                            .save(todo_production::Provider::Huniu, Some(&value))
-                            .map_err(|e| e.to_string())?;
-                        self.ai_settings.huniu_key = Some(value.masked());
-                        self.ai_settings.huniu_key_source = todo_interaction::KeySource::Keychain;
-                        self.ai_settings.huniu_key_entry.clear();
-                        if let Some(host) = self.production.as_mut() {
-                            host.set_key(todo_production::Provider::Huniu, Some(value));
-                        }
-                    }
-                }
-                if self.ai_settings.volc_key_source != todo_interaction::KeySource::Environment {
-                    if self.ai_settings.volc_clear_key {
-                        secrets
-                            .save(todo_production::Provider::Volc, None)
-                            .map_err(|e| e.to_string())?;
-                        self.ai_settings.volc_key = None;
-                        self.ai_settings.volc_key_source = todo_interaction::KeySource::Missing;
-                        self.ai_settings.volc_clear_key = false;
-                        if let Some(host) = self.production.as_mut() {
-                            host.set_key(todo_production::Provider::Volc, None);
-                        }
-                    }
-                    if let Some(value) = Secret::new(self.ai_settings.volc_key_entry.clone()) {
-                        secrets
-                            .save(todo_production::Provider::Volc, Some(&value))
-                            .map_err(|e| e.to_string())?;
-                        self.ai_settings.volc_key = Some(value.masked());
-                        self.ai_settings.volc_key_source = todo_interaction::KeySource::Keychain;
-                        self.ai_settings.volc_key_entry.clear();
-                        if let Some(host) = self.production.as_mut() {
-                            host.set_key(todo_production::Provider::Volc, Some(value));
-                        }
-                    }
-                }
-                Ok(())
-            });
-        // Models are read per request; addresses and the proxy need a new
-        // client. Restarting interrupts requests in flight, so only then.
-        let after = AiConfig::load(&root).ok();
-        let endpoint = |c: &Option<AiConfig>| {
-            c.as_ref().map(|c| {
-                (
-                    c.huniu.base_url.clone(),
-                    c.volc.base_url.clone(),
-                    format!("{:?}", c.proxy),
-                    c.huniu.chat_model.clone(),
-                    c.huniu.image_model.clone(),
-                )
-            })
-        };
-        let result = result.and_then(|()| {
-            if endpoint(&before) != endpoint(&after) {
-                if let Some(host) = self.production.as_mut() {
-                    host.reconfigure()?;
-                }
-            }
-            Ok(())
-        });
-        match result {
-            Ok(()) => {
-                self.notice("AI 设置已保存".into());
-                true
-            }
-            Err(error) => {
-                self.notice(format!("AI 设置保存失败：{error}"));
-                false
+                requests.push(request);
             }
         }
+        for request in requests {
+            match request {
+                AgentRequest::Control { request, reply } => {
+                    let outcome = self.workspace.control(request);
+                    let response =
+                        serde_json::to_value(&outcome.response).unwrap_or_else(|error| {
+                            serde_json::json!({
+                                "apiVersion": 1,
+                                "status": "error",
+                                "error": {
+                                    "code": "serialization",
+                                    "message": error.to_string()
+                                }
+                            })
+                        });
+                    self.handle(outcome.update, ctx);
+                    let _ = reply.send(response);
+                }
+                AgentRequest::RenderPreview {
+                    request_id,
+                    session_id,
+                    times,
+                    reply,
+                } => self.start_agent_render(request_id, session_id, times, reply),
+            }
+        }
+    }
+
+    fn start_agent_render(
+        &mut self,
+        request_id: String,
+        session_id: u64,
+        times: Vec<f64>,
+        reply: std::sync::mpsc::Sender<serde_json::Value>,
+    ) {
+        let Some(context) = self.workspace.control_context() else {
+            let _ = reply.send(crate::adapters::agent_bridge::error_response(
+                &request_id,
+                session_id,
+                None,
+                "no_project",
+                "请先打开一个工程",
+            ));
+            return;
+        };
+        if context.session_id != session_id {
+            let _ = reply.send(crate::adapters::agent_bridge::error_response(
+                &request_id,
+                session_id,
+                Some(context.revision),
+                "session_conflict",
+                "工程会话已变化，请重新读取上下文",
+            ));
+            return;
+        }
+        let times = if times.is_empty() {
+            vec![context.playhead]
+        } else {
+            times
+        };
+        if times.len() > 16 || times.iter().any(|time| !time.is_finite() || *time < 0.0) {
+            let _ = reply.send(crate::adapters::agent_bridge::error_response(
+                &request_id,
+                session_id,
+                Some(context.revision),
+                "invalid_request",
+                "times 须为 0..16 个非负有限秒数",
+            ));
+            return;
+        }
+        let root = crate::adapters::paths::repo_root();
+        let output_dir = crate::adapters::agent_bridge::frame_output_dir(&root, &request_id);
+        let revision = context.revision;
+        let project = context.project;
+        std::thread::spawn(move || {
+            let response =
+                match crate::adapters::frame::render_frames(&root, &project, &times, &output_dir) {
+                    Ok(frames) => crate::adapters::agent_bridge::ok_response(
+                        &request_id,
+                        session_id,
+                        revision,
+                        serde_json::json!({
+                            "type": "preview_frames",
+                            "frames": frames.iter().map(|frame| serde_json::json!({
+                                "time": frame.time,
+                                "png": frame.png,
+                                "width": frame.width,
+                                "height": frame.height
+                            })).collect::<Vec<_>>()
+                        }),
+                    ),
+                    Err(error) => crate::adapters::agent_bridge::error_response(
+                        &request_id,
+                        session_id,
+                        None,
+                        "render_failed",
+                        &error,
+                    ),
+                };
+            let _ = reply.send(response);
+        });
     }
 }

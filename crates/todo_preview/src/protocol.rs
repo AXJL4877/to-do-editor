@@ -139,6 +139,23 @@ pub struct ScreenSlot {
     pub visible: bool,
 }
 
+/// Rectangle of the preview window that must stay transparent to the
+/// editor underneath (an egui popup, menu or tooltip overlapping it).
+/// Physical pixels relative to the preview window's top-left corner.
+///
+/// Wire: `clip <count> (<x> <y> <w> <h>)*`; `clip 0` restores the full window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClipRect {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+/// Most cut-outs one `clip` command carries; more popups than that at once
+/// fall back to hiding the preview.
+pub const MAX_CLIP_RECTS: usize = 16;
+
 /// Slot inside the owner window, distinct from [`ScreenSlot`].
 ///
 /// Wire: `layout <x> <y> <w> <h>`.
@@ -507,6 +524,21 @@ pub(crate) fn encode_size_screen(buf: &mut Vec<u8>, slot: ScreenSlot) -> Result<
     Ok(())
 }
 
+pub(crate) fn encode_clip(buf: &mut Vec<u8>, rects: &[ClipRect]) -> Result<(), PreviewError> {
+    if rects.len() > MAX_CLIP_RECTS {
+        return Err(PreviewError::Invalid("too many clip rectangles"));
+    }
+    if rects.iter().any(|r| r.w <= 0 || r.h <= 0) {
+        return Err(PreviewError::Invalid("clip rectangles must not be empty"));
+    }
+    let _ = write!(buf, "clip {}", rects.len());
+    for r in rects {
+        let _ = write!(buf, " {} {} {} {}", r.x, r.y, r.w, r.h);
+    }
+    buf.push(b'\n');
+    Ok(())
+}
+
 pub(crate) fn encode_layers(
     buf: &mut Vec<u8>,
     layers: &[PreviewLayer],
@@ -778,6 +810,40 @@ mod tests {
             },
         )
         .is_err());
+    }
+
+    #[test]
+    fn clip_lines() {
+        let mut buf = Vec::new();
+        encode_clip(&mut buf, &[]).unwrap();
+        encode_clip(
+            &mut buf,
+            &[ClipRect {
+                x: -4,
+                y: 10,
+                w: 200,
+                h: 30,
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(buf).unwrap(),
+            "clip 0\nclip 1 -4 10 200 30\n"
+        );
+        let empty = ClipRect {
+            x: 0,
+            y: 0,
+            w: 0,
+            h: 5,
+        };
+        assert!(encode_clip(&mut Vec::new(), &[empty]).is_err());
+        let one = ClipRect {
+            x: 0,
+            y: 0,
+            w: 1,
+            h: 1,
+        };
+        assert!(encode_clip(&mut Vec::new(), &[one; MAX_CLIP_RECTS + 1]).is_err());
     }
 
     #[test]

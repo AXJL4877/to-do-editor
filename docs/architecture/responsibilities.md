@@ -1,6 +1,6 @@
 # 项目文件夹分工
 
-更新：2026-10-16。本文件描述当前已经落地的结构。
+更新：2026-10-18。本文件描述当前已经落地的结构。
 
 ## 各层职责
 
@@ -8,6 +8,8 @@
 | --- | --- | --- |
 | `crates/todo_core/src/model/` | 工程、素材、轨道和片段的数据模型；片段来源 `ClipSource`（媒体/文字） | 工程需要保存的业务数据放这里；变换模型独立放在 transform/ |
 | `crates/todo_core/src/model/text.rs` | 花字标准：文字内容、样式图层、单位、入场动画采样、内置样式和栅格摘要 | 花字数据唯一来源；不含字体读取和像素运算，见 [花字层标准](text-layer.md) |
+| `crates/todo_motion/` | 动效模块：入场 / 出场 / 转场预设格式、关键帧求值、校验、内置预设（`builtin.json`）和本地动效库（`motions/`、扩展 `motions/`）读写 | 不认识工程和片段；core 通过 `todo_core::motion` 使用它，见 [动效模块](motion.md) |
+| `crates/todo_core/src/model/effects.rs`、`edit/motion.rs` | 片段的动效引用（`MotionRef`）、按可见区间求值、动效编辑与预设复制入工程 | 同轨转场的图层求值在 `query/resolve_preview.rs::track_hits` / `hit_transform`，预览、导出、describe 共用 |
 | `crates/todo_core/src/transform/` | 位置、统一/二维缩放、不透明度的持久化模型、校验和纯几何；元素基准尺寸 `BaseSize` | 变换数据的唯一来源；不包含手柄、鼠标或绘制代码 |
 | `crates/todo_core/src/edit/` | 放置、移动、裁切、变速、剃刀、删除、粘贴、锁定等完整规则 | 判断编辑是否合法、如何修改工程，放这里 |
 | `crates/todo_core/src/edit/track_space.rs` | 素材入轨与片段移动共用的空闲检测和轨道分配 | 同轨区间冲突、复用空轨、按需新增同类型轨道在此统一 |
@@ -17,6 +19,8 @@
 | `crates/todo_application/src/projects/` | 打开、创建、导入、保存、返回、关闭工程的流程和回执 | 跨步骤的工程用例放这里 |
 | `crates/todo_application/src/editor/` | 编辑会话、事务、dirty 状态、保存快照、预览更新计划 | 一次拖动一次撤销等会话规则放这里 |
 | `crates/todo_application/src/control/`、`projects/control.rs` | 共用编辑协议、批次、回执、去重和导入状态 | 供内置/外部 AI 共用；不含模型、HTTP/MCP、UI 或 I/O，规则仍由 core 执行 |
+| `crates/todo_application/src/control/review.rs` | 规则审片：空画面、出安全区、遮挡、字幕长度与位置、转场未生效 | 阈值来自风格配方 `recipe.json → review` |
+| `crates/todo_application/src/director/` | 内置 Agent 导演状态机：理解 → 成片/编辑 → 规则审片 → 多模态看帧 → 有限轮修改 → 审批；提示词与严格解析 | 不联网、不读写文件；以 `Call`/`Input` 与宿主交换，见 [导演](director.md) |
 | `crates/todo_application/src/history/`、`clipboard/` | 历史快照、剪贴板内容 | 不持有控件和鼠标状态 |
 | `crates/todo_application/src/playback/` | 播放状态、播放头推进和音频时钟协调 | 只计算命令，不调用原生进程 |
 | `crates/todo_application/src/media_jobs/` | 任务归属、请求去重、并发上限、失败退避、原始波形缓存 | 不包含 HTTP、线程或 GPU 纹理 |
@@ -31,7 +35,9 @@
 | `crates/todo_ui/src/widgets/` | 原生 egui 控件绘制；按 `library/`、`timeline/`、`inspector/`、`layout/` 等分组 | 绘制矩形、命中控件、输出 Intent，放这里 |
 | `crates/todo_ui/src/widgets/project_settings.rs` | 工程设置弹窗与打开状态 | 分辨率、帧率、落轨缩放和固定工作区时长集中在这里，领域校验仍在 core |
 | `crates/todo_ui/src/widgets/library/` | 料箱与素材树、矢量图标、行选择和拖放 | 图标在 icons.rs、交互回归在 tests.rs，不依赖字体字符显示图标 |
-| `crates/todo_ui/src/widgets/inspector/` | 独立右侧属性板块；`mod.rs` 管理面板标题、空状态和滚动，`clip.rs` 绘制片段字段 | 属性内容不决定节目预览的大小 |
+| `crates/todo_ui/src/widgets/inspector/` | 独立右侧属性板块；`mod.rs` 管理空状态和滚动，`clip.rs` 绘制片段字段（标签页标题由 layout 绘制） | 属性内容不决定节目预览的大小 |
+| `crates/todo_ui/src/widgets/production/` | AI 成片停靠面板：右侧栏「属性 / AI 成片」第二个标签页。`form.rs` 新建（风格→文案→基本设置→开始），`card.rs` 任务卡片（阶段条、问题与修复按钮），`content.rs` 段落文案与画面候选的修改 | 只画 `ProductionPanelView` 并输出 `ProductionAction`；措辞来自 interaction，不显示任务 key、段落/元素 id 或扩展 id |
+| `crates/todo_interaction/src/presentation/production.rs` | 成片状态 → 面向用户的卡片：阶段名与 n/m、当前在做什么、失败原因与对应修复（重试 / 确认后重试 / 去设置） | 错误类别到中文原因的映射只在这里 |
 | `crates/todo_ui/src/widgets/inspector/transform/` | 变换参数控件：位置、宽高缩放、统一缩放、不透明度和重置 | 只输出参数修改 Intent，规则不写入控件 |
 | `crates/todo_ui/src/widgets/controls/` | 多个板块共用的控件交互；当前包含数值编辑事务辅助 | 工具栏与属性栏共用的逻辑放这里，避免互相依赖 |
 | `crates/todo_ui/src/theme.rs`、`thumbs.rs`、`format.rs` | 字体配色、GPU 缩略图纹理、纯显示格式 | UI 专属的表现细节放这里 |
@@ -50,18 +56,20 @@
 | `crates/todo_media/src/tools/` | FFmpeg/FFprobe 定位，并把 `todo_process` 的错误映射为 `MediaError` | FFmpeg/FFprobe 统一在此调用，不散落到 UI 或 application |
 | `crates/todo_media/src/export/` | PNG 序列导出、预设、音频滤镜、FFprobe 质量报告 | 导出适配器只提交帧序列和预设，编码与报告不写进 UI |
 | `crates/todo_process/` | 子进程监督：隐藏窗口、双管道并行排空、有界诊断、超时 / 取消后 kill + wait；Windows Job Object 生命周期与内存上限 | 媒体工具与扩展工作程序共用，不各写一份 |
-| `crates/todo_production/` | 成片领域：任务请求与指纹（tasks）、分段（segment）、口播时间轴（voice）、分镜（storyboard）、呼吸感排期（pacing）、字幕（subtitles）、成片文档与编辑（production）、任务规划与回填（work）、扩展规范类型与校验（extension） | 纯数据与规则，无 I/O；application 只依赖它而不依赖 `todo_ai` |
+| `crates/todo_production/` | 成片领域：能力任务请求与指纹（tasks）、分段（segment）、口播时间轴（voice）、分镜（storyboard）、呼吸感排期（pacing）、字幕（subtitles）、成片文档与编辑（production）、任务规划与回填（work）、扩展规范类型与校验（extension） | 纯数据与规则，无 I/O；application 只依赖它而不依赖 `todo_ai` |
 | `extensions/builtin/` | 随软件分发的扩展包（清单、提示词、素材、工作程序） | 格式见 [扩展规范](extension-spec.md)；用户安装的扩展放 `extensions/user/` |
-| `crates/todo_ai/` | 虎妞 / 火山直连：配置、密钥、错误分类、重试、熔断、任务日志、产物仓库、后台执行器 | 见 [AI 服务接入](ai-services.md)；规则遵循密匙契约 §6、§10 |
-| `crates/todo_extensions/src/runtime.rs` | 解析扩展工作程序入口，清洗密钥环境变量，注入 Python SDK 环境 | 只准备命令；子进程生命周期交给 pool |
-| `crates/todo_extensions/src/budget.rs` | 按服务 + 请求指纹计费预算 | 同请求重跑不重复扣预算 |
-| `crates/todo_extensions/src/pool.rs` | `todo-worker/1` 握手、复用、FIFO、call/reply、取消、超时和资源重试 | 只管理工作程序；服务执行由 app bridge 提供 |
+| `crates/todo_ai/` | `AiRouter` 能力绑定与虎妞 / 火山适配：配置、密钥、错误分类、重试、熔断、任务日志、产物仓库、后台执行器 | 见 [AI 服务接入](ai-services.md) 和 [AiRouter 契约](ai-router.md)；规则遵循密匙契约 §6、§10 |
+| `crates/todo_app/src/adapters/director.rs` | 导演执行器：把 `Call` 交给宿主 AI、离屏渲染、成片和 `Workspace::control` | 编辑器面板和 `examples/direct.rs` 共用 |
+| `crates/todo_app/src/adapters/motions.rs` | 动效库在磁盘上的位置（仓库 `motions/` + 各扩展 `motions/`） | 启动时加载，交给 `Workspace::set_motion_library` |
+| `crates/todo_workflow/src/runtime.rs` | 解析扩展工作程序入口，清洗密钥环境变量，注入 Python SDK 环境 | 只准备命令；子进程生命周期交给 pool |
+| `crates/todo_workflow/src/budget.rs` | 按服务 + 请求指纹计费预算 | 同请求重跑不重复扣预算 |
+| `crates/todo_workflow/src/pool.rs` | `todo-worker/1` 握手、复用、FIFO、call/reply、取消、超时和资源重试 | 只管理工作程序；服务执行由 app bridge 提供 |
 | `extensions/user/` | 用户安装的扩展包 | 安装前校验 zip，安装过程不执行包内代码 |
 | `crates/todo_media/src/proxies/` | 可取消的全 I 帧编辑代理、版本化缓存和输出校验 | 原片保持权威；代理只作为拖动/播放的可丢弃解码加速层 |
-| `crates/todo_preview/src/` | 原生宿主生命周期和窗口协议 | 传输命令、接收时钟及归一化鼠标事件 |
+| `crates/todo_preview/src/` | 原生宿主生命周期和窗口协议 | 传输命令、接收时钟及归一化鼠标事件；`clip` 命令让预览窗口在 egui 弹出层（菜单、下拉框、提示）处挖空，层级由 `todo_ui::overlays_over` 计算 |
 | `crates/todo_preview/src/render.rs` | `preview_host.exe --render` 的离线逐帧会话 | 写图层命令、读取严格大小的 BGRA 帧、结束或取消子进程 |
 | `crates/todo_preview/src/viewport.rs` | 视口命令校验与导航事件协议类型 | 只传递视口矩形和输入，不计算交互或修改图层 |
-| `crates/todo_app/src/runtime/` | eframe 帧循环、绘制调用、输入/事件转交、执行 Effect | 只做装配和运行，不另写编辑规则 |
+| `crates/todo_app/src/runtime/` | eframe 帧循环、绘制调用、输入/事件转交、执行 Effect；`ai_settings.rs` 负责 AI 设置的保存、模型列表与测试连接回执，`productions.rs` 负责成片面板视图与开始/续跑 | 只做装配和运行，不另写编辑规则 |
 | `crates/todo_app/src/runtime/window_state.rs` | 窗口还原几何的本地偏好适配 | 忽略最小化/无效尺寸，最大化保留普通窗口尺寸；与 eframe 版本兼容集中于此 |
 | `crates/todo_app/src/adapters/` | `workers` 执行阻塞 I/O；`preview` 桥接预览；`export` 驱动离线导出；`desktop/` 处理窗口和文件对话框 | 桌面平台能力放这里 |
 | `crates/todo_app/src/adapters/export.rs` | 将工程图层交给离线渲染器并编码质量报告 | 不决定导出按钮状态；取消和部分文件清理由进程监督器负责 |

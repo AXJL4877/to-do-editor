@@ -358,6 +358,29 @@ fn snap_to_speech(t: f64, silences: &[(f64, f64)], min_silence: f64) -> f64 {
     t
 }
 
+/// Subtitle cues for `script` along a narration timeline and its audio.
+/// Shared by the narration recipe and the `subtitles` service of workers.
+pub fn timeline_cues(
+    script: &str,
+    timeline: &crate::voice::Timeline,
+    pcm: crate::voice::Pcm,
+    max_chars: usize,
+) -> Vec<Cue> {
+    let chars: Vec<(char, f64, f64)> = timeline
+        .chars
+        .iter()
+        .filter_map(|c| Some((c.text.chars().next()?, c.start, c.end)))
+        .collect();
+    let silences = detect_silences(pcm.samples, pcm.rate, -30.0, PAUSE_GAP);
+    cues(
+        script,
+        &chars,
+        timeline.duration.max(pcm.duration()),
+        &silences,
+        max_chars,
+    )
+}
+
 /// Cues timed by the narration: never before the voice says them, never
 /// overlapping the next, bridged over short gaps and released at long pauses.
 pub fn cues(

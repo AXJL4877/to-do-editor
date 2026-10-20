@@ -30,14 +30,14 @@ fn library_view_filters_to_selected_folder_and_search_crosses_folders() {
         &mut workspace,
         Intent::LibrarySelectFolder(Some("b".into())),
     );
-    let view = controller.view(workspace.editor().unwrap());
+    let view = controller.view(workspace.editor().unwrap(), &[]);
     assert_eq!(view.library.entries.len(), 1);
     match &view.library.entries[0] {
         crate::LibraryEntryView::Media(item) => assert_eq!(item.item.id, "nested"),
         _ => panic!("expected media"),
     }
     let _ = controller.apply(&mut workspace, Intent::LibraryQuery("root".into()));
-    let view = controller.view(workspace.editor().unwrap());
+    let view = controller.view(workspace.editor().unwrap(), &[]);
     assert!(view.library.searching);
     assert_eq!(view.library.items.len(), 1);
     assert_eq!(view.library.items[0].item.id, "root-clip");
@@ -73,7 +73,7 @@ fn selecting_media_selects_its_folder_as_destination_without_highlighting_two_ro
         Intent::LibrarySelectFolder(Some("bin".into())),
     );
     let _ = controller.apply(&mut workspace, Intent::LibrarySelect("nested".into()));
-    let view = controller.view(workspace.editor().unwrap());
+    let view = controller.view(workspace.editor().unwrap(), &[]);
     assert_eq!(view.library.selected_id.as_deref(), Some("nested"));
     assert_eq!(view.library.selected_folder_id.as_deref(), Some("bin"));
     assert!(matches!(
@@ -87,7 +87,7 @@ fn selecting_media_selects_its_folder_as_destination_without_highlighting_two_ro
     let _ = controller.apply(&mut workspace, Intent::LibrarySelect("root".into()));
     assert_eq!(
         controller
-            .view(workspace.editor().unwrap())
+            .view(workspace.editor().unwrap(), &[])
             .library
             .selected_folder_id,
         None
@@ -105,7 +105,7 @@ fn creating_folder_selects_it_instead_of_previously_selected_media() {
         &mut workspace,
         Intent::LibraryCreateFolder { name: "Bin".into() },
     );
-    let view = controller.view(workspace.editor().unwrap());
+    let view = controller.view(workspace.editor().unwrap(), &[]);
     assert!(view.library.selected_id.is_none());
     assert!(view.library.selected_folder_id.is_some());
 }

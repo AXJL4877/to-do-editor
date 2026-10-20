@@ -60,6 +60,9 @@ pub(super) fn draw(
             egui::StrokeKind::Inside,
         );
     }
+    if let Some(mark) = &clip.transition {
+        paint_transition(ui, rect, mark);
+    }
     ui.painter().with_clip_rect(rect.shrink(3.0)).text(
         rect.left_top() + egui::vec2(5.0, 3.0),
         egui::Align2::LEFT_TOP,
@@ -203,6 +206,31 @@ pub(super) fn draw(
         });
     });
     hit
+}
+
+/// A bow tie across the cut: the transition window, centred on the clip's
+/// left edge. Dimmed while the previous clip is not adjacent.
+fn paint_transition(ui: &mut Ui, rect: Rect, mark: &todo_interaction::TransitionMark) {
+    let half = (mark.half_px as f32).clamp(4.0, rect.height());
+    let (x, top, bottom) = (rect.left(), rect.top() + 2.0, rect.bottom() - 2.0);
+    let alpha = if mark.active { 150 } else { 60 };
+    let fill = Color32::from_rgba_unmultiplied(0xff, 0xd3, 0x4d, alpha);
+    let mid = (top + bottom) * 0.5;
+    let painter = ui.painter().with_clip_rect(rect.expand2(egui::vec2(half, 0.0)));
+    for points in [
+        vec![pos2(x - half, top), pos2(x, mid), pos2(x - half, bottom)],
+        vec![pos2(x + half, top), pos2(x, mid), pos2(x + half, bottom)],
+    ] {
+        painter.add(egui::Shape::convex_polygon(points, fill, Stroke::NONE));
+    }
+    painter.line_segment([pos2(x, top), pos2(x, bottom)], Stroke::new(1.0_f32, fill));
+    let tip = Rect::from_center_size(pos2(x, mid), egui::vec2(half * 2.0, rect.height()));
+    ui.interact(tip, ui.id().with(("transition", rect.left() as i32)), Sense::hover())
+        .on_hover_text(if mark.active {
+            format!("转场：{}", mark.name)
+        } else {
+            format!("转场：{}（前一个片段没有紧挨着，暂不生效）", mark.name)
+        });
 }
 
 fn paint_waveform(ui: &mut Ui, rect: Rect, clip: &ClipView, strip: &PeakStrip) {

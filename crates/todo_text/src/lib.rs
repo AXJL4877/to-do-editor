@@ -11,7 +11,7 @@ mod fonts;
 mod layout;
 mod raster;
 
-pub use fonts::FontLibrary;
+pub use fonts::{family_name, FontLibrary};
 pub use raster::{measure, render, TextBlock, TextImage};
 use todo_core::{PerCharReveal, TextContent, TextStyle};
 

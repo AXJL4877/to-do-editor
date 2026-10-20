@@ -13,6 +13,7 @@ fn project() -> Project {
         media_scale: Default::default(),
         tracks: Vec::new(),
         text_styles: Vec::new(),
+        motions: Vec::new(),
         media: vec![MediaItem {
             id: "jpg1".into(),
             name: "shot.jpg".into(),
@@ -166,6 +167,71 @@ fn media_row_drag_carries_the_identifier() {
     }
     let payload = egui::DragAndDrop::payload::<MediaDrag>(&ctx).expect("drag");
     assert_eq!(payload.media_id, "jpg1");
+}
+
+#[test]
+fn dragging_media_over_a_folder_shows_the_ghost_destination_row() {
+    let vm = crate::test_view(project(), "test");
+    let ctx = egui::Context::default();
+    let first = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(320.0, 480.0),
+            )),
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                draw(ui, &vm, &mut ThumbCache::default());
+            });
+        },
+    );
+    let folder_pos = first
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "新建料箱" => {
+                Some(text.pos + egui::vec2(6.0, 4.0))
+            }
+            _ => None,
+        })
+        .expect("folder row");
+
+    egui::DragAndDrop::set_payload(
+        &ctx,
+        MediaDrag {
+            media_id: "jpg1".into(),
+        },
+    );
+    let second = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(320.0, 480.0),
+            )),
+            events: vec![egui::Event::PointerMoved(folder_pos)],
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                draw(ui, &vm, &mut ThumbCache::default());
+            });
+        },
+    );
+    egui::DragAndDrop::clear_payload(&ctx);
+
+    let shot_rows = second.shapes.iter().filter(|shape| {
+        matches!(
+            &shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "shot.jpg"
+        )
+    });
+    assert_eq!(shot_rows.count(), 2, "folder should show a ghost media row");
+    assert!(second.shapes.iter().any(|shape| matches!(
+        &shape.shape,
+        egui::Shape::Text(text) if text.galley.text() == "预览"
+    )));
 }
 
 #[test]

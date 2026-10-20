@@ -197,6 +197,7 @@ fn stopped_import_queue_returns_a_terminal_event_that_releases_the_workspace() {
         media: Vec::new(),
         tracks: Vec::new(),
         text_styles: Vec::new(),
+        motions: Vec::new(),
         folders: Vec::new(),
     };
     let mut workspace = Workspace::with_project(project, "queue-test");
@@ -260,4 +261,25 @@ fn local_save_acknowledges_and_persists_the_submitted_snapshot() {
         }
         event => panic!("save did not acknowledge its snapshot: {event:?}"),
     }
+}
+
+#[test]
+fn a_project_another_program_holds_does_not_open() {
+    let directory = TestDirectory::new();
+    let store = ProjectStore::new(&directory.path);
+    store.create("busy").unwrap();
+    store.create("mine").unwrap();
+    // A command-line production holds "busy".
+    let other = store.lock("busy").unwrap();
+    let mut held = None;
+    run_project(&store, &mut held, ProjectTask::Load { name: "mine".into() }).unwrap();
+    let refused = run_project(&store, &mut held, ProjectTask::Load { name: "busy".into() })
+        .expect_err("held elsewhere");
+    assert!(refused.contains("正在被另一个程序使用"), "{refused}");
+    assert_eq!(held.as_ref().map(|lock| lock.name()), Some("mine"), "keeps what it had");
+    // Once released, it opens and the editor holds it instead.
+    drop(other);
+    run_project(&store, &mut held, ProjectTask::Load { name: "busy".into() }).unwrap();
+    assert_eq!(held.as_ref().map(|lock| lock.name()), Some("busy"));
+    assert!(matches!(store.lock("mine"), Ok(_)), "the previous project was released");
 }

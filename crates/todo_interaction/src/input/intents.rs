@@ -200,6 +200,12 @@ pub enum Intent {
     ResetTransform {
         clip_id: String,
     },
+    /// Set (or with `None` clear) a clip's intro, outro or incoming transition.
+    SetClipMotion {
+        clip_id: String,
+        slot: crate::MotionSlot,
+        motion: Option<todo_core::MotionRef>,
+    },
     /// Add default styled text at the playhead on a free text lane.
     AddText,
     SetClipText {

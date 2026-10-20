@@ -1,0 +1,321 @@
+{
+  "spec": "todo-recipe/1",
+  "reference": "什么是诱饵效应.mp4 (docs/reports/2026-10-18-reference-anatomy-v2.md)",
+  "speech": {
+    "charsPerSecondAtRate0": 3.97,
+    "rate": 16
+  },
+  "timing": {
+    "titleSec": 1.4,
+    "tailSec": 0.35,
+    "endSec": 1.0
+  },
+  "opening": {
+    "defaultText": "什么是诱饵效应",
+    "style": "grunge-red-echo",
+    "size": 0.17,
+    "letterSpacing": 0.04,
+    "lineHeight": 1.2,
+    "y": -0.02,
+    "cardDuration": 1.48,
+    "textStart": 0.08,
+    "textDuration": 1.42,
+    "textAnimation": {
+      "kind": "perChar",
+      "duration": 0.72,
+      "charDuration": 0.12
+    },
+    "outro": [
+      "fadeOut",
+      0.25
+    ],
+    "cardIntro": [
+      "fade",
+      0.12
+    ]
+  },
+  "plate": "plate-grass",
+  "shots": {
+    "minSec": 1.2,
+    "maxSec": 6.0,
+    "note": "一句话一个镜头；短于 minSec 的并入相邻句，长于 maxSec 的在字幕断点处拆开"
+  },
+  "sublime": {
+    "name": "升华",
+    "use": "脱离故事也成立的道理、提醒、金句：黑底上一张虚化的相关画面，红色毛笔字就是这句台词",
+    "maxShare": 0.2,
+    "style": "sublime-red-brush",
+    "size": 0.12,
+    "lineChars": 14,
+    "y": 0.0,
+    "outro": [
+      "fadeOut",
+      0.3
+    ],
+    "charSec": 0.06,
+    "backdrop": {
+      "height": 0.85,
+      "maxWidth": 0.75,
+      "blur": 22,
+      "brightness": 0.55,
+      "motion": "sb.backdropZoom",
+      "size": "1024x1024",
+      "quality": "medium"
+    },
+    "notWithNames": [
+      "蟹老板",
+      "海绵宝宝",
+      "派大星",
+      "章鱼哥",
+      "鱼顾客",
+      "珊迪",
+      "痞老板"
+    ]
+  },
+  "text": {
+    "subtitle": {
+      "style": "subtitle-kuaile",
+      "size": 0.056,
+      "y": 0.405,
+      "maxChars": 16,
+      "holdGap": 1.0,
+      "holdMax": 7.0
+    }
+  },
+  "card": {
+    "size": "1536x1024",
+    "quality": "medium",
+    "style": "Clean children's picture-book cartoon line art in the style of SpongeBob SquarePants, flat bright colors, thick dark outlines, one compact diorama-like group of objects and characters, fully transparent background, no ground, no sky, no scenery behind. No real-world brands or logos, no dollar signs, no English words; any price is written in Chinese as 贝壳. Every character is drawn whole from head to feet, never cut off at the picture edge."
+  },
+  "elements": {
+    "maxPerShot": 2,
+    "maxGeneratedPerShot": 1,
+    "lead": 0.7,
+    "stagger": 0.9,
+    "minShow": 1.3,
+    "size": "1024x1024",
+    "quality": "medium",
+    "style": "Clean children's picture-book cartoon line art in the style of SpongeBob SquarePants, flat bright colors, thick dark outlines. One single object standing alone, fully transparent background, no ground, no shadow, no scenery. No real-world brands or logos, no dollar signs, no English words.",
+    "outro": [
+      "sb.elOut",
+      0.25
+    ],
+    "pairShare": 0.1,
+    "minShot": {
+      "1": 2.4,
+      "2": 3.4
+    }
+  },
+  "cardMotions": {
+    "rise": {
+      "name": "升起",
+      "use": "引出新物件、新信息、价格",
+      "transition": [
+        "sb.cardRise",
+        0.7
+      ],
+      "intro": [
+        "sb.riseIn",
+        0.6
+      ]
+    },
+    "drop": {
+      "name": "掉落",
+      "use": "新角色、新情况、意外登场",
+      "transition": [
+        "sb.cardDrop",
+        0.7
+      ],
+      "intro": [
+        "sb.dropIn",
+        0.6
+      ]
+    },
+    "slideLeft": {
+      "name": "从右滑入",
+      "use": "换地点、换视角、对比的下一项",
+      "transition": [
+        "sb.cardSlideLeft",
+        0.6
+      ],
+      "intro": [
+        "sb.slideInFromRight",
+        0.5
+      ]
+    },
+    "slideRight": {
+      "name": "从左滑入",
+      "use": "回到前一个地点或对比的另一边",
+      "transition": [
+        "sb.cardSlideRight",
+        0.6
+      ],
+      "intro": [
+        "sb.slideInFromLeft",
+        0.5
+      ]
+    },
+    "grow": {
+      "name": "放大弹出",
+      "use": "强调、结论、数据",
+      "transition": [
+        "sb.cardGrow",
+        0.55
+      ],
+      "intro": [
+        "sb.growIn",
+        0.5
+      ]
+    },
+    "dissolve": {
+      "name": "叠化",
+      "use": "同一地点只是时间推移或状态变化",
+      "transition": [
+        "crossfade",
+        0.45
+      ],
+      "intro": [
+        "fade",
+        0.4
+      ]
+    }
+  },
+  "cardRandom": {
+    "rise": 3,
+    "drop": 2,
+    "slideLeft": 3,
+    "slideRight": 2,
+    "grow": 1,
+    "dissolve": 2
+  },
+  "elementMotions": {
+    "plop": {
+      "name": "落地",
+      "use": "实物道具、木牌、价格牌落到地上",
+      "motion": [
+        "sb.elPlop",
+        0.74
+      ]
+    },
+    "rise": {
+      "name": "冒出",
+      "use": "图表、数据、从地下冒出来的东西",
+      "motion": [
+        "sb.elRise",
+        0.68
+      ]
+    },
+    "spring": {
+      "name": "弹起",
+      "use": "角色蹦出来、情绪反应",
+      "motion": [
+        "sb.elSpring",
+        0.68
+      ]
+    },
+    "walkIn": {
+      "name": "走入",
+      "use": "角色从画外走进来",
+      "motion": [
+        "sb.elWalkRight",
+        0.94
+      ]
+    },
+    "pop": {
+      "name": "弹出",
+      "use": "悬浮符号：问号、灯泡、箭头",
+      "motion": [
+        "sb.elPop",
+        0.61
+      ]
+    },
+    "stamp": {
+      "name": "盖章",
+      "use": "红叉、否定、下结论",
+      "motion": [
+        "sb.elStamp",
+        0.43
+      ]
+    }
+  },
+  "elementRandom": {
+    "cast": [
+      "spring",
+      "walkIn"
+    ],
+    "prop": [
+      "plop",
+      "rise"
+    ],
+    "float": [
+      "pop"
+    ],
+    "generated": [
+      "plop",
+      "rise",
+      "spring"
+    ]
+  },
+  "motion": {
+    "plateIn": [
+      "dissolve",
+      0.16
+    ],
+    "groundCross": [
+      "crossfade",
+      0.4
+    ],
+    "outro": [
+      "sb.sinkOut",
+      0.35
+    ]
+  },
+  "bgm": {
+    "gain": 0.22,
+    "parts": [
+      {
+        "file": "intro-holding-court.mp3",
+        "from": 0.0,
+        "to": 0.58
+      },
+      {
+        "file": "outro-memories.mp3",
+        "from": 0.55,
+        "to": 1.0
+      }
+    ],
+    "fade": 1.2
+  },
+  "cardChosenShare": 0.34,
+  "layout": {
+    "ground": 0.8,
+    "top": 0.06,
+    "margin": 0.06,
+    "gap": 0.03,
+    "cardHeight": 0.56,
+    "cardHeightWithElements": 0.5,
+    "cardMaxWidth": 0.62,
+    "cardScales": [
+      1.0,
+      0.9
+    ],
+    "characterHeight": 0.42,
+    "sizes": {
+      "tiny": 0.32,
+      "small": 0.48,
+      "medium": 0.7,
+      "large": 1.0
+    },
+    "elementMaxWidth": 0.24,
+    "floatGap": 0.015,
+    "weights": {
+      "margin": 20,
+      "balance": 2,
+      "smaller": 0.6,
+      "overlap": 3,
+      "mirror": 0.15
+    },
+    "floatMin": 0.1,
+    "floatCorner": 0.16
+  }
+}

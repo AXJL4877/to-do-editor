@@ -2,4 +2,7 @@
 mod input;
 mod presentation;
 pub(crate) use presentation::project_properties;
-pub use presentation::{ClipProperties, SourceProperties, StyleOption, TextProperties};
+pub use presentation::{
+    ClipProperties, MotionOption, MotionProperties, MotionSlot, SourceProperties, StyleOption,
+    TextProperties,
+};

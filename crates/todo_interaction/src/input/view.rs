@@ -6,7 +6,8 @@ use todo_application::{AssetRequest, EditorSession};
 use todo_core::{find_clip, project_duration, resolve_layers};
 
 impl EditorController {
-    pub fn view(&self, editor: &EditorSession) -> EditorViewModel {
+    /// `motions` is the motion library beyond the built-ins, for pickers.
+    pub fn view(&self, editor: &EditorSession, motions: &[todo_core::MotionPreset]) -> EditorViewModel {
         let project = editor.project();
         let picture = editor.picture();
         let drag = self.timeline.drag();
@@ -71,7 +72,7 @@ impl EditorController {
                 clip.selected = timeline.selected_ids.contains(&clip.id);
             }
         }
-        let properties = crate::inspector::project_properties(project, self.timeline.selected_id());
+        let properties = crate::inspector::project_properties(project, self.timeline.selected_id(), motions);
         let duration = project_duration(project);
         let source = editor.source_monitor();
         let source_duration = source

@@ -57,11 +57,9 @@ fn place(
                 offset: 0.0,
             },
             transform: Transform::default(),
-            intro: Some(Intro {
-                kind: IntroKind::Fade,
-                duration: 0.4,
-            }),
+            intro: Some(Intro::new("fade", 0.4)),
             outro: None,
+            transition: None,
             audio: None,
             origin: origin(key),
         },
@@ -127,7 +125,7 @@ fn one_batch_places_stacked_lanes_and_reuses_a_slot_track() {
     assert!(lane2 < lane1 && lane1 < plate, "{lane2} {lane1} {plate}");
     assert_eq!(track_of(&p, "b1/e0").1, lane1_id);
     let element = clip_of(&p, "b0/e0");
-    assert_eq!(element.intro.unwrap().kind, IntroKind::Fade);
+    assert_eq!(element.intro.as_ref().unwrap().kind, "fade");
     assert_eq!(element.origin.as_ref().unwrap().production, "p1");
     assert_eq!(p.tracks[track_of(&p, "voice").0].kind, TrackKind::Audio);
 }
@@ -172,6 +170,7 @@ fn updates_keep_the_users_transform_and_reject_nothing_else() {
             transform: None,
             intro: None,
             outro: None,
+            transition: None,
             audio: None,
             origin: ClipOrigin {
                 rev: "r2".into(),
@@ -245,7 +244,8 @@ fn text_clips_bring_their_built_in_style() {
             source: GeneratedSource::Text(TextContent::new("你好", "clean-white-outline")),
             transform: Transform::default(),
             intro: None,
-            outro: Some(0.3),
+            outro: Some(MotionRef::new("fadeOut", 0.3)),
+            transition: None,
             audio: None,
             origin: origin("sub/0"),
         },
@@ -255,6 +255,48 @@ fn text_clips_bring_their_built_in_style() {
     let sub = clip_of(&p, "sub/0");
     assert!(sub.is_text());
     // The outro fades the clip out over its last 0.3 s.
-    assert!(picture_transform(sub, 1.35).opacity < 0.5);
-    assert_eq!(picture_transform(sub, 1.0).opacity, 1.0);
+    let span = VisibleSpan::default();
+    assert!(picture_transform(&p, sub, 1.35, span).opacity < 0.5);
+    assert_eq!(picture_transform(&p, sub, 1.0, span).opacity, 1.0);
+}
+
+#[test]
+fn a_taken_slot_lane_gets_a_new_lane_directly_above_it_not_at_the_bottom() {
+    // plate on its slot, an element slot above it.
+    let p = execute_edit(
+        project(),
+        EditCommand::ApplyGenerated(vec![
+            place(TrackKind::Video, "visual:0", None, "plate", 0.0, "plate"),
+            place(
+                TrackKind::Video,
+                "visual:1",
+                Some("visual:0"),
+                "e1",
+                0.0,
+                "a",
+            ),
+        ]),
+    )
+    .unwrap();
+    let (element_index, element_track) = track_of(&p, "a");
+    let (plate_index, _) = track_of(&p, "plate");
+    assert!(element_index < plate_index);
+    // The next element of the slot overlaps the first one by a hair.
+    let mut next = place(TrackKind::Video, "visual:1", None, "e2", 3.9999, "b");
+    if let GeneratedEdit::Place { lane, .. } = &mut next {
+        lane.preferred = Some(element_track.clone());
+    }
+    let p = execute_edit(p, EditCommand::ApplyGenerated(vec![next])).unwrap();
+    let (b_index, b_track) = track_of(&p, "b");
+    let (plate_index, _) = track_of(&p, "plate");
+    assert_ne!(b_track, element_track);
+    assert!(
+        b_index < plate_index,
+        "the new lane must stay above the plate"
+    );
+    assert_eq!(
+        b_index + 1,
+        track_of(&p, "a").0,
+        "directly above the slot's lane"
+    );
 }

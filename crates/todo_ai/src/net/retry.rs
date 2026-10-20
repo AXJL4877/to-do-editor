@@ -27,8 +27,10 @@ impl Default for RetryPolicy {
 /// How long a task keeps retrying transient trouble before it fails.
 pub fn deadline(capability: Capability) -> Duration {
     match capability {
-        Capability::Chat | Capability::Speech => Duration::from_secs(10 * 60),
-        Capability::Image => Duration::from_secs(20 * 60),
+        Capability::Language | Capability::Audio => Duration::from_secs(10 * 60),
+        Capability::Image | Capability::Video | Capability::Multimodal => {
+            Duration::from_secs(20 * 60)
+        }
     }
 }
 
@@ -131,7 +133,7 @@ mod tests {
     #[test]
     fn transient_trouble_retries_until_the_deadline() {
         let policy = RetryPolicy::default();
-        let deadline = deadline(Capability::Chat);
+        let deadline = deadline(Capability::Language);
         assert_eq!(
             policy.decide(
                 &ErrorClass::Transient,
@@ -224,7 +226,7 @@ mod tests {
     #[test]
     fn key_and_balance_problems_pause_instead_of_failing() {
         let policy = RetryPolicy::default();
-        let d = deadline(Capability::Speech);
+        let d = deadline(Capability::Audio);
         for class in [ErrorClass::Auth, ErrorClass::Billing] {
             assert_eq!(
                 policy.decide(&class, attempts(1, 0), Duration::ZERO, d, 0.5),

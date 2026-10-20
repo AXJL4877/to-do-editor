@@ -4,9 +4,9 @@
 //! the single narration/subtitle timing path shared by all callers.
 use super::protocol::{ChatCall, ImageCall, ServiceCall, SpeechCall, SubtitlesCall};
 use super::HostDefaults;
-use crate::subtitles::{cues, detect_silences};
-use crate::tasks::{ChatRequest, ImageRequest, Provider, SpeechRequest, TaskRequest, TaskSpec};
-use crate::voice::{build_timeline, Pcm, Timeline, Word};
+use crate::subtitles::timeline_cues;
+use crate::tasks::{AudioRequest, ImageRequest, LanguageRequest, TaskRequest};
+use crate::voice::{speech_timeline, Pcm, Timeline, Word};
 use serde_json::{json, Value};
 
 pub fn speech_resource_id(speaker: &str, default: &str) -> String {
@@ -17,22 +17,19 @@ pub fn speech_resource_id(speaker: &str, default: &str) -> String {
     }
 }
 
-pub fn task_for(call: &ServiceCall, host: &HostDefaults) -> Option<TaskSpec> {
+pub fn task_for(call: &ServiceCall, host: &HostDefaults) -> Option<TaskRequest> {
     match call {
         ServiceCall::Chat(ChatCall {
             messages,
             json,
             temperature,
             model,
-        }) => Some(TaskSpec {
-            provider: Provider::Huniu,
-            request: TaskRequest::Chat(ChatRequest {
-                messages: messages.clone(),
-                json: *json,
-                temperature: temperature.unwrap_or(0.3),
-                model: model.clone().unwrap_or_else(|| host.chat_model.clone()),
-            }),
-        }),
+        }) => Some(TaskRequest::Language(LanguageRequest {
+            messages: messages.clone(),
+            json: *json,
+            temperature: temperature.unwrap_or(0.3),
+            model: model.clone().unwrap_or_default(),
+        })),
         ServiceCall::Image(ImageCall {
             prompt,
             size,
@@ -40,30 +37,31 @@ pub fn task_for(call: &ServiceCall, host: &HostDefaults) -> Option<TaskSpec> {
             transparent,
             variant,
             model,
-        }) => Some(TaskSpec {
-            provider: Provider::Huniu,
-            request: TaskRequest::Image(ImageRequest {
-                prompt: prompt.clone(),
-                size: size.clone(),
-                quality: quality.clone(),
-                transparent: *transparent,
-                variant: *variant,
-                model: model.clone().unwrap_or_else(|| host.image_model.clone()),
-            }),
-        }),
+            references,
+        }) => Some(TaskRequest::Image(ImageRequest {
+            prompt: prompt.clone(),
+            size: size.clone(),
+            quality: quality.clone(),
+            transparent: *transparent,
+            variant: *variant,
+            // Still workdir-relative here; the host resolves them.
+            references: references.clone(),
+            reference_digests: Vec::new(),
+            model: model.clone().unwrap_or_default(),
+        })),
         ServiceCall::Speech(SpeechCall {
             text,
             voice,
             sample_rate,
-        }) => Some(TaskSpec {
-            provider: Provider::Volc,
-            request: TaskRequest::Speech(SpeechRequest {
-                text: text.clone(),
-                speaker: voice.clone(),
-                resource_id: speech_resource_id(voice, &host.voice_resource),
-                sample_rate: sample_rate.unwrap_or(host.sample_rate),
-            }),
-        }),
+            rate,
+        }) => Some(TaskRequest::Audio(AudioRequest {
+            model: String::new(),
+            text: text.clone(),
+            speaker: voice.clone(),
+            resource_id: speech_resource_id(voice, &host.audio_model),
+            sample_rate: sample_rate.unwrap_or(host.sample_rate),
+            speech_rate: *rate,
+        })),
         ServiceCall::Subtitles(_) | ServiceCall::Probe(_) | ServiceCall::Encode(_) => None,
     }
 }
@@ -82,26 +80,12 @@ pub fn speech_result(text: &str, raw: &Value, pcm: Pcm<'_>, file: &str) -> Value
         .map(Value::Array)
         .and_then(|value| serde_json::from_value(value).ok())
         .unwrap_or_default();
-    let mut timeline = build_timeline(text, &sentences, &words);
-    timeline.retime(pcm);
-    let _ = timeline.snap_sentence_edges(pcm);
+    let timeline = speech_timeline(text, &sentences, &words, pcm);
     json!({ "file": file, "duration": timeline.duration, "timeline": timeline })
 }
 
 pub fn subtitles_result(call: &SubtitlesCall, timeline: &Timeline, pcm: Pcm<'_>) -> Value {
-    let chars: Vec<(char, f64, f64)> = timeline
-        .chars
-        .iter()
-        .filter_map(|item| Some((item.text.chars().next()?, item.start, item.end)))
-        .collect();
-    let silences = detect_silences(pcm.samples, pcm.rate, -30.0, crate::subtitles::PAUSE_GAP);
-    let cues = cues(
-        &call.script,
-        &chars,
-        timeline.duration.max(pcm.duration()),
-        &silences,
-        call.max_chars.unwrap_or(18),
-    );
+    let cues = timeline_cues(&call.script, timeline, pcm, call.max_chars.unwrap_or(18));
     json!({ "cues": cues })
 }
 
@@ -115,9 +99,7 @@ mod tests {
 
     fn host() -> HostDefaults {
         HostDefaults {
-            chat_model: "chat-default".into(),
-            image_model: "image-default".into(),
-            voice_resource: "seed-tts-2.0".into(),
+            audio_model: "seed-tts-2.0".into(),
             sample_rate: 24000,
         }
     }
@@ -137,18 +119,19 @@ mod tests {
             &host(),
         )
         .unwrap();
-        assert_eq!(chat.key().as_str().len(), 64);
+        assert!(matches!(chat, TaskRequest::Language(_)));
         let speech = task_for(
             &ServiceCall::Speech(SpeechCall {
                 text: "你好".into(),
                 voice: "S_clone".into(),
                 sample_rate: None,
+                rate: Some(16),
             }),
             &host(),
         )
         .unwrap();
-        match speech.request {
-            TaskRequest::Speech(request) => assert_eq!(request.resource_id, "seed-icl-2.0"),
+        match speech {
+            TaskRequest::Audio(request) => assert_eq!(request.resource_id, "seed-icl-2.0"),
             _ => panic!("speech request"),
         }
     }

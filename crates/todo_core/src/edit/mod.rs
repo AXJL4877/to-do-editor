@@ -6,6 +6,7 @@ pub mod delete_track;
 mod edge;
 pub mod generated;
 pub mod library;
+mod motion;
 pub mod move_clip;
 pub mod move_clips;
 mod mutate;

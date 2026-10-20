@@ -1,0 +1,37 @@
+[
+  {
+    "file": "source-han-serif-sc-heavy.ttf",
+    "name": "思源宋体 Heavy",
+    "source": "Adobe / Google · Source Han Serif",
+    "license": "SIL OFL 1.1",
+    "note": "做旧红字片头 grunge-red-echo、标题白字"
+  },
+  {
+    "file": "noto-sans-sc-bold.otf",
+    "name": "Noto Sans SC Bold",
+    "source": "Google Fonts",
+    "license": "SIL OFL 1.1",
+    "note": "通用字幕与缺字回退"
+  },
+  {
+    "file": "zcool-kuaile.ttf",
+    "name": "站酷快乐体",
+    "source": "ZCOOL KuaiLe · google/fonts",
+    "license": "SIL OFL 1.1",
+    "note": "口播字幕 subtitle-kuaile、金色大字"
+  },
+  {
+    "file": "mashanzheng.ttf",
+    "name": "马善政毛笔楷书",
+    "source": "Ma Shan Zheng · google/fonts",
+    "license": "SIL OFL 1.1",
+    "note": "黑底金句、片尾毛笔字 quote-white-brush、升华黄字 quote-yellow-brush"
+  },
+  {
+    "file": "jianqi-shoushu.ttf",
+    "name": "字魂剑气手书",
+    "source": "字魂（来源未登记）",
+    "license": "",
+    "note": "商用需另购授权，不随安装包发行；缺失时回退到思源宋体"
+  }
+]

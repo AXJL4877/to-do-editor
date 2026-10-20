@@ -1,5 +1,5 @@
 //! Host services for extension workers. Paid services go through the durable
-//! `AiService` (one journal entry per content key, so a rerun or a crash
+//! `AiRouter` (one journal entry per content key, so a rerun or a crash
 //! retry never pays twice); subtitles, probe and encode run locally, the
 //! slow ones on their own thread. Result files are content-addressed inside
 //! the run's working directory.
@@ -8,8 +8,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use todo_ai::{AiEvent, AiService};
-use todo_extensions::{PoolHandle, RunId};
+use todo_ai::{AiEvent, AiRouter};
+use todo_workflow::{PoolHandle, RunId};
 use todo_media::{AlphaPacking, EncodeQuality, MediaService, MediaTools};
 use todo_production::extension::protocol::{ServiceCall, ServiceError, ServiceErrorClass};
 use todo_production::extension::services::{speech_result, subtitles_result, task_for};
@@ -102,7 +102,7 @@ impl ServiceBridge {
     }
 
     /// A worker's service call.
-    pub fn call(&mut self, ai: &AiService, run: RunId, call: String, service: ServiceCall) {
+    pub fn call(&mut self, ai: &AiRouter, run: RunId, call: String, service: ServiceCall) {
         let Some(workdir) = self.runs.get(&run).cloned() else {
             self.pool.reply(run, call, Err(invalid("运行已结束")));
             return;
@@ -142,10 +142,30 @@ impl ServiceBridge {
                 });
             }
             ServiceCall::Chat(_) | ServiceCall::Image(_) | ServiceCall::Speech(_) => {
-                let Some(task) = task_for(&service, &self.defaults) else {
+                let Some(mut task) = task_for(&service, &self.defaults) else {
                     self.pool.reply(run, call, Err(invalid("宿主不支持该服务")));
                     return;
                 };
+                // Reference pictures must be files of this run's workdir: an
+                // extension never sends other files of the machine anywhere.
+                if let todo_production::TaskRequest::Image(image) = &mut task {
+                    let mut resolved = Vec::with_capacity(image.references.len());
+                    for reference in &image.references {
+                        let path = workdir.join(reference);
+                        if !todo_production::extension::manifest::valid_relative_path(reference)
+                            || !path.is_file()
+                        {
+                            self.pool.reply(
+                                run,
+                                call,
+                                Err(invalid("references 必须是工作目录内已存在的相对路径")),
+                            );
+                            return;
+                        }
+                        resolved.push(path.to_string_lossy().into_owned());
+                    }
+                    image.references = resolved;
+                }
                 let key = ai.submit(task);
                 self.pending.entry(key).or_default().push(PendingCall {
                     run,
@@ -158,7 +178,7 @@ impl ServiceBridge {
     }
 
     /// Answer the calls waiting for a finished AI task.
-    pub fn on_ai_event(&mut self, ai: &AiService, event: &AiEvent) {
+    pub fn on_ai_event(&mut self, ai: &AiRouter, event: &AiEvent) {
         let key = match event {
             AiEvent::Done { key, .. }
             | AiEvent::Failed { key, .. }
@@ -201,7 +221,7 @@ impl ServiceBridge {
 
     fn done(
         &mut self,
-        ai: &AiService,
+        ai: &AiRouter,
         key: &TaskKey,
         pending: &PendingCall,
         artifact: Option<&todo_ai::ArtifactRef>,
@@ -373,20 +393,22 @@ mod tests {
     use std::time::Duration;
     use todo_ai::config::Limits;
     use todo_ai::net::{BreakerPolicy, RetryPolicy};
-    use todo_ai::{ArtifactStore, ProxyMode, Secret, ServiceSettings};
-    use todo_extensions::{PoolOptions, RuntimePaths, WorkerEvent, WorkerPool};
+    use todo_ai::{
+        ArtifactStore, CapabilityBindings, ModelBinding, ProxyMode, Secret, ServiceSettings,
+    };
+    use todo_workflow::{PoolOptions, RuntimePaths, WorkerEvent, WorkerPool};
     use todo_production::extension::protocol::{ChatCall, ImageCall};
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
-    fn bridge_fixture(name: &str) -> (ServiceBridge, todo_ai::AiService, WorkerPool, PathBuf) {
+    fn bridge_fixture(name: &str) -> (ServiceBridge, todo_ai::AiRouter, WorkerPool, PathBuf) {
         bridge_fixture_at(name, "http://127.0.0.1:1")
     }
 
     fn bridge_fixture_at(
         name: &str,
         base_url: &str,
-    ) -> (ServiceBridge, todo_ai::AiService, WorkerPool, PathBuf) {
+    ) -> (ServiceBridge, todo_ai::AiRouter, WorkerPool, PathBuf) {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/bridge-tests")
             .join(format!(
@@ -405,8 +427,9 @@ mod tests {
             },
             events,
         );
-        let (ai, _) = todo_ai::AiService::start(ServiceSettings {
+        let settings = ServiceSettings {
             huniu_base_url: base_url.into(),
+            language: None,
             volc_base_url: base_url.into(),
             huniu_strategy: None,
             keys: HashMap::from([
@@ -419,6 +442,29 @@ mod tests {
                     Secret::new("test-volc").unwrap(),
                 ),
             ]),
+            bindings: HashMap::from([
+                (
+                    todo_production::Capability::Language,
+                    todo_production::Provider::Huniu,
+                ),
+                (
+                    todo_production::Capability::Image,
+                    todo_production::Provider::Huniu,
+                ),
+                (
+                    todo_production::Capability::Video,
+                    todo_production::Provider::Huniu,
+                ),
+                (
+                    todo_production::Capability::Multimodal,
+                    todo_production::Provider::Huniu,
+                ),
+                (
+                    todo_production::Capability::Audio,
+                    todo_production::Provider::Volc,
+                ),
+            ]),
+            models: HashMap::new(),
             journal_dir: root.join("tasks"),
             artifacts_root: root.join("blobs"),
             proxy: ProxyMode::Direct,
@@ -428,6 +474,7 @@ mod tests {
                 image_rate_per_second: 100.0,
                 speech_inflight: 1,
                 image_paid_retries: 1,
+                image_resubmit_after: Duration::from_secs(300),
             },
             retry: RetryPolicy {
                 base: Duration::from_millis(10),
@@ -436,13 +483,53 @@ mod tests {
                 paid_retries: 1,
             },
             breaker: BreakerPolicy::default(),
-        })
+        };
+        let (ai, _) = todo_ai::AiRouter::start(
+            settings,
+            CapabilityBindings {
+                models: HashMap::from([
+                    (
+                        todo_production::Capability::Language,
+                        ModelBinding {
+                            model: "chat-test".into(),
+                            provider: todo_production::Provider::Huniu,
+                        },
+                    ),
+                    (
+                        todo_production::Capability::Image,
+                        ModelBinding {
+                            model: "image-test".into(),
+                            provider: todo_production::Provider::Huniu,
+                        },
+                    ),
+                    (
+                        todo_production::Capability::Video,
+                        ModelBinding {
+                            model: "video-test".into(),
+                            provider: todo_production::Provider::Huniu,
+                        },
+                    ),
+                    (
+                        todo_production::Capability::Multimodal,
+                        ModelBinding {
+                            model: "vision-test".into(),
+                            provider: todo_production::Provider::Huniu,
+                        },
+                    ),
+                    (
+                        todo_production::Capability::Audio,
+                        ModelBinding {
+                            model: "voice-test".into(),
+                            provider: todo_production::Provider::Volc,
+                        },
+                    ),
+                ]),
+            },
+        )
         .unwrap();
         let bridge = ServiceBridge::new(
             HostDefaults {
-                chat_model: "chat-test".into(),
-                image_model: "image-test".into(),
-                voice_resource: "voice-test".into(),
+                audio_model: "voice-test".into(),
                 sample_rate: 24_000,
             },
             &root,
@@ -459,6 +546,7 @@ mod tests {
             transparent: false,
             variant: 0,
             model: None,
+            references: Vec::new(),
         })
     }
 

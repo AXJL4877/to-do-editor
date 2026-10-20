@@ -96,8 +96,8 @@
 | AI 服务 | 虎妞对话 / 生图、火山 TTS（详见表后） | `crates/todo_ai/` | 40 项；`tests/service.rs` 故障注入 |
 | AI 设置 | 面板保存配置与 key；地址或代理变化时，`ProductionHost::reconfigure` 重启服务并重新提交在途任务 | `todo_ui/widgets/ai_settings.rs`、`todo_app/src/runtime/mod.rs::save_ai_settings` | interaction 测试 |
 | 进程 | `Duplex` 写入不阻塞（独立线程）；Job Object 限内存，随宿主一起退出 | `crates/todo_process/` | 7 项 |
-| 扩展运行时 | 注册表、安装 / 卸载 / 打包、运行时解析、进程池（详见表后） | `crates/todo_extensions/` | `tests/install.rs`、`pool.rs` 内测试、`examples/pool_probe.rs`（调试工具） |
-| 自检 | 启动时只握手；完整自检在临时目录跑样例，不写包目录（详见表后） | `todo_extensions/src/check.rs` | `todo_app/tests/e2e_productions.rs` |
+| 扩展运行时 | 注册表、安装 / 卸载 / 打包、运行时解析、进程池（详见表后） | `crates/todo_workflow/` | `tests/install.rs`、`pool.rs` 内测试、`examples/pool_probe.rs`（调试工具） |
+| 自检 | 启动时只握手；完整自检在临时目录跑样例，不写包目录（详见表后） | `todo_workflow/src/check.rs` | `todo_app/tests/e2e_productions.rs` |
 | Python SDK | `Worker`、`ctx.call` / `call_async` / `emit` / `progress` / `path` / `check_cancelled`；作者的 `print` 输出到 stderr | `extensions/sdk/python/todo_worker.py` | 同上 |
 | 核心片段 | `Clip.intro` / `audio` / `origin` / `outro`（结尾淡出秒数）；`picture_transform` 统一入场与淡出；`MediaItem.reveal: RevealInfo`（softMax、粉笔手图与轨迹）；`AlphaPacking::{Stacked, Reveal}` | `todo_core/src/model/{clip,effects,media}.rs` | core 测试 |
 | 批量入轨 | `EditCommand::ApplyGenerated(Vec<GeneratedEdit>)`：Place / Update / Move / Remove 原子执行，一次撤销；slot（如 `visual:2`）加锚点（`Anchor::Track` / `Anchor::Slot`）保证同一成片内的层序 | `todo_core/src/edit/generated.rs` | `todo_core/tests/generated_edits.rs`（5 项） |
@@ -347,7 +347,7 @@ X 节的最小验证：
 - **宿主执行**：`ProductionHost::execute(ProductionTask)` 处理 Submit / Run / Save / Cancel / Retry / CancelRun；`poll()` 返回 `HostReport`。
 - **调试 worker**：
   ```powershell
-  cargo run -p todo_extensions --example pool_probe -- <root> <包目录> <op> <workdir> <input.json>
+  cargo run -p todo_workflow --example pool_probe -- <root> <包目录> <op> <workdir> <input.json>
   ```
 
 ---

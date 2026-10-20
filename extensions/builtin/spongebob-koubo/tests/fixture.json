@@ -1,0 +1,694 @@
+{
+ "speech": {
+  "duration": 25.794,
+  "timeline": {
+   "text": "蟹老板花五十贝壳买了电影票。电影开场十分钟他就后悔了。可他心想票都买了不能浪费。于是硬着头皮看完两个小时。这就是沉没成本。已经花掉的钱收不回来。别让它决定你的下一步。",
+   "duration": 25.794,
+   "sentences": [
+    {
+     "id": 0,
+     "text": "蟹老板花五十贝壳买了电影票。",
+     "start": 0.0,
+     "end": 3.816,
+     "phrase_ids": [
+      0
+     ]
+    },
+    {
+     "id": 1,
+     "text": "电影开场十分钟他就后悔了。",
+     "start": 4.266,
+     "end": 7.812,
+     "phrase_ids": [
+      1
+     ]
+    },
+    {
+     "id": 2,
+     "text": "可他心想票都买了不能浪费。",
+     "start": 8.262,
+     "end": 11.808,
+     "phrase_ids": [
+      2
+     ]
+    },
+    {
+     "id": 3,
+     "text": "于是硬着头皮看完两个小时。",
+     "start": 12.258,
+     "end": 15.804,
+     "phrase_ids": [
+      3
+     ]
+    },
+    {
+     "id": 4,
+     "text": "这就是沉没成本。",
+     "start": 16.254,
+     "end": 18.432,
+     "phrase_ids": [
+      4
+     ]
+    },
+    {
+     "id": 5,
+     "text": "已经花掉的钱收不回来。",
+     "start": 18.882,
+     "end": 21.888,
+     "phrase_ids": [
+      5
+     ]
+    },
+    {
+     "id": 6,
+     "text": "别让它决定你的下一步。",
+     "start": 22.338,
+     "end": 25.344,
+     "phrase_ids": [
+      6
+     ]
+    }
+   ],
+   "phrases": [],
+   "chars": [
+    {
+     "id": 0,
+     "text": "蟹",
+     "start": 0.0,
+     "end": 0.293
+    },
+    {
+     "id": 1,
+     "text": "老",
+     "start": 0.293,
+     "end": 0.587
+    },
+    {
+     "id": 2,
+     "text": "板",
+     "start": 0.587,
+     "end": 0.88
+    },
+    {
+     "id": 3,
+     "text": "花",
+     "start": 0.88,
+     "end": 1.174
+    },
+    {
+     "id": 4,
+     "text": "五",
+     "start": 1.174,
+     "end": 1.467
+    },
+    {
+     "id": 5,
+     "text": "十",
+     "start": 1.467,
+     "end": 1.76
+    },
+    {
+     "id": 6,
+     "text": "贝",
+     "start": 1.76,
+     "end": 2.056
+    },
+    {
+     "id": 7,
+     "text": "壳",
+     "start": 2.056,
+     "end": 2.349
+    },
+    {
+     "id": 8,
+     "text": "买",
+     "start": 2.349,
+     "end": 2.642
+    },
+    {
+     "id": 9,
+     "text": "了",
+     "start": 2.642,
+     "end": 2.936
+    },
+    {
+     "id": 10,
+     "text": "电",
+     "start": 2.936,
+     "end": 3.229
+    },
+    {
+     "id": 11,
+     "text": "影",
+     "start": 3.229,
+     "end": 3.523
+    },
+    {
+     "id": 12,
+     "text": "票",
+     "start": 3.523,
+     "end": 3.816
+    },
+    {
+     "id": 13,
+     "text": "电",
+     "start": 4.266,
+     "end": 4.561
+    },
+    {
+     "id": 14,
+     "text": "影",
+     "start": 4.561,
+     "end": 4.856
+    },
+    {
+     "id": 15,
+     "text": "开",
+     "start": 4.856,
+     "end": 5.152
+    },
+    {
+     "id": 16,
+     "text": "场",
+     "start": 5.152,
+     "end": 5.449
+    },
+    {
+     "id": 17,
+     "text": "十",
+     "start": 5.449,
+     "end": 5.744
+    },
+    {
+     "id": 18,
+     "text": "分",
+     "start": 5.744,
+     "end": 6.039
+    },
+    {
+     "id": 19,
+     "text": "钟",
+     "start": 6.039,
+     "end": 6.334
+    },
+    {
+     "id": 20,
+     "text": "他",
+     "start": 6.334,
+     "end": 6.629
+    },
+    {
+     "id": 21,
+     "text": "就",
+     "start": 6.629,
+     "end": 6.926
+    },
+    {
+     "id": 22,
+     "text": "后",
+     "start": 6.926,
+     "end": 7.222
+    },
+    {
+     "id": 23,
+     "text": "悔",
+     "start": 7.222,
+     "end": 7.517
+    },
+    {
+     "id": 24,
+     "text": "了",
+     "start": 7.517,
+     "end": 7.812
+    },
+    {
+     "id": 25,
+     "text": "可",
+     "start": 8.262,
+     "end": 8.557
+    },
+    {
+     "id": 26,
+     "text": "他",
+     "start": 8.557,
+     "end": 8.852
+    },
+    {
+     "id": 27,
+     "text": "心",
+     "start": 8.852,
+     "end": 9.148
+    },
+    {
+     "id": 28,
+     "text": "想",
+     "start": 9.148,
+     "end": 9.445
+    },
+    {
+     "id": 29,
+     "text": "票",
+     "start": 9.445,
+     "end": 9.74
+    },
+    {
+     "id": 30,
+     "text": "都",
+     "start": 9.74,
+     "end": 10.035
+    },
+    {
+     "id": 31,
+     "text": "买",
+     "start": 10.035,
+     "end": 10.33
+    },
+    {
+     "id": 32,
+     "text": "了",
+     "start": 10.33,
+     "end": 10.625
+    },
+    {
+     "id": 33,
+     "text": "不",
+     "start": 10.625,
+     "end": 10.921
+    },
+    {
+     "id": 34,
+     "text": "能",
+     "start": 10.921,
+     "end": 11.218
+    },
+    {
+     "id": 35,
+     "text": "浪",
+     "start": 11.218,
+     "end": 11.513
+    },
+    {
+     "id": 36,
+     "text": "费",
+     "start": 11.513,
+     "end": 11.808
+    },
+    {
+     "id": 37,
+     "text": "于",
+     "start": 12.258,
+     "end": 12.553
+    },
+    {
+     "id": 38,
+     "text": "是",
+     "start": 12.553,
+     "end": 12.848
+    },
+    {
+     "id": 39,
+     "text": "硬",
+     "start": 12.848,
+     "end": 13.144
+    },
+    {
+     "id": 40,
+     "text": "着",
+     "start": 13.144,
+     "end": 13.441
+    },
+    {
+     "id": 41,
+     "text": "头",
+     "start": 13.441,
+     "end": 13.736
+    },
+    {
+     "id": 42,
+     "text": "皮",
+     "start": 13.736,
+     "end": 14.031
+    },
+    {
+     "id": 43,
+     "text": "看",
+     "start": 14.031,
+     "end": 14.326
+    },
+    {
+     "id": 44,
+     "text": "完",
+     "start": 14.326,
+     "end": 14.621
+    },
+    {
+     "id": 45,
+     "text": "两",
+     "start": 14.621,
+     "end": 14.917
+    },
+    {
+     "id": 46,
+     "text": "个",
+     "start": 14.917,
+     "end": 15.214
+    },
+    {
+     "id": 47,
+     "text": "小",
+     "start": 15.214,
+     "end": 15.509
+    },
+    {
+     "id": 48,
+     "text": "时",
+     "start": 15.509,
+     "end": 15.804
+    },
+    {
+     "id": 49,
+     "text": "这",
+     "start": 16.254,
+     "end": 16.565
+    },
+    {
+     "id": 50,
+     "text": "就",
+     "start": 16.565,
+     "end": 16.877
+    },
+    {
+     "id": 51,
+     "text": "是",
+     "start": 16.877,
+     "end": 17.188
+    },
+    {
+     "id": 52,
+     "text": "沉",
+     "start": 17.188,
+     "end": 17.498
+    },
+    {
+     "id": 53,
+     "text": "没",
+     "start": 17.498,
+     "end": 17.809
+    },
+    {
+     "id": 54,
+     "text": "成",
+     "start": 17.809,
+     "end": 18.121
+    },
+    {
+     "id": 55,
+     "text": "本",
+     "start": 18.121,
+     "end": 18.432
+    },
+    {
+     "id": 56,
+     "text": "已",
+     "start": 18.882,
+     "end": 19.183
+    },
+    {
+     "id": 57,
+     "text": "经",
+     "start": 19.183,
+     "end": 19.483
+    },
+    {
+     "id": 58,
+     "text": "花",
+     "start": 19.483,
+     "end": 19.784
+    },
+    {
+     "id": 59,
+     "text": "掉",
+     "start": 19.784,
+     "end": 20.084
+    },
+    {
+     "id": 60,
+     "text": "的",
+     "start": 20.084,
+     "end": 20.385
+    },
+    {
+     "id": 61,
+     "text": "钱",
+     "start": 20.385,
+     "end": 20.686
+    },
+    {
+     "id": 62,
+     "text": "收",
+     "start": 20.686,
+     "end": 20.986
+    },
+    {
+     "id": 63,
+     "text": "不",
+     "start": 20.986,
+     "end": 21.287
+    },
+    {
+     "id": 64,
+     "text": "回",
+     "start": 21.287,
+     "end": 21.587
+    },
+    {
+     "id": 65,
+     "text": "来",
+     "start": 21.587,
+     "end": 21.888
+    },
+    {
+     "id": 66,
+     "text": "别",
+     "start": 22.338,
+     "end": 22.639
+    },
+    {
+     "id": 67,
+     "text": "让",
+     "start": 22.639,
+     "end": 22.939
+    },
+    {
+     "id": 68,
+     "text": "它",
+     "start": 22.939,
+     "end": 23.24
+    },
+    {
+     "id": 69,
+     "text": "决",
+     "start": 23.24,
+     "end": 23.54
+    },
+    {
+     "id": 70,
+     "text": "定",
+     "start": 23.54,
+     "end": 23.841
+    },
+    {
+     "id": 71,
+     "text": "你",
+     "start": 23.841,
+     "end": 24.142
+    },
+    {
+     "id": 72,
+     "text": "的",
+     "start": 24.142,
+     "end": 24.442
+    },
+    {
+     "id": 73,
+     "text": "下",
+     "start": 24.442,
+     "end": 24.743
+    },
+    {
+     "id": 74,
+     "text": "一",
+     "start": 24.743,
+     "end": 25.043
+    },
+    {
+     "id": 75,
+     "text": "步",
+     "start": 25.043,
+     "end": 25.344
+    }
+   ]
+  }
+ },
+ "cues": [
+  {
+   "text": "蟹老板花五十贝壳买了电影票",
+   "start": 0.0,
+   "end": 3.816
+  },
+  {
+   "text": "电影开场十分钟他就后悔了",
+   "start": 4.266,
+   "end": 7.812
+  },
+  {
+   "text": "可他心想票都买了不能浪费",
+   "start": 8.262,
+   "end": 11.808
+  },
+  {
+   "text": "于是硬着头皮看完两个小时",
+   "start": 12.258,
+   "end": 15.804
+  },
+  {
+   "text": "这就是沉没成本",
+   "start": 16.254,
+   "end": 18.432
+  },
+  {
+   "text": "已经花掉的钱收不回来",
+   "start": 18.882,
+   "end": 21.888
+  },
+  {
+   "text": "别让它决定你的下一步",
+   "start": 22.338,
+   "end": 25.344
+  }
+ ],
+ "plan": {
+  "title": "什么是沉没成本",
+  "shots": [
+   {
+    "i": 0,
+    "kind": "story",
+    "draw": "the red crab boss holds a big movie ticket at a ticket booth",
+    "texts": [
+     "电影票"
+    ],
+    "cast": [
+     "krabs-money"
+    ],
+    "motion": null,
+    "elements": [
+     {
+      "lib": "shell-coins",
+      "at": "五十贝壳",
+      "motion": null
+     }
+    ]
+   },
+   {
+    "i": 1,
+    "kind": "story",
+    "draw": "the red crab boss sits in a dark cinema seat looking regretful",
+    "texts": [],
+    "cast": [
+     "krabs-worried"
+    ],
+    "motion": "drop",
+    "elements": [
+     {
+      "lib": "clock",
+      "at": "十分钟",
+      "motion": null
+     },
+     {
+      "draw": "a small wooden sign on a post",
+      "texts": [
+       "后悔"
+      ],
+      "at": "后悔",
+      "motion": "plop"
+     }
+    ]
+   },
+   {
+    "i": 2,
+    "kind": "story",
+    "draw": "the crab boss thinks hard with a thought bubble showing a ticket",
+    "texts": [
+     "不能浪费"
+    ],
+    "cast": [
+     "krabs-explain"
+    ],
+    "motion": "spin",
+    "elements": [
+     {
+      "lib": "mark-question",
+      "at": "心想"
+     },
+     {
+      "lib": "krabs-explain",
+      "at": "票"
+     }
+    ]
+   },
+   {
+    "i": 3,
+    "kind": "story",
+    "draw": "the crab boss yawning in a cinema seat, a clock above",
+    "texts": [
+     "两小时"
+    ],
+    "cast": [
+     "krabs-worried"
+    ],
+    "motion": null,
+    "elements": []
+   },
+   {
+    "i": 4,
+    "kind": "story",
+    "draw": "a sinking ship made of coins",
+    "texts": [
+     "沉没成本"
+    ],
+    "cast": [],
+    "motion": "grow",
+    "elements": [
+     {
+      "lib": "mark-x",
+      "at": "成本"
+     }
+    ]
+   },
+   {
+    "i": 5,
+    "kind": "sublime",
+    "draw": "money flying away from an open wallet",
+    "texts": [],
+    "cast": [],
+    "motion": null,
+    "elements": [
+     {
+      "lib": "money-bag",
+      "at": "花掉"
+     }
+    ]
+   },
+   {
+    "i": 6,
+    "kind": "sublime",
+    "draw": "a crab looking forward at a road",
+    "texts": [],
+    "cast": [],
+    "motion": null,
+    "elements": []
+   }
+  ]
+ },
+ "script": "蟹老板花五十贝壳买了电影票。电影开场十分钟他就后悔了。可他心想票都买了不能浪费。于是硬着头皮看完两个小时。这就是沉没成本。已经花掉的钱收不回来。别让它决定你的下一步。"
+}

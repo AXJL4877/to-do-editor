@@ -7,6 +7,7 @@ pub(crate) fn run_batch(
     original: &Project,
     edits: &[ControlEdit],
     dry_run: bool,
+    motions: &[todo_core::MotionPreset],
 ) -> Result<(Project, EditReceipt), ControlError> {
     if edits.is_empty() || edits.len() > 128 {
         return Err(ControlError::new(
@@ -19,7 +20,35 @@ pub(crate) fn run_batch(
     for (index, edit) in edits.iter().enumerate() {
         let run = || {
             let command = command(&project, &steps, edit)?;
-            let next = execute_edit(project.clone(), command).map_err(ControlError::domain)?;
+            // A library preset is copied into the document within this step.
+            let base = match super::motions::copy_in(&project, motions, edit.motion()) {
+                Some(copy) => execute_edit(project.clone(), copy).map_err(ControlError::domain)?,
+                None => project.clone(),
+            };
+            let next = execute_edit(base, command).map_err(ControlError::domain)?;
+            let next = if let ControlEdit::AddText {
+                transform: Some(transform),
+                ..
+            } = edit
+            {
+                let created = summarize(&project, &next, false)
+                    .created_clips
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| {
+                        ControlError::new("invalid_edit", "Text edit created no clip")
+                    })?;
+                execute_edit(
+                    next,
+                    EditCommand::SetTransform {
+                        clip_id: created.clip.id,
+                        transform: *transform,
+                    },
+                )
+                .map_err(ControlError::domain)?
+            } else {
+                next
+            };
             let receipt = summarize(&project, &next, matches!(edit, ControlEdit::Split { .. }));
             Ok((next, receipt))
         };
@@ -188,6 +217,7 @@ fn command(
             timeline_start,
             duration,
             content,
+            ..
         } => EditCommand::AddText {
             track_id: track_id.clone(),
             time: *timeline_start,
@@ -222,6 +252,26 @@ fn command(
         } => EditCommand::MoveMedia {
             media_id: media_id.clone(),
             folder_id: folder_id.clone(),
+        },
+        ControlEdit::SetIntro { clip, intro } => EditCommand::SetIntro {
+            clip_id: primary(project, steps, clip)?,
+            intro: intro.clone(),
+        },
+        ControlEdit::SetOutro { clip, outro } => EditCommand::SetOutro {
+            clip_id: primary(project, steps, clip)?,
+            outro: outro.clone(),
+        },
+        ControlEdit::SetTransition { clip, transition } => EditCommand::SetTransition {
+            clip_id: primary(project, steps, clip)?,
+            transition: transition.clone(),
+        },
+        ControlEdit::SetAudio { clip, audio } => EditCommand::SetAudio {
+            clip_id: primary(project, steps, clip)?,
+            audio: *audio,
+        },
+        ControlEdit::ReplaceMedia { clip, media_id } => EditCommand::ReplaceMedia {
+            clip_id: primary(project, steps, clip)?,
+            media_id: media_id.clone(),
         },
     })
 }

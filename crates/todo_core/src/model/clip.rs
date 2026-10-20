@@ -1,6 +1,7 @@
 use crate::transform::Transform;
 use serde::{Deserialize, Serialize};
 
+use super::effects::{deserialize_outro, MotionRef};
 use super::text::TextContent;
 use super::{ClipAudio, ClipOrigin, Intro};
 pub use crate::transform::ClipTransform;
@@ -27,9 +28,11 @@ pub struct Clip {
     pub audio: Option<ClipAudio>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<ClipOrigin>,
-    /// Seconds of opacity fade at the end of a picture clip.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub outro: Option<f64>,
+    /// Exit motion over the last seconds of a picture clip.
+    pub outro: Option<MotionRef>,
+    /// Transition into this clip from the clip that ends where it starts on
+    /// the same track. Inactive while the two are not adjacent.
+    pub transition: Option<MotionRef>,
     pub source: ClipSource,
 }
 
@@ -103,6 +106,7 @@ pub fn normalize_clip(
         audio: None,
         origin: None,
         outro: None,
+        transition: None,
         source: ClipSource::Media(MediaSource {
             media_id,
             offset: offset.max(0.0),
@@ -122,6 +126,7 @@ pub fn text_clip(id: String, start: f64, duration: f64, content: TextContent) ->
         audio: None,
         origin: None,
         outro: None,
+        transition: None,
         source: ClipSource::Text(content),
     }
 }
@@ -169,8 +174,14 @@ struct ClipRecord {
     audio: Option<ClipAudio>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     origin: Option<ClipOrigin>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_outro",
+        skip_serializing_if = "Option::is_none"
+    )]
+    outro: Option<MotionRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    outro: Option<f64>,
+    transition: Option<MotionRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     text: Option<TextContent>,
 }
@@ -209,7 +220,10 @@ impl TryFrom<ClipRecord> for Clip {
             intro: record.intro,
             audio: record.audio,
             origin: record.origin,
-            outro: record.outro.filter(|s| s.is_finite() && *s > 0.0),
+            outro: record.outro,
+            transition: record
+                .transition
+                .filter(|t| t.duration.is_finite() && t.duration > 0.0),
             source,
         })
     }
@@ -239,6 +253,7 @@ impl From<Clip> for ClipRecord {
             audio: clip.audio,
             origin: clip.origin,
             outro: clip.outro,
+            transition: clip.transition,
             text,
         }
     }
@@ -285,10 +300,9 @@ mod tests {
     #[test]
     fn optional_effects_round_trip_without_changing_legacy_shape() {
         let mut clip = normalize_clip("c".into(), "m".into(), 0.0, 2.0, 0.0, 1.0);
-        clip.intro = Some(Intro {
-            kind: crate::IntroKind::Rise,
-            duration: 0.5,
-        });
+        clip.intro = Some(Intro::new("rise", 0.5));
+        clip.outro = Some(MotionRef::new("fadeOut", 0.3));
+        clip.transition = Some(MotionRef::new("dissolve", 0.15));
         clip.audio = Some(crate::ClipAudio {
             gain: 0.75,
             fade_in: 0.2,
@@ -302,5 +316,15 @@ mod tests {
         let value = serde_json::to_value(&clip).unwrap();
         assert_eq!(value["intro"]["kind"], "rise");
         assert_eq!(serde_json::from_value::<Clip>(value).unwrap(), clip);
+    }
+
+    #[test]
+    fn legacy_numeric_outro_reads_as_fade_out() {
+        let text = r#"{"id":"c","mediaId":"m","start":0,"duration":2,"offset":0,"rate":1,
+            "outro":0.25}"#;
+        let clip: Clip = serde_json::from_str(text).unwrap();
+        assert_eq!(clip.outro, Some(MotionRef::new("fadeOut", 0.25)));
+        let value = serde_json::to_value(&clip).unwrap();
+        assert_eq!(value["outro"]["kind"], "fadeOut");
     }
 }

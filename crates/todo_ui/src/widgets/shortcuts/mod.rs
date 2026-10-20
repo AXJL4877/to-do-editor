@@ -97,6 +97,7 @@ mod tests {
                 media: Vec::new(),
                 tracks: Vec::new(),
                 text_styles: Vec::new(),
+                motions: Vec::new(),
                 folders: Vec::new(),
             },
             "test",

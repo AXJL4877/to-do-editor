@@ -646,6 +646,7 @@ mod tests {
                 media: vec![],
                 tracks: vec![],
                 text_styles: Vec::new(),
+                motions: Vec::new(),
                 folders: Vec::new(),
             },
             "test",
@@ -689,6 +690,7 @@ mod tests {
                 wave_left: 0.0,
                 wave_width: 160.0,
                 transform: Default::default(),
+                transition: None,
             });
         }
         let ctx = egui::Context::default();
@@ -862,6 +864,7 @@ mod tests {
             media: Vec::new(),
             tracks: Vec::new(),
             text_styles: Vec::new(),
+            motions: Vec::new(),
             folders: Vec::new(),
         };
         let mut timeline = crate::test_view(project, "test").timeline;
@@ -940,6 +943,7 @@ mod tests {
                 media: Vec::new(),
                 tracks: Vec::new(),
                 text_styles: Vec::new(),
+                motions: Vec::new(),
                 folders: Vec::new(),
             },
             "test",
@@ -973,6 +977,7 @@ mod tests {
                 wave_left: 0.0,
                 wave_width: 160.0,
                 transform: Default::default(),
+                transition: None,
             }],
         });
         let ctx = egui::Context::default();

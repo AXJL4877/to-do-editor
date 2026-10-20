@@ -75,6 +75,17 @@ pub struct Secrets<'a> {
 }
 
 impl Secrets<'_> {
+    /// Key for the direct language endpoint, if one is configured.
+    pub fn language(&self) -> Result<Option<(Secret, SecretSource)>, SecretError> {
+        if let Some(value) = (self.environment)(LANGUAGE_ENV) {
+            return Ok(Secret::new(value).map(|secret| (secret, SecretSource::Environment)));
+        }
+        Ok(self
+            .store
+            .read(LANGUAGE_TARGET)?
+            .map(|secret| (secret, SecretSource::Keychain)))
+    }
+
     pub fn resolve(
         &self,
         provider: Provider,
@@ -100,6 +111,11 @@ impl Secrets<'_> {
 }
 
 /// The platform keychain (Windows Credential Manager), or memory elsewhere.
+/// Environment variable for a direct language endpoint key.
+pub const LANGUAGE_ENV: &str = "TODO_DEEPSEEK_API_KEY";
+/// Keychain target for a direct language endpoint key.
+pub const LANGUAGE_TARGET: &str = "todo-editor/deepseek.api_key";
+
 pub fn default_store() -> Box<dyn SecretStore> {
     #[cfg(windows)]
     return Box::new(CredentialManager);

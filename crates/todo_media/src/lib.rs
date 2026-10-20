@@ -26,7 +26,10 @@ pub use metadata::{AlphaPacking, MediaMetadata};
 pub use proxies::EditProxy;
 pub use reveal::{compose_reveal, read_reveal, write_reveal, HandMeta, RevealMeta, REVEAL_SPEC};
 pub use service::MediaService;
-pub use text::{font_dirs, TextRasterizer};
+pub use text::{
+    font_catalog, font_dirs, font_preview, packaged_font_dirs, style_preview, FontFile,
+    FontRecord, TextRasterizer, FONT_MANIFEST,
+};
 pub use todo_text::RasterRequest;
 pub use tools::MediaTools;
 pub use waveforms::Waveform;

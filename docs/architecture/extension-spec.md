@@ -7,7 +7,7 @@
 ## 1. 原则
 
 1. **一种格式，两种写法**。`workflow` 是通用写法：工作程序编排任意流程——代码生成的动画、对选中素材加特效、AI 口播成片都可以，输入、服务、步骤都不受限制。`narration` 是可选的便捷写法：复用宿主的口播流水线（分段 → 配音 → 分镜 → 生图 → 烘焙 → 字幕 → 入轨），只需清单、提示词和可选的烘焙程序。两者产出同一种「时间轴条目」，入轨、编辑、导出完全相同。
-2. **扩展不联网、不持有密钥**。宿主服务按需使用，不用就不声明；对话、生图、配音等一切付费调用都经协议交给宿主。宿主按请求指纹去重、缓存、重试、熔断、限流、计费预算；同样的请求永远只付一次钱。
+2. **扩展不联网、不持有密钥**。宿主服务按需使用，不用就不声明；语言、图像、视频、多模态和音频调用都经 `AiRouter` 交给宿主。宿主按请求指纹去重、缓存、重试、熔断、限流、计费预算；同样的请求永远只付一次钱。
 3. **可重跑**。工作程序必须是「给定相同输入与服务结果就产出相同条目」的确定性程序（随机数用宿主下发的 `seed`）。宿主在用户修改后直接重跑流程，已做过的服务调用从缓存瞬间返回，因此「只重做改动部分」对所有扩展自动成立，作者无需自己管理缓存。
 4. **渐进入轨**。产物一出来就以条目发出，宿主立即放上时间轴；条目有稳定的 `key` 与版本 `rev`，用于原位替换、保留用户改动和不复活用户删除的片段。
 5. **可编辑优先**。能拆成独立图层就不烤成整片：静帧 + 宿主动效、书写回放（reveal）、文字（花字）、独立音轨优先于整段视频。
@@ -39,7 +39,7 @@ README.md
   "description": "长口播一键成片……",
   "kind": "narration",                   // workflow（通用）| narration（口播配方）
   "input": {                             // 可省略：只靠参数驱动（如代码生成的片头）
-    "script": { "label": "口播文案", "maxLength": 12000 },
+    "script": { "label": "口播文案", "maxLength": 12000, "optional": false },   // optional：可留空（扩展按参数自己写文案）
     "media":  { "label": "要处理的片段", "kinds": ["video", "image", "audio"], "min": 1, "max": 4 }
   },
   "params": [ /* §4 */ ],
@@ -56,6 +56,7 @@ README.md
     "memoryMiB": 1500
   },
   "narration": { /* §6，仅 kind = narration */ },
+  "graph": "graph.json",                 // 可选；仅 workflow。节点图 IR（§6b），安装期校验
   "budget": { "image": 300, "chat": 120, "speech": 200 },   // 单次成片的调用上限
   "previews": ["previews/01.png"]
 }
@@ -85,7 +86,7 @@ README.md
 | service | request | result |
 | --- | --- | --- |
 | `chat` | `{ messages[{role,content}], json?: bool, temperature?: 0~1, model?: "default" }` | `{ text }` |
-| `image` | `{ prompt, size: "WxH", quality?, transparent?: bool, variant?: n, model?: "default" }` | `{ file, width, height }` |
+| `image` | `{ prompt, size: "WxH", quality?, transparent?: bool, variant?: n, references?: ["<工作目录内相对路径>"], model?: "default" }` | `{ file, width, height }` |
 | `speech` | `{ text, voice: "<音色 id>", sampleRate?: 24000 }` | `{ file, duration, timeline }`（句 / 短语 / 字三级时间，已按真实音频修正） |
 | `subtitles` | `{ script, speech: "<speech 结果 file>", maxChars?: 18 }` | `{ cues[{text,start,end}] }` |
 | `probe` | `{ file }` | `{ duration, width?, height?, hasAudio }` |
@@ -93,7 +94,7 @@ README.md
 
 `encode` 让代码生成动画的程序只需逐帧画 PNG（`<目录>/000001.png` 起连续编号）：宿主用自带 FFmpeg 按统一质量标准编码，透明时输出 packed-alpha，不透明时输出短 GOP H.264，预览拖动与导出质量都由宿主保证。所有服务都按需使用，没有声明的服务不能调用，声明了也不强制使用。
 
-模型名一律写 `default` 或省略（由宿主配置决定）；`variant` 区分同一提示词的多张候选。结果里的 `file` 是工作目录内的相对路径（宿主已放好的副本）。失败时返回 `{ class, message }`，`class` 为 `invalid`（请求本身不合法）、`content_policy`（被审核拒绝，可改写提示词再试）、`budget`（超出清单预算）、`unavailable`（宿主已尽力重试仍失败）。网络抖动、限流、断线续传都由宿主处理，**扩展不要自己重试**。
+模型名一律写 `default` 或省略（由宿主配置决定）；`variant` 区分同一提示词的多张候选。`references` 是要保持一致的参考图（例如场景卡片里出现的角色），只能是工作目录内已存在的文件，宿主在工作目录内解析，其他路径一律拒绝；有参考图时宿主改走 `images/edits`，任务指纹包含参考图内容的摘要。结果里的 `file` 是工作目录内的相对路径（宿主已放好的副本）。失败时返回 `{ class, message }`，`class` 为 `invalid`（请求本身不合法）、`content_policy`（被审核拒绝，可改写提示词再试）、`budget`（超出清单预算）、`unavailable`（宿主已尽力重试仍失败）。网络抖动、限流、断线续传都由宿主处理，**扩展不要自己重试**。
 
 ## 6. `narration` 配置
 
@@ -116,7 +117,57 @@ README.md
 
 宿主负责分段、配音、分镜、生图、排期（含换板过渡与留白）、字幕和入轨；烘焙操作只负责把一块黑板的元素图做成图层条目。
 
+工作流扩展可以在 `recipe.json` → `review` 里声明检查单（`checks`、`checked`、`lines`）和一个重画参数（`redraw`，在清单里声明为 text 参数）。导演会把这个参数设为 `key:variant,…`，扩展收到后，对这些 key 的画面用同一描述、以该 `variant` 重画，其它请求保持不变；重画后的文件名和 `rev` 必须变化，才会原位替换。详见 [director.md](director.md)。
+
 口播配方识别以下约定参数名（声明了就由用户调整，没声明就用清单值）：`voice`（voice 类型）、`split`（`semantic`/`paragraph`/`length`）、`segmentChars`、`boardSec`、`variants`、`subtitles`（bool）、`subtitleChars`、`tail`。只有 `narration` 要求文案输入和 `chat` / `image` / `speech` 服务。
+
+## 6b. 工作流图 IR `todo-graph/1`（可选）
+
+`kind = workflow` 可声明 `"graph": "graph.json"`，用**数据**描述步骤与依赖，供日后宿主按节点调度与调试；当前版本做安装期校验（类型 / 端口 / 参数 / DAG），**仍由 `worker.ops` 的 `run` 执行**。运行时 payload 校验见 `todo_production::extension::nodes::validate_payload`。
+
+```jsonc
+{
+  "spec": "todo-graph/1",
+  "nodes": [
+    { "id": "script", "type": "script", "label": "原始口播" },
+    { "id": "segment", "type": "segment_script", "params": { "mode": "semantic", "target": 120, "max": 200 } },
+    { "id": "tts", "type": "tts", "params": { "voice": "S_…", "rate": 16 } },
+    { "id": "custom", "type": "python:bake_board" }
+  ],
+  "edges": [
+    { "from": "script", "to": "segment", "out": "script", "in": "text" },
+    { "from": "script", "to": "tts", "out": "script", "in": "text" }
+  ]
+}
+```
+
+| 约束 | 说明 |
+| --- | --- |
+| 节点 `id` | 小写字母开头，字母数字 `_` `-`，≤ 64，图内唯一 |
+| `type` | 见下表；`speech` 是 `tts` 的别名；或 `python:<op>`（`op` 须在 `worker.ops`） |
+| 边 | 端口类型必须兼容；必需输入必须连上；禁止自环；必须是 DAG |
+| 规模 | ≤ 256 节点、≤ 1024 边 |
+| 适用范围 | 仅 `workflow` |
+
+### 常用内置节点与数据契约
+
+| type | 输入 | 输出 | 参数 |
+| --- | --- | --- | --- |
+| `media_bin` | — | `files` → **media_bin**；`text` → **script_text** | `accept` 扩展名；`note` |
+| `script` | `text?` ← **script_text** | `script` → **script_text** | （可选备注） |
+| `segment_script` | `text` ← **script_text** | `segments` → **segments** | `mode`: `semantic`\|`length`\|`paragraph`；`target`/`max` 字数 |
+| `tts`（别名 `speech`） | `text` ← **script_text** | `audio` → **speech_clip** | `voice`，`rate` (-50~100) |
+| `subtitles` | `script` + `speech` | `cues` → **subtitle_cues** | — |
+| `emit` / `ground_emit` / `picture_batch` / … | 见目录 | **items** 或过渡 `any` | — |
+| `done` | `result?` any | — | — |
+
+**script_text**：`{ "text": string }`（非空，≤ 12000 字）。
+
+**segments**：`{ "mode": "semantic"|"length"|"paragraph", "segments": [{ "id"?, "text", "chars"? }] }`。`chars` 若出现必须等于 `text` 字数；分段不改写原文。
+
+**speech_clip**（一段 TTS）：`{ "file": "….mp3|wav|…", "duration": 秒, "timeline": { "duration", "chars": [{ "id", "text", "start", "end" }] } }`。`chars` 的起止是**相对本段音频**的逐字时间，不得超出 `duration`。
+
+说明：`segment_script` 产出多段文本；`tts` 一次处理**一段**口播。整篇先分段再逐段配音，需日后的 map/foreach 节点（或循环调用 `tts`）；当前可对整篇 `script` 直接连 `tts`。
 
 ## 7. 工作程序协议 `todo-worker/1`
 
@@ -162,13 +213,15 @@ README.md
   "source": { "type": "file", "file": "out/s3_e2.reveal.png", "in": 0 },
   "transform": { "x": 0.1, "y": -0.05, "scale": 0.6 },
   "intro": { "kind": "fade", "duration": 0.4 },
+  "outro": { "kind": "fadeOut", "duration": 0.3 },        // 画面 / 文字：出场动效，优先于 fade.out
+  "transition": { "kind": "crossfade", "duration": 0.2 }, // 画面 / 文字：从同 lane 紧挨着的前一个条目切进来
   "link": "s3/voice",                   // 跟随该条目移动（配音挪了画面跟着走）
   "gain": 1.0,                          // 音频，0..4
   "fade": { "in": 0.15, "out": 0.25 }  // 音频：淡入淡出秒数；画面 / 文字：只用 out（结尾淡出，用于换板交叉过渡），in 必须为 0
 }
 ```
 
-`intro.kind` 取 `fade | rise | pop | slideLeft | slideRight | drop | stamp | grow`；宿主按 core 的同一条曲线计算，片段超过入场时长后保持恒等变换。
+`intro` / `outro` / `transition` 的 `kind` 是[动效预设](motion.md) id：内置的（入场 `fade rise pop slideLeft slideRight drop stamp grow`，出场 `fadeOut shrinkOut sinkOut slideOutLeft slideOutRight popOut`，转场 `dissolve crossfade dip pushLeft pushRight coverLeft coverRight zoomIn`），或扩展自带的 `motions/*.json`（首次使用时复制进工程）。转场窗口以切点为中心，前后两个条目必须首尾相接。
 
 `source.type`：`file`（媒体文件：静帧、视频、packed-alpha、reveal 图集、音频）或 `text`（花字 `TextContent`）。宿主校验文件存在且在工作目录内、时间有限且非负、key 唯一。入轨规则：同 key 新 rev 原位替换并保留用户改过的变换；用户删掉的 key 在 rev 不变时不再放回；带 `link` 的条目随被链接条目平移。
 

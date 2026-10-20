@@ -10,16 +10,21 @@ use crate::Secret;
 use base64::Engine;
 use std::io::Write;
 use std::time::Duration;
-use todo_production::{ChatRequest, ChatRole, ImageRequest};
+use todo_production::{ChatRole, ImageRequest, LanguageRequest};
 
 /// The toolkit's `MISHI_IMAGE_TIMEOUT` default.
 pub const IMAGE_HEAD_TIMEOUT: Duration = Duration::from_secs(300);
+/// Longest a whole image request may take, head and body. Some gateways send
+/// the head early and then keep the connection alive with filler for as long
+/// as they like; the per-chunk idle timeout never fires then. Reference
+/// (edit) requests measured about 400 s.
+pub const IMAGE_TOTAL_TIMEOUT: Duration = Duration::from_secs(720);
 
-fn auth(key: &Secret) -> (&'static str, String) {
+pub(super) fn auth(key: &Secret) -> (&'static str, String) {
     ("Authorization", format!("Bearer {}", key.expose()))
 }
 
-pub fn chat_body(request: &ChatRequest) -> serde_json::Value {
+pub fn chat_body(request: &LanguageRequest) -> serde_json::Value {
     let messages: Vec<_> = request
         .messages
         .iter()
@@ -51,6 +56,9 @@ pub struct ChatParser {
     pending: Vec<u8>,
     raw: Vec<u8>,
     pub text: String,
+    /// `reasoning_content` of reasoning models (DeepSeek flash); used only
+    /// when the visible `content` stays empty.
+    pub reasoning: String,
     pub done: bool,
     saw_event: bool,
 }
@@ -77,11 +85,19 @@ impl ChatParser {
                 .as_str()
                 .unwrap_or_default()
                 .to_owned();
+            self.reasoning = value["choices"][0]["message"]["reasoning_content"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
         } else if !self.done {
             return Err(AttemptError::new(
                 ErrorClass::Transient,
                 "chat stream ended early",
             ));
+        }
+        if self.text.trim().is_empty() {
+            // Reasoning models may answer entirely in `reasoning_content`.
+            std::mem::swap(&mut self.text, &mut self.reasoning);
         }
         if self.text.trim().is_empty() {
             return Err(AttemptError::new(
@@ -106,6 +122,9 @@ impl ChatParser {
             if let Some(piece) = value["choices"][0]["delta"]["content"].as_str() {
                 self.text.push_str(piece);
             }
+            if let Some(piece) = value["choices"][0]["delta"]["reasoning_content"].as_str() {
+                self.reasoning.push_str(piece);
+            }
             if value["choices"][0]["finish_reason"].is_string() {
                 self.done = true;
             }
@@ -117,7 +136,7 @@ pub async fn chat(
     http: &Http,
     base_url: &str,
     key: &Secret,
-    request: &ChatRequest,
+    request: &LanguageRequest,
 ) -> Result<Outcome, AttemptError> {
     let mut response = http
         .send(Request {
@@ -235,7 +254,47 @@ pub fn parse_image_result(body: &[u8]) -> Result<ImageResult, AttemptError> {
     ))
 }
 
-/// The billed step. Its failures after sending are ambiguous.
+/// `multipart/form-data` for `images/edits`: the text fields of
+/// [`image_body`] plus every reference picture as `image[]`.
+pub fn edit_body(
+    request: &ImageRequest,
+    strategy: Option<&str>,
+    boundary: &str,
+) -> Result<Vec<u8>, AttemptError> {
+    let mut body = Vec::new();
+    let fields = image_body(request, strategy);
+    for (name, value) in fields.as_object().into_iter().flatten() {
+        let text = match value {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        let _ = write!(
+            body,
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{text}\r\n"
+        );
+    }
+    for (index, path) in request.references.iter().enumerate() {
+        let bytes = std::fs::read(path).map_err(|e| {
+            AttemptError::new(ErrorClass::Invalid, format!("参考图 {path} 读不到：{e}"))
+        })?;
+        let mime = if path.to_ascii_lowercase().ends_with(".png") {
+            "image/png"
+        } else {
+            "image/jpeg"
+        };
+        let _ = write!(
+            body,
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"image[]\"; filename=\"ref{index}.png\"\r\nContent-Type: {mime}\r\n\r\n"
+        );
+        body.extend_from_slice(&bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+    let _ = write!(body, "--{boundary}--\r\n");
+    Ok(body)
+}
+
+/// The billed step. Its failures after sending are ambiguous. With reference
+/// pictures this is an `images/edits` request (the result keeps their look).
 pub async fn submit_image(
     http: &Http,
     base_url: &str,
@@ -243,12 +302,48 @@ pub async fn submit_image(
     request: &ImageRequest,
     strategy: Option<&str>,
 ) -> Result<ImageResult, AttemptError> {
+    match tokio::time::timeout(
+        IMAGE_TOTAL_TIMEOUT,
+        submit_image_once(http, base_url, key, request, strategy),
+    )
+    .await
+    {
+        Ok(result) => result,
+        // Sent and maybe generated: the outcome is unknown, never retried blindly.
+        Err(_) => Err(AttemptError::new(
+            ErrorClass::Ambiguous,
+            format!("no complete image within {IMAGE_TOTAL_TIMEOUT:?}"),
+        )),
+    }
+}
+
+async fn submit_image_once(
+    http: &Http,
+    base_url: &str,
+    key: &Secret,
+    request: &ImageRequest,
+    strategy: Option<&str>,
+) -> Result<ImageResult, AttemptError> {
+    let (url, content_type, body) = if request.references.is_empty() {
+        (
+            format!("{base_url}/v1/images/generations"),
+            "application/json".to_owned(),
+            serde_json::to_vec(&image_body(request, strategy)).expect("json"),
+        )
+    } else {
+        let boundary = "todo-edit-boundary-7d1f3a9c";
+        (
+            format!("{base_url}/v1/images/edits"),
+            format!("multipart/form-data; boundary={boundary}"),
+            edit_body(request, strategy, boundary)?,
+        )
+    };
     let mut response = http
         .send(Request {
             method: reqwest::Method::POST,
-            url: format!("{base_url}/v1/images/generations"),
-            headers: vec![auth(key), ("Content-Type", "application/json".into())],
-            body: Some(serde_json::to_vec(&image_body(request, strategy)).expect("json")),
+            url,
+            headers: vec![auth(key), ("Content-Type", content_type)],
+            body: Some(body),
             head_timeout: IMAGE_HEAD_TIMEOUT,
             paid: true,
         })
@@ -389,7 +484,7 @@ mod tests {
 
     #[test]
     fn bodies() {
-        let chat = chat_body(&ChatRequest {
+        let chat = chat_body(&LanguageRequest {
             model: "gpt-6-astra".into(),
             messages: vec![ChatMessage {
                 role: ChatRole::System,
@@ -408,6 +503,8 @@ mod tests {
                 quality: None,
                 transparent: true,
                 variant: 3,
+                references: Vec::new(),
+                reference_digests: Vec::new(),
             },
             Some("price_first"),
         );

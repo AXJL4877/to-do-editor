@@ -85,6 +85,12 @@ pub struct Recovered {
     pub to: TaskState,
 }
 
+/// See [`Journal::claim`].
+#[derive(Debug)]
+pub struct TaskClaim {
+    _file: fs::File,
+}
+
 pub struct Journal {
     directory: PathBuf,
     records: HashMap<TaskKey, TaskRecord>,
@@ -115,6 +121,7 @@ impl Journal {
             skipped: Vec::new(),
         };
         let entries = fs::read_dir(&journal.directory).map_err(|e| io(&journal.directory, e))?;
+        let mut legacy = Vec::new();
         for entry in entries {
             let path = entry.map_err(|e| io(&journal.directory, e))?.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
@@ -125,15 +132,29 @@ impl Journal {
                 .and_then(|bytes| serde_json::from_slice::<TaskRecord>(&bytes).ok())
                 .filter(|record| {
                     record.version == RECORD_VERSION
-                        && record.spec.key() == record.key
                         && path.file_stem().and_then(|s| s.to_str()) == Some(record.key.as_str())
                 });
             match record {
-                Some(record) => {
+                Some(record) if record.spec.key() == record.key => {
                     journal.records.insert(record.key.clone(), record);
                 }
-                None => journal.skipped.push(path),
+                // Written under the old key (reference paths included).
+                Some(record) if record.spec.legacy_key() == record.key => {
+                    legacy.push((path, record));
+                }
+                _ => journal.skipped.push(path),
             }
+        }
+        // Move old records to their key; a finished one wins over the rest.
+        legacy.sort_by_key(|(_, record)| record.state != TaskState::Done);
+        for (path, mut record) in legacy {
+            let key = record.spec.key();
+            if !journal.records.contains_key(&key) {
+                record.key = key.clone();
+                journal.persist(&record)?;
+                journal.records.insert(key, record);
+            }
+            let _ = fs::remove_file(&path);
         }
         let mut recovered = Vec::new();
         let interrupted: Vec<TaskKey> = journal
@@ -187,8 +208,14 @@ impl Journal {
     }
 
     /// The record of `spec`, created as `Pending` when it does not exist yet.
+    /// An existing record takes the newest spec: the same request may name
+    /// its reference pictures by other paths now (another working directory),
+    /// and a rerun must send files that still exist.
     pub fn ensure(&mut self, spec: &TaskSpec, now: u64) -> Result<&TaskRecord, JournalError> {
         let key = spec.key();
+        if self.records.get(&key).is_some_and(|record| record.spec != *spec) {
+            self.update(&key, now, |record| record.spec = spec.clone())?;
+        }
         if !self.records.contains_key(&key) {
             let record = TaskRecord {
                 version: RECORD_VERSION,
@@ -252,6 +279,50 @@ impl Journal {
 
     fn path(&self, key: &TaskKey) -> PathBuf {
         self.directory.join(format!("{key}.json"))
+    }
+
+    /// Read `key`'s record again from disk: another process sharing this
+    /// journal (the editor and a command-line run) may have moved it on.
+    /// A newer record, or a finished one, replaces what is in memory.
+    pub fn refresh(&mut self, key: &TaskKey) {
+        let Some(disk) = fs::read(self.path(key))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<TaskRecord>(&bytes).ok())
+            .filter(|record| {
+                record.version == RECORD_VERSION && record.key == *key && record.spec.key() == *key
+            })
+        else {
+            return;
+        };
+        let newer = match self.records.get(key) {
+            None => true,
+            Some(mine) => {
+                disk.updated_at > mine.updated_at
+                    || (disk.state == TaskState::Done && mine.state != TaskState::Done)
+            }
+        };
+        if newer {
+            self.records.insert(key.clone(), disk);
+        }
+    }
+
+    /// Exclusive right to work on `key` across processes, or `None` while
+    /// another process works on it. Released when the claim drops (or the
+    /// process dies).
+    pub fn claim(&self, key: &TaskKey) -> Option<TaskClaim> {
+        let dir = self.directory.join(".claims");
+        fs::create_dir_all(&dir).ok()?;
+        let path = dir.join(format!("{key}.lock"));
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .ok()?;
+        match file.try_lock() {
+            Ok(()) => Some(TaskClaim { _file: file }),
+            Err(_) => None,
+        }
     }
 
     fn persist(&self, record: &TaskRecord) -> Result<(), JournalError> {

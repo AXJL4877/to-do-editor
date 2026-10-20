@@ -23,6 +23,11 @@ pub(crate) struct Productions {
     /// Production → the batch the editor last rejected, so it is not retried
     /// on every report.
     rejected: BTreeMap<String, String>,
+    /// Generated clips reached the editor while another save was on disk:
+    /// save again once it lands, or a reopen would see them as deleted.
+    pub(super) resave: bool,
+    /// Library names for generated files being registered (path → name).
+    pub(super) adopt_names: BTreeMap<String, String>,
 }
 
 impl Workspace {
@@ -91,6 +96,16 @@ impl Workspace {
             .effects
             .splice(0..0, tasks.into_iter().map(Effect::Production));
         update
+    }
+
+    /// Put back the production's clips the user deleted from the timeline.
+    pub fn restore_production(&mut self, id: &str) -> AppUpdate {
+        let Some(session) = self.productions.sessions.get_mut(id) else {
+            return AppUpdate::default();
+        };
+        session.restore_deleted();
+        self.productions.rejected.remove(id);
+        self.advance_productions()
     }
 
     /// Forget a production (its clips stay on the timeline).
@@ -203,6 +218,9 @@ impl Workspace {
                     && !self.productions.unadoptable.contains(file)
                 {
                     adopt.push(file.clone());
+                    if let Some(name) = session.media_name(file) {
+                        self.productions.adopt_names.insert(file.clone(), name);
+                    }
                 }
             }
             if plan.is_empty() {
@@ -213,9 +231,16 @@ impl Workspace {
                 if self.productions.rejected.get(&id) == Some(&signature) {
                     continue;
                 }
-                let result = editor.apply(EditorCommand::Edit(EditCommand::ApplyGenerated(
-                    plan.edits.clone(),
-                )));
+                let mut edits = plan.edits.clone();
+                let copies = crate::control::motions::missing_motions(
+                    editor.project(),
+                    &self.motions,
+                    plan.edits.iter().flat_map(|edit| edit.motions()),
+                );
+                if !copies.is_empty() {
+                    edits.push(todo_core::GeneratedEdit::AddMotions(copies));
+                }
+                let result = editor.apply(EditorCommand::Edit(EditCommand::ApplyGenerated(edits)));
                 if let Some(error) = result.error.clone() {
                     self.productions.rejected.insert(id.clone(), signature);
                     editor.notice(Status::Domain(error));
@@ -255,8 +280,12 @@ impl Workspace {
         }
         // Generated clips are only safe once the project file has them: the
         // production remembers what it placed, and a later open must agree.
-        if placed_any && self.saves.is_empty() {
-            update.effects.extend(self.save(AfterSave::Stay).effects);
+        if placed_any {
+            if self.saves.is_empty() {
+                update.effects.extend(self.save(AfterSave::Stay).effects);
+            } else {
+                self.productions.resave = true;
+            }
         }
         update
     }

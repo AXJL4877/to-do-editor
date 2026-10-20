@@ -26,6 +26,8 @@ pub const TEXT_CLIP_SELECTED: Color32 = Color32::from_rgb(0xb0, 0x5c, 0xb5);
 pub const CLIP_TEXT: Color32 = Color32::from_rgb(0xe5, 0xf2, 0xff);
 pub const AUDIO_TEXT: Color32 = Color32::from_rgb(0xe4, 0xff, 0xf5);
 pub const DANGER: Color32 = Color32::from_rgb(0xf0, 0x76, 0x76);
+pub const SUCCESS: Color32 = Color32::from_rgb(0x6e, 0xc4, 0x86);
+pub const WARN: Color32 = Color32::from_rgb(0xe0, 0xa8, 0x4c);
 
 pub struct Colors {
     pub bg: Color32,
@@ -90,7 +92,10 @@ fn load_cjk_font() -> Option<Vec<u8>> {
 }
 
 fn apply_visuals(ctx: &Context) {
-    let mut style = (*ctx.style()).clone();
+    // The editor is dark only. Without this egui follows a light system
+    // theme and draws stock widgets (text fields, combo boxes) light.
+    ctx.set_theme(egui::Theme::Dark);
+    let mut style = (*ctx.style_of(egui::Theme::Dark)).clone();
     style.visuals.dark_mode = true;
     style.visuals.window_fill = BG;
     style.visuals.panel_fill = BG;
@@ -127,7 +132,7 @@ fn apply_visuals(ctx: &Context) {
     ] {
         widget.corner_radius = CornerRadius::ZERO;
     }
-    ctx.set_style(style);
+    ctx.set_style_of(egui::Theme::Dark, style);
 }
 
 #[derive(Clone, Copy)]

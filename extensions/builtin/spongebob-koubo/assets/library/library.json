@@ -1,0 +1,283 @@
+[
+ {
+  "id": "krabs-explain",
+  "kind": "cast",
+  "name": "蟹老板·讲解",
+  "desc": "举起一只钳子讲道理，自信",
+  "file": "krabs-explain.png",
+  "width": 713,
+  "height": 1024
+ },
+ {
+  "id": "krabs-worried",
+  "kind": "cast",
+  "name": "蟹老板·发愁",
+  "desc": "冒汗、钳子紧握，担心",
+  "file": "krabs-worried.png",
+  "width": 516,
+  "height": 1024
+ },
+ {
+  "id": "krabs-shock",
+  "kind": "cast",
+  "name": "蟹老板·震惊",
+  "desc": "眼睛弹出、张大嘴",
+  "file": "krabs-shock.png",
+  "width": 686,
+  "height": 1024
+ },
+ {
+  "id": "krabs-money",
+  "kind": "cast",
+  "name": "蟹老板·抱钱袋",
+  "desc": "抱着钱袋，贪财得意",
+  "file": "krabs-money.png",
+  "width": 658,
+  "height": 1024
+ },
+ {
+  "id": "spongebob-happy",
+  "kind": "cast",
+  "name": "海绵宝宝·开心",
+  "desc": "大笑挥手",
+  "file": "spongebob-happy.png",
+  "width": 804,
+  "height": 1024
+ },
+ {
+  "id": "spongebob-think",
+  "kind": "cast",
+  "name": "海绵宝宝·思考",
+  "desc": "手托下巴想问题",
+  "file": "spongebob-think.png",
+  "width": 713,
+  "height": 1024
+ },
+ {
+  "id": "spongebob-sad",
+  "kind": "cast",
+  "name": "海绵宝宝·难过",
+  "desc": "垂头丧气、流泪",
+  "file": "spongebob-sad.png",
+  "width": 661,
+  "height": 1024
+ },
+ {
+  "id": "spongebob-point",
+  "kind": "cast",
+  "name": "海绵宝宝·指向",
+  "desc": "兴奋地指向一侧",
+  "file": "spongebob-point.png",
+  "width": 906,
+  "height": 1024
+ },
+ {
+  "id": "patrick-confused",
+  "kind": "cast",
+  "name": "派大星·困惑",
+  "desc": "挠头，不明白",
+  "file": "patrick-confused.png",
+  "width": 617,
+  "height": 1024
+ },
+ {
+  "id": "patrick-happy",
+  "kind": "cast",
+  "name": "派大星·开心",
+  "desc": "举起双手咧嘴笑",
+  "file": "patrick-happy.png",
+  "width": 681,
+  "height": 1024
+ },
+ {
+  "id": "squidward-annoyed",
+  "kind": "cast",
+  "name": "章鱼哥·不耐烦",
+  "desc": "抱臂翻白眼",
+  "file": "squidward-annoyed.png",
+  "width": 329,
+  "height": 1024
+ },
+ {
+  "id": "fish-customer",
+  "kind": "cast",
+  "name": "鱼顾客",
+  "desc": "普通比奇堡居民，好奇",
+  "file": "fish-customer.png",
+  "width": 332,
+  "height": 1024
+ },
+ {
+  "id": "shell-coins",
+  "kind": "prop",
+  "name": "贝壳币",
+  "desc": "一堆金贝壳，代表钱",
+  "file": "shell-coins.png",
+  "width": 1024,
+  "height": 944,
+  "size": "small"
+ },
+ {
+  "id": "sign-blank",
+  "kind": "prop",
+  "name": "空白木牌",
+  "desc": "可配牌面字",
+  "file": "sign-blank.png",
+  "width": 925,
+  "height": 1024,
+  "size": "medium"
+ },
+ {
+  "id": "clock",
+  "kind": "prop",
+  "name": "闹钟",
+  "desc": "时间、期限",
+  "file": "clock.png",
+  "width": 690,
+  "height": 893,
+  "size": "small"
+ },
+ {
+  "id": "abacus",
+  "kind": "prop",
+  "name": "算盘",
+  "desc": "算账、计算成本",
+  "file": "abacus.png",
+  "width": 899,
+  "height": 1024,
+  "size": "small"
+ },
+ {
+  "id": "magnifier",
+  "kind": "prop",
+  "name": "放大镜",
+  "desc": "仔细看、找问题",
+  "file": "magnifier.png",
+  "width": 906,
+  "height": 1024,
+  "size": "small"
+ },
+ {
+  "id": "mark-x",
+  "kind": "prop",
+  "name": "红叉",
+  "desc": "错误、否定",
+  "float": true,
+  "file": "mark-x.png",
+  "width": 1005,
+  "height": 1024,
+  "size": "small"
+ },
+ {
+  "id": "mark-arrow",
+  "kind": "prop",
+  "name": "红箭头",
+  "desc": "指向、变化",
+  "float": true,
+  "file": "mark-arrow.png",
+  "width": 1024,
+  "height": 648,
+  "size": "small"
+ },
+ {
+  "id": "mark-question",
+  "kind": "prop",
+  "name": "问号",
+  "desc": "疑问",
+  "float": true,
+  "file": "mark-question.png",
+  "width": 673,
+  "height": 1024,
+  "size": "small"
+ },
+ {
+  "id": "lightbulb",
+  "kind": "prop",
+  "name": "灯泡",
+  "desc": "想到了、恍然大悟",
+  "float": true,
+  "file": "lightbulb.png",
+  "width": 851,
+  "height": 1024,
+  "size": "small"
+ },
+ {
+  "id": "scale",
+  "kind": "prop",
+  "name": "天平",
+  "desc": "权衡、比较",
+  "file": "scale.png",
+  "width": 1024,
+  "height": 961,
+  "size": "medium"
+ },
+ {
+  "id": "chart-down",
+  "kind": "prop",
+  "name": "下跌图表",
+  "desc": "亏损、变差",
+  "file": "chart-down.png",
+  "width": 612,
+  "height": 952,
+  "size": "medium"
+ },
+ {
+  "id": "chart-up",
+  "kind": "prop",
+  "name": "上涨图表",
+  "desc": "赚钱、变好",
+  "file": "chart-up.png",
+  "width": 663,
+  "height": 820,
+  "size": "medium"
+ },
+ {
+  "id": "ticket",
+  "kind": "prop",
+  "name": "票",
+  "desc": "门票、已经付出的钱",
+  "file": "ticket.png",
+  "width": 1024,
+  "height": 719,
+  "size": "small"
+ },
+ {
+  "id": "krabby-patty",
+  "kind": "prop",
+  "name": "蟹黄堡",
+  "desc": "商品、食物",
+  "file": "krabby-patty.png",
+  "width": 896,
+  "height": 822,
+  "size": "small"
+ },
+ {
+  "id": "trash-can",
+  "kind": "prop",
+  "name": "垃圾桶",
+  "desc": "扔掉、放弃",
+  "file": "trash-can.png",
+  "width": 537,
+  "height": 927,
+  "size": "medium"
+ },
+ {
+  "id": "money-bag",
+  "kind": "prop",
+  "name": "钱袋",
+  "desc": "钱、投入",
+  "file": "money-bag.png",
+  "width": 726,
+  "height": 977,
+  "size": "small"
+ },
+ {
+  "id": "plate-grass",
+  "kind": "plate",
+  "name": "比奇堡草地背景",
+  "desc": "全片背景板",
+  "file": "plate-grass.jpg",
+  "width": 1920,
+  "height": 1080
+ }
+]

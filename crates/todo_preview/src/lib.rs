@@ -1,6 +1,6 @@
 //! Talk to `native/build/bin/preview_host.exe` over stdin/stdout.
 //!
-//! Line protocol: path/seek/transport/audio/hwnd/size-screen/quit, plus
+//! Line protocol: path/seek/transport/audio/hwnd/size-screen/clip/quit, plus
 //! `aspect` and `layout` (the current host may ignore those two).
 //!
 //! # Stdin
@@ -35,9 +35,10 @@ mod viewport;
 
 pub use host::{resolve_host_exe, PreviewHost};
 pub use protocol::{
-    AlignGuide, AudioClip, AudioClock, ClockSample, HostEvent, LayerKind, LayoutRect,
+    AlignGuide, AudioClip, AudioClock, ClipRect, ClockSample, HostEvent, LayerKind, LayoutRect,
     PreviewBounds, PreviewLayer, PreviewPointerKind, ScreenSlot, TransformGizmo, VisualTransform,
-    CLOCK_STALE, HOST_RELATIVE, MAX_ALIGN_GUIDES, MAX_AUDIO_CLIPS, MAX_PREVIEW_LAYERS,
+    CLOCK_STALE, HOST_RELATIVE, MAX_ALIGN_GUIDES, MAX_AUDIO_CLIPS, MAX_CLIP_RECTS,
+    MAX_PREVIEW_LAYERS,
 };
 pub use render::OfflineRenderer;
 pub use viewport::{PreviewNavigation, PreviewNavigationKind, PreviewViewport};

@@ -1,0 +1,143 @@
+[
+  {
+    "id": "fade", "name": "淡入", "kind": "intro", "duration": 0.4, "tags": ["基础"],
+    "channels": { "opacity": [{ "t": 0, "v": 0 }, { "t": 1, "v": 1, "ease": "out" }] }
+  },
+  {
+    "id": "rise", "name": "上浮", "kind": "intro", "duration": 0.4, "tags": ["基础"],
+    "channels": {
+      "opacity": [{ "t": 0, "v": 0 }, { "t": 0.5, "v": 1 }],
+      "y": [{ "t": 0, "v": 0.06 }, { "t": 1, "v": 0, "ease": "out" }]
+    }
+  },
+  {
+    "id": "pop", "name": "弹出", "kind": "intro", "duration": 0.3, "tags": ["基础", "卡通"],
+    "channels": {
+      "opacity": [{ "t": 0, "v": 0 }, { "t": 0.33333333, "v": 1 }],
+      "scale": [{ "t": 0, "v": 0.6 }, { "t": 1, "v": 1, "ease": "backOut" }]
+    }
+  },
+  {
+    "id": "slideLeft", "name": "左侧滑入", "kind": "intro", "duration": 0.4, "tags": ["基础"],
+    "channels": {
+      "opacity": [{ "t": 0, "v": 0 }, { "t": 0.5, "v": 1 }],
+      "x": [{ "t": 0, "v": -0.25 }, { "t": 1, "v": 0, "ease": "out" }]
+    }
+  },
+  {
+    "id": "slideRight", "name": "右侧滑入", "kind": "intro", "duration": 0.4, "tags": ["基础"],
+    "channels": {
+      "opacity": [{ "t": 0, "v": 0 }, { "t": 0.5, "v": 1 }],
+      "x": [{ "t": 0, "v": 0.25 }, { "t": 1, "v": 0, "ease": "out" }]
+    }
+  },
+  {
+    "id": "drop", "name": "落下弹跳", "kind": "intro", "duration": 0.6, "tags": ["卡通"],
+    "channels": {
+      "opacity": [{ "t": 0, "v": 0 }, { "t": 0.25, "v": 1 }],
+      "y": [{ "t": 0, "v": -0.15 }, { "t": 1, "v": 0, "ease": "bounceOut" }]
+    }
+  },
+  {
+    "id": "stamp", "name": "盖章", "kind": "intro", "duration": 0.35, "tags": ["卡通", "强调"],
+    "channels": {
+      "opacity": [{ "t": 0, "v": 0 }, { "t": 0.25, "v": 1 }],
+      "scale": [
+        { "t": 0, "v": 1.3 }, { "t": 0.7, "v": 1, "ease": "in" },
+        { "t": 0.85, "v": 0.97, "ease": "out" }, { "t": 1, "v": 1, "ease": "in" }
+      ]
+    }
+  },
+  {
+    "id": "grow", "name": "放大出现", "kind": "intro", "duration": 0.4, "tags": ["基础"],
+    "channels": { "scale": [{ "t": 0, "v": 0.01 }, { "t": 1, "v": 1, "ease": "out" }] }
+  },
+  {
+    "id": "fadeOut", "name": "淡出", "kind": "outro", "duration": 0.4, "tags": ["基础"],
+    "channels": { "opacity": [{ "t": 0, "v": 1 }, { "t": 1, "v": 0, "ease": "smooth" }] }
+  },
+  {
+    "id": "shrinkOut", "name": "缩小消失", "kind": "outro", "duration": 0.3, "tags": ["基础", "卡通"],
+    "channels": {
+      "opacity": [{ "t": 0.5, "v": 1 }, { "t": 1, "v": 0 }],
+      "scale": [{ "t": 0, "v": 1 }, { "t": 1, "v": 0.6, "ease": "in" }]
+    }
+  },
+  {
+    "id": "sinkOut", "name": "下沉消失", "kind": "outro", "duration": 0.35, "tags": ["基础"],
+    "channels": {
+      "opacity": [{ "t": 0.4, "v": 1 }, { "t": 1, "v": 0 }],
+      "y": [{ "t": 0, "v": 0 }, { "t": 1, "v": 0.06, "ease": "in" }]
+    }
+  },
+  {
+    "id": "slideOutLeft", "name": "向左滑出", "kind": "outro", "duration": 0.35, "tags": ["基础"],
+    "channels": {
+      "opacity": [{ "t": 0.5, "v": 1 }, { "t": 1, "v": 0 }],
+      "x": [{ "t": 0, "v": 0 }, { "t": 1, "v": -0.25, "ease": "in" }]
+    }
+  },
+  {
+    "id": "slideOutRight", "name": "向右滑出", "kind": "outro", "duration": 0.35, "tags": ["基础"],
+    "channels": {
+      "opacity": [{ "t": 0.5, "v": 1 }, { "t": 1, "v": 0 }],
+      "x": [{ "t": 0, "v": 0 }, { "t": 1, "v": 0.25, "ease": "in" }]
+    }
+  },
+  {
+    "id": "popOut", "name": "弹出消失", "kind": "outro", "duration": 0.3, "tags": ["卡通"],
+    "channels": {
+      "opacity": [{ "t": 0.6, "v": 1 }, { "t": 1, "v": 0 }],
+      "scale": [{ "t": 0, "v": 1 }, { "t": 0.3, "v": 1.08, "ease": "out" }, { "t": 1, "v": 0.2, "ease": "in" }]
+    }
+  },
+  {
+    "id": "dissolve", "name": "叠化", "kind": "transition", "duration": 0.15, "tags": ["基础"],
+    "description": "入画方淡入、出画方保持不透明；适合满幅画面。",
+    "channels": { "opacity": [{ "t": 0, "v": 0 }, { "t": 1, "v": 1, "ease": "smooth" }] },
+    "outgoing": {}
+  },
+  {
+    "id": "crossfade", "name": "交叉淡化", "kind": "transition", "duration": 0.3, "tags": ["基础"],
+    "description": "双方同时淡入淡出；适合透明抠像叠在同一背景上。",
+    "channels": { "opacity": [{ "t": 0, "v": 0 }, { "t": 1, "v": 1, "ease": "smooth" }] },
+    "outgoing": { "opacity": [{ "t": 0, "v": 1 }, { "t": 1, "v": 0, "ease": "smooth" }] }
+  },
+  {
+    "id": "dip", "name": "淡出淡入", "kind": "transition", "duration": 0.5, "tags": ["基础"],
+    "description": "先淡出到下层，再淡入新画面。",
+    "channels": { "opacity": [{ "t": 0.5, "v": 0 }, { "t": 1, "v": 1, "ease": "smooth" }] },
+    "outgoing": { "opacity": [{ "t": 0, "v": 1 }, { "t": 0.5, "v": 0, "ease": "smooth" }] }
+  },
+  {
+    "id": "pushLeft", "name": "向左推", "kind": "transition", "duration": 0.4, "tags": ["运动"],
+    "channels": { "x": [{ "t": 0, "v": 1 }, { "t": 1, "v": 0, "ease": "inOut" }] },
+    "outgoing": { "x": [{ "t": 0, "v": 0 }, { "t": 1, "v": -1, "ease": "inOut" }] }
+  },
+  {
+    "id": "pushRight", "name": "向右推", "kind": "transition", "duration": 0.4, "tags": ["运动"],
+    "channels": { "x": [{ "t": 0, "v": -1 }, { "t": 1, "v": 0, "ease": "inOut" }] },
+    "outgoing": { "x": [{ "t": 0, "v": 0 }, { "t": 1, "v": 1, "ease": "inOut" }] }
+  },
+  {
+    "id": "coverLeft", "name": "从右覆盖", "kind": "transition", "duration": 0.35, "tags": ["运动"],
+    "channels": { "x": [{ "t": 0, "v": 1 }, { "t": 1, "v": 0, "ease": "out" }] },
+    "outgoing": {}
+  },
+  {
+    "id": "coverRight", "name": "从左覆盖", "kind": "transition", "duration": 0.35, "tags": ["运动"],
+    "channels": { "x": [{ "t": 0, "v": -1 }, { "t": 1, "v": 0, "ease": "out" }] },
+    "outgoing": {}
+  },
+  {
+    "id": "zoomIn", "name": "推近叠化", "kind": "transition", "duration": 0.4, "tags": ["运动"],
+    "channels": {
+      "opacity": [{ "t": 0, "v": 0 }, { "t": 1, "v": 1, "ease": "smooth" }],
+      "scale": [{ "t": 0, "v": 0.85 }, { "t": 1, "v": 1, "ease": "out" }]
+    },
+    "outgoing": {
+      "opacity": [{ "t": 0, "v": 1 }, { "t": 1, "v": 0, "ease": "smooth" }],
+      "scale": [{ "t": 0, "v": 1 }, { "t": 1, "v": 1.15, "ease": "in" }]
+    }
+  }
+]

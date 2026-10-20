@@ -3,6 +3,7 @@
 mod action;
 mod clipboard;
 pub mod control;
+pub mod director;
 mod editor;
 mod effect;
 mod event;
@@ -23,8 +24,9 @@ pub use effect::{Effect, MediaTask, ProjectTask, Ticket};
 pub use event::{AppEvent, MediaOutput, ProjectOutput};
 pub use media_jobs::{AssetRequest, PeakStrip, PeaksCache};
 pub use productions::{
-    LocalRunId, Pcm16, ProductionOutput, ProductionSession, ProductionSetup, ProductionStatus,
-    ProductionTask, Recipe, StatusNode, StatusState, TaskState,
+    FailedWork, FailureStatus, LocalRunId, Pcm16, ProductionOutput, ProductionSession,
+    ProductionSetup, ProductionStatus, ProductionTask, Recipe, StageKind, StageStatus, StatusNode,
+    StatusState, TaskState,
 };
 pub use projects::{AppUpdate, Route, Workspace};
 pub use text_rasters::TextRaster;

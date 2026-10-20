@@ -279,6 +279,21 @@ fn raw_groups(sentences_raw: &[serde_json::Value]) -> Vec<Vec<Word>> {
 /// Sentences → phrases (split after `，、；：`) → characters (multi-character
 /// tokens share their time evenly). Raw sentence groups are preferred; plain
 /// word lists are grouped at sentence-ending punctuation.
+/// The narration timeline of one speech result: provider timestamps laid
+/// onto the text that was sent, then re-timed and snapped to the audio.
+/// Shared by the narration recipe and the `speech` service of workers.
+pub fn speech_timeline(
+    spoken: &str,
+    sentences_raw: &[serde_json::Value],
+    words: &[Word],
+    pcm: Pcm,
+) -> Timeline {
+    let mut timeline = build_timeline(spoken, sentences_raw, words);
+    timeline.retime(pcm);
+    let _ = timeline.snap_sentence_edges(pcm);
+    timeline
+}
+
 pub fn build_timeline(text: &str, sentences_raw: &[serde_json::Value], words: &[Word]) -> Timeline {
     let mut groups = raw_groups(sentences_raw);
     let from_raw = !groups.is_empty();

@@ -1,6 +1,7 @@
 //! Provider adapters. Each call is one attempt; retrying, pausing and the
 //! journal belong to the service.
 pub mod huniu;
+pub mod vision;
 pub mod volc;
 
 use crate::artifacts::{ArtifactError, ArtifactRef};

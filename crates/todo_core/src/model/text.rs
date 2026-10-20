@@ -324,6 +324,11 @@ pub fn text_raster_digest(
 /// the project so documents render the same after presets change.
 pub fn builtin_text_styles() -> Vec<TextStyle> {
     let color = |hex: &str| TextColor::parse(hex).expect("builtin color");
+    let sans = || FontRef {
+        family: "Noto Sans SC Bold".into(),
+        file: "noto-sans-sc-bold.otf".into(),
+        fallbacks: vec!["source-han-serif-sc-heavy.ttf".into()],
+    };
     let layer = |kind, paint, offset, scale, blur, opacity, erode| TextLayer {
         kind,
         paint,
@@ -334,7 +339,7 @@ pub fn builtin_text_styles() -> Vec<TextStyle> {
         erode,
     };
     vec![
-        // Reference look (s00_intro1_hold.png): worn grey echo, soft shadow, red brush ink.
+        // Reference look (docs/assets/s00_intro1_hold.png): worn grey echo, soft shadow, red brush ink.
         TextStyle {
             id: DEFAULT_TEXT_STYLE_ID.into(),
             name: "做旧红字·灰重影".into(),
@@ -415,6 +420,341 @@ pub fn builtin_text_styles() -> Vec<TextStyle> {
                         to: color("#FFE08A"),
                         angle: 0.0,
                     },
+                    [0.0, 0.0],
+                    1.0,
+                    0.0,
+                    1.0,
+                    None,
+                ),
+            ],
+        },
+        // Short-video subtitle (reference: 什么是诱饵效应): pure white, heavy black edge.
+        TextStyle {
+            id: "subtitle-white-heavy".into(),
+            name: "字幕·白字粗黑边".into(),
+            font: sans(),
+            layers: vec![
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Solid(color("#00000099")),
+                    [0.03, 0.04],
+                    1.0,
+                    0.04,
+                    1.0,
+                    None,
+                ),
+                layer(
+                    TextLayerKind::Stroke { width: 0.13 },
+                    TextPaint::Solid(color("#000000")),
+                    [0.0, 0.0],
+                    1.0,
+                    0.0,
+                    1.0,
+                    None,
+                ),
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Solid(color("#FFFFFF")),
+                    [0.0, 0.0],
+                    1.0,
+                    0.0,
+                    1.0,
+                    None,
+                ),
+            ],
+        },
+        // Sign and callout lettering: gold fill, thick black edge.
+        TextStyle {
+            id: "label-gold".into(),
+            name: "牌面·金字黑边".into(),
+            font: sans(),
+            layers: vec![
+                layer(
+                    TextLayerKind::Stroke { width: 0.14 },
+                    TextPaint::Solid(color("#000000")),
+                    [0.0, 0.0],
+                    1.0,
+                    0.0,
+                    1.0,
+                    None,
+                ),
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Solid(color("#FFD34D")),
+                    [0.0, 0.0],
+                    1.0,
+                    0.0,
+                    1.0,
+                    None,
+                ),
+            ],
+        },
+        // Opening title: red brush ink over a light rim and a grey echo.
+        TextStyle {
+            id: "title-red-brush".into(),
+            name: "标题·毛笔红字".into(),
+            font: FontRef {
+                family: "字魂剑气手书".into(),
+                file: "jianqi-shoushu.ttf".into(),
+                fallbacks: vec!["source-han-serif-sc-heavy.ttf".into()],
+            },
+            layers: vec![
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Solid(color("#8C8C8C")),
+                    [0.018, 0.02],
+                    1.0,
+                    0.004,
+                    1.0,
+                    None,
+                ),
+                layer(
+                    TextLayerKind::Stroke { width: 0.045 },
+                    TextPaint::Solid(color("#EFEADC")),
+                    [0.0, 0.0],
+                    1.0,
+                    0.0,
+                    1.0,
+                    None,
+                ),
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Solid(color("#E01B1B")),
+                    [0.0, 0.0],
+                    1.0,
+                    0.0,
+                    1.0,
+                    None,
+                ),
+            ],
+        },
+        // Explainer subtitle (reference 什么是诱饵效应): rounded hand-lettered
+        // white with a heavy black edge.
+        TextStyle {
+            id: "subtitle-kuaile".into(),
+            name: "字幕·圆体白字粗黑边".into(),
+            font: FontRef {
+                family: "站酷快乐体".into(),
+                file: "zcool-kuaile.ttf".into(),
+                fallbacks: vec!["noto-sans-sc-bold.otf".into()],
+            },
+            layers: vec![
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Solid(color("#00000088")),
+                    [0.03, 0.05],
+                    1.0,
+                    0.04,
+                    1.0,
+                    None,
+                ),
+                layer(
+                    TextLayerKind::Stroke { width: 0.16 },
+                    TextPaint::Solid(color("#000000")),
+                    [0.0, 0.0],
+                    1.0,
+                    0.0,
+                    1.0,
+                    None,
+                ),
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Solid(color("#FFFFFF")),
+                    [0.0, 0.0],
+                    1.0,
+                    0.0,
+                    1.0,
+                    None,
+                ),
+            ],
+        },
+        // A line worth a black card of its own: white brush calligraphy.
+        TextStyle {
+            id: "quote-white-brush".into(),
+            name: "金句·白色毛笔".into(),
+            font: FontRef {
+                family: "马善政毛笔".into(),
+                file: "mashanzheng.ttf".into(),
+                fallbacks: vec!["source-han-serif-sc-heavy.ttf".into()],
+            },
+            layers: vec![
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Solid(color("#FFFFFF33")),
+                    [0.0, 0.0],
+                    1.0,
+                    0.06,
+                    1.0,
+                    None,
+                ),
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Solid(color("#FFFFFF")),
+                    [0.0, 0.0],
+                    1.0,
+                    0.0,
+                    1.0,
+                    None,
+                ),
+            ],
+        },
+        // The uplift line on black: warm yellow brush with an amber glow and a
+        // deep amber offset for depth (a stroke would vanish on black).
+        TextStyle {
+            id: "quote-yellow-brush".into(),
+            name: "升华·黄色毛笔".into(),
+            font: FontRef {
+                family: "马善政毛笔".into(),
+                file: "mashanzheng.ttf".into(),
+                fallbacks: vec!["source-han-serif-sc-heavy.ttf".into()],
+            },
+            layers: vec![
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Solid(color("#FFB30066")),
+                    [0.0, 0.0],
+                    1.0,
+                    0.09,
+                    1.0,
+                    None,
+                ),
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Solid(color("#7A4A00")),
+                    [0.025, 0.035],
+                    1.0,
+                    0.0,
+                    0.95,
+                    None,
+                ),
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Linear {
+                        from: color("#FFF07A"),
+                        to: color("#FFB81C"),
+                        angle: 0.0,
+                    },
+                    [0.0, 0.0],
+                    1.0,
+                    0.0,
+                    1.0,
+                    None,
+                ),
+            ],
+        },
+        // The uplift line over a blurred picture: red brush ink with a warm
+        // white rim and a soft dark shadow, legible on any colour.
+        TextStyle {
+            id: "sublime-red-brush".into(),
+            name: "升华·红色毛笔".into(),
+            font: FontRef {
+                family: "马善政毛笔".into(),
+                file: "mashanzheng.ttf".into(),
+                fallbacks: vec!["source-han-serif-sc-heavy.ttf".into()],
+            },
+            layers: vec![
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Solid(color("#000000B3")),
+                    [0.02, 0.035],
+                    1.0,
+                    0.07,
+                    1.0,
+                    None,
+                ),
+                layer(
+                    TextLayerKind::Stroke { width: 0.07 },
+                    TextPaint::Solid(color("#FFF3E0")),
+                    [0.0, 0.0],
+                    1.0,
+                    0.0,
+                    1.0,
+                    None,
+                ),
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Linear {
+                        from: color("#FF4A3A"),
+                        to: color("#C40F12"),
+                        angle: 0.0,
+                    },
+                    [0.0, 0.0],
+                    1.0,
+                    0.0,
+                    1.0,
+                    Some(TextErode {
+                        amount: 0.05,
+                        scale: 0.02,
+                        seed: 11,
+                    }),
+                ),
+            ],
+        },
+        // A keyword slammed onto the scene: big gold lettering, thick edge.
+        TextStyle {
+            id: "slam-gold".into(),
+            name: "大字·金色冲击".into(),
+            font: FontRef {
+                family: "站酷快乐体".into(),
+                file: "zcool-kuaile.ttf".into(),
+                fallbacks: vec!["noto-sans-sc-bold.otf".into()],
+            },
+            layers: vec![
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Solid(color("#00000099")),
+                    [0.04, 0.06],
+                    1.0,
+                    0.03,
+                    1.0,
+                    None,
+                ),
+                layer(
+                    TextLayerKind::Stroke { width: 0.14 },
+                    TextPaint::Solid(color("#3A1A00")),
+                    [0.0, 0.0],
+                    1.0,
+                    0.0,
+                    1.0,
+                    None,
+                ),
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Linear {
+                        from: color("#FFF27A"),
+                        to: color("#FFB000"),
+                        angle: 0.0,
+                    },
+                    [0.0, 0.0],
+                    1.0,
+                    0.0,
+                    1.0,
+                    None,
+                ),
+            ],
+        },
+        // Closing card: white heavy serif with a soft shadow.
+        TextStyle {
+            id: "title-white-serif".into(),
+            name: "结尾·白色宋体".into(),
+            font: FontRef {
+                family: "思源宋 Heavy".into(),
+                file: "source-han-serif-sc-heavy.ttf".into(),
+                fallbacks: vec!["noto-sans-sc-bold.otf".into()],
+            },
+            layers: vec![
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Solid(color("#000000AA")),
+                    [0.04, 0.05],
+                    1.0,
+                    0.05,
+                    1.0,
+                    None,
+                ),
+                layer(
+                    TextLayerKind::Fill,
+                    TextPaint::Solid(color("#FFFFFF")),
                     [0.0, 0.0],
                     1.0,
                     0.0,

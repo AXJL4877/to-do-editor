@@ -1,7 +1,7 @@
 use egui::{Align, Layout, RichText, Ui};
 use todo_interaction::{EditorViewModel, Intent};
 
-use super::{ai_settings, chrome, export, production, project_settings};
+use super::{agent, ai_settings, chrome, export, production, project_settings};
 use crate::theme::{button, Btn, BORDER, BRAND, COLORS, MUTED, TEXT};
 
 pub fn draw(ui: &mut Ui, vm: &EditorViewModel) -> Vec<Intent> {
@@ -63,11 +63,28 @@ pub fn draw(ui: &mut Ui, vm: &EditorViewModel) -> Vec<Intent> {
         {
             ai_settings::set_open(ui, true);
         }
-        if button(ui, "AI 成片", Btn::Normal, true)
-            .on_hover_text("打开 AI 成片扩展与任务面板")
+        let agent_kind = if agent::is_open(ui.ctx()) {
+            Btn::Tool { active: true }
+        } else {
+            Btn::Normal
+        };
+        if button(ui, "Agent", agent_kind, true)
+            .on_hover_text("打开内置 Agent：读取工程、剪辑并审核节目帧")
             .clicked()
         {
-            production::set_open(ui, true);
+            agent::toggle(ui.ctx());
+        }
+        let dock = production::is_open(ui.ctx());
+        let kind = if dock {
+            Btn::Tool { active: true }
+        } else {
+            Btn::Normal
+        };
+        if button(ui, "工作流", kind, true)
+            .on_hover_text("在右侧打开工作流列表；~ 全屏编辑")
+            .clicked()
+        {
+            production::toggle(ui.ctx());
         }
         if button(ui, "导出", Btn::Normal, true)
             .on_hover_text("导出当前时间轴并生成质量报告")

@@ -1,6 +1,16 @@
 # 共用编辑能力层 v1
 
-入口：`todo_application::control`，由 `Workspace::control_context()` 和 `Workspace::control(ControlRequest)` 提供。用于后续内置助手、外部 AI、脚本和自动化适配器。当前实现不包含模型连接、聊天 UI、HTTP/MCP 服务。
+入口：`todo_application::control`，由 `Workspace::control_context()` 和 `Workspace::control(ControlRequest)` 提供。桌面应用通过本机 Agent Bridge（见 [Agent Bridge v1](agent-bridge.md)）把这套协议提供给外部 Agent；application 层本身仍不包含模型连接、HTTP/MCP 或文件 I/O。
+
+## 只读能力（给 agent 的两只眼睛）
+
+| 能力 | 协议 / 入口 | 用途 |
+| --- | --- | --- |
+| 工程几何 | `ControlCommand::Describe { at }` → `ControlResult::Document` | 每个元素的 `z`、时间、`transform`、`effective`（含入场/出场曲线）、`rect`（像素与归一化）、文字字号、`visible`、`warnings` |
+| 画面像素 | `todo_app::adapters::frame::render_frames`，或 `cargo run -p todo_app --example render_frame -- <project> <dir> <t>…` | 用离线渲染器出节目帧 PNG，agent 直接看图判断对不对 |
+
+两者都不修改工程：几何是纯计算，画面走 `preview_host.exe --render`（与窗口预览同一套层与着色器）。
+`rect` 口径：素材按显示宽高比 aspect-fit 到画布、居中，再乘 `scale × scaleX/Y` 并加 `x/y` 偏移；文字框按字号与字数估算，标 `estimated: true`。
 
 ## 调用约定
 
@@ -60,7 +70,7 @@ ClipRef 可为 `{ "type": "id", "id": "已有片段ID" }`，或上例的 created
 | apply_edits | edits, dryRun（默认 false） | 步骤回执及整体 changed |
 | undo / redo | 无 | 是否发生内容变化 |
 
-编辑类型为 place_media、move_clips、trim_clip、split、delete_clips、add_track、set_transform、add_text、set_text。add_text 参数为 trackId（可空）、timelineStart、duration、content；set_text 参数为 clip 和 content。content 即工程中的 `TextContent`，内置样式 id 会在首次使用时复制进工程，格式见 [花字层标准](text-layer.md)。移动、删除的 clips 为 ClipRef 数组；linked 布尔值明确是否展开关联对象。trim_clip 的 edge 为 in/out，linked 明确是否同步裁切。split 始终包含关联片段，人工 EditCommand::Split 保留显式选择行为。set_transform 使用完整 core Transform；画面位置、缩放和不透明度沿用现有数据约定。
+编辑类型为 place_media、move_clips、trim_clip、split、delete_clips、add_track、set_transform、add_text、set_text。add_text 参数为 trackId（可空）、timelineStart、duration、content，以及可选的完整 `transform`；set_text 参数为 clip 和 content。content 即工程中的 `TextContent`，内置样式 id 会在首次使用时复制进工程，格式见 [花字层标准](text-layer.md)。移动、删除的 clips 为 ClipRef 数组；linked 布尔值明确是否展开关联对象。trim_clip 的 edge 为 in/out，linked 明确是否同步裁切。split 始终包含关联片段，人工 EditCommand::Split 保留显式选择行为。set_transform 使用完整 core Transform；画面位置、缩放和不透明度沿用现有数据约定。
 
 move_clips 优先使用指定轨道，目标区间被占用时复用同类型空闲轨道，必要时新增轨道。未指定轨道的成员优先保留原轨道；关联音视频使用相同时间位移，各自避开轨道冲突。原来同轨道的选中片段作为一组分配，保留内部间距；clips 中第一个片段所在分组优先获得目标轨道。锁定的源轨道或显式目标轨道仍使整个步骤失败。实际落点与新增轨道通过 updatedClips / createdTrackIds 返回。
 

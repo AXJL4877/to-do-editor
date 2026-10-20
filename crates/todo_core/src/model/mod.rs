@@ -8,7 +8,7 @@ pub mod text;
 pub mod track;
 
 pub use clip::{Clip, ClipSource, ClipTransform, MediaSource};
-pub use effects::{intro_at, ClipAudio, ClipOrigin, Intro, IntroKind, IntroSample};
+pub use effects::{ClipAudio, ClipOrigin, Intro, MotionRef, VisibleSpan};
 pub use folder::MediaFolder;
 pub use media::{AlphaPacking, MediaItem, MediaKind};
 pub use project::{MediaScaleMode, Project};

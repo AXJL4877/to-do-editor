@@ -29,7 +29,9 @@ pub use model::clip::{
     clip_end, normalize_clip, source_span, text_clip, MAX_CLIP_RATE, MIN_CLIP_DURATION,
     MIN_CLIP_RATE,
 };
-pub use model::effects::{intro_at, picture_transform};
+pub use model::effects::{
+    apply_motion, find_motion, intro_sample, outro_sample, picture_transform,
+};
 pub use model::media::{
     is_image_media, is_video_media, is_visual_media, media_kind, place_duration, RevealHand,
     RevealInfo, DEFAULT_STILL_DURATION_SECS,
@@ -44,17 +46,21 @@ pub use model::text::{
 pub use model::track::create_default_tracks;
 pub use model::{
     AlphaPacking, Clip, ClipAudio, ClipOrigin, ClipSource, ClipTransform, FontRef, Intro,
-    IntroKind, IntroSample, MediaFolder, MediaItem, MediaKind, MediaScaleMode, MediaSource,
-    Project, TextAlign, TextAnimation, TextColor, TextContent, TextErode, TextFrame, TextIntro,
-    TextLayer, TextLayerKind, TextLayout, TextPaint, TextStyle, Track, TrackKind,
+    MediaFolder, MediaItem, MediaKind, MediaScaleMode, MediaSource, MotionRef, Project, TextAlign,
+    TextAnimation, TextColor, TextContent, TextErode, TextFrame, TextIntro, TextLayer,
+    TextLayerKind, TextLayout, TextPaint, TextStyle, Track, TrackKind, VisibleSpan,
 };
 pub use query::project::{content_duration, project_duration, timeline_extent, workspace_duration};
 pub use query::{
-    can_move_clips, can_place_media, clip_display_name, export_layers, find_clip, linked_clip_ids,
-    resolve_audio_clips, resolve_layers, resolve_preview, reveal_frame, reveal_hand, FoundClip,
-    HandLayer, HitSource, PreviewHit, ResolvedAudioClip, RevealFrame, MAX_DECODED_LAYERS,
-    MAX_PREVIEW_LAYERS, MAX_TEXT_LAYERS,
+    adjacent_predecessor, can_move_clips, can_place_media, clip_display_name, export_layers,
+    find_clip, hit_transform, linked_clip_ids, resolve_audio_clips, resolve_layers,
+    resolve_preview, reveal_frame, reveal_hand, transition_is_active, visible_hits, FoundClip,
+    HandLayer, HitSource, PreviewHit, ResolvedAudioClip, RevealFrame, TransitionPhase,
+    ADJACENT_EPSILON, MAX_DECODED_LAYERS, MAX_PREVIEW_LAYERS, MAX_TEXT_LAYERS,
 };
+/// The motion module, re-exported for layers that only depend on core.
+pub use todo_motion as motion;
+pub use todo_motion::{MotionKind, MotionPreset, MotionSample};
 pub use transform::{BaseSize, Transform, TransformBounds};
 
 #[cfg(test)]

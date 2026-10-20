@@ -100,3 +100,24 @@ pub(crate) fn lookup(faces: &[Face<'_>], ch: char) -> (usize, GlyphId) {
         })
         .unwrap_or((0, GlyphId(0)))
 }
+
+/// The family name a font file declares: the Simplified Chinese name when it
+/// has one, else the first readable one.
+pub fn family_name(bytes: &[u8]) -> Option<String> {
+    let face = Face::parse(bytes, 0).ok()?;
+    let mut names: Vec<(bool, String)> = face
+        .names()
+        .into_iter()
+        .filter(|name| {
+            name.name_id == ttf_parser::name_id::TYPOGRAPHIC_FAMILY
+                || name.name_id == ttf_parser::name_id::FAMILY
+        })
+        .filter_map(|name| {
+            let chinese = name.is_unicode() && name.language_id == 0x0804;
+            Some((chinese, name.to_string()?))
+        })
+        .filter(|(_, text)| !text.trim().is_empty())
+        .collect();
+    names.sort_by_key(|(chinese, _)| !chinese);
+    names.into_iter().next().map(|(_, text)| text.trim().to_owned())
+}

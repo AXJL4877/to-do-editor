@@ -9,7 +9,7 @@ use todo_application::{
     AppEvent, MediaOutput, MediaTask, ProjectOutput, ProjectTask, TextRaster, Ticket,
 };
 use todo_media::{MediaService, RasterRequest, TextRasterizer};
-use todo_storage::ProjectStore;
+use todo_storage::{ProjectLock, ProjectStore};
 
 pub struct Workers {
     projects: Sender<(Ticket, ProjectTask)>,
@@ -32,8 +32,11 @@ impl Workers {
         let project_root = repo.clone();
         thread::spawn(move || {
             let store = ProjectStore::new(project_root);
+            // The open project, held against other processes until another
+            // one opens or the editor exits.
+            let mut held = None;
             while let Ok((ticket, task)) = project_rx.recv() {
-                let result = run_project(&store, task);
+                let result = run_project(&store, &mut held, task);
                 if tx.send(AppEvent::Project { ticket, result }).is_err() {
                     break;
                 }
@@ -115,7 +118,11 @@ impl Workers {
     }
 }
 
-fn run_project(store: &ProjectStore, task: ProjectTask) -> Result<ProjectOutput, String> {
+fn run_project(
+    store: &ProjectStore,
+    held: &mut Option<ProjectLock>,
+    task: ProjectTask,
+) -> Result<ProjectOutput, String> {
     match task {
         ProjectTask::List => store
             .list()
@@ -123,25 +130,50 @@ fn run_project(store: &ProjectStore, task: ProjectTask) -> Result<ProjectOutput,
             .map_err(|e| e.to_string()),
         ProjectTask::Create { name } => store
             .create(&name)
-            .map(|project| ProjectOutput::Opened { name, project })
-            .map_err(|e| e.to_string()),
-        ProjectTask::Load { name } => store
-            .load(&name)
-            .map(|project| ProjectOutput::Opened { name, project })
-            .map_err(|e| e.to_string()),
+            .map_err(|e| e.to_string())
+            .and_then(|project| {
+                hold(store, held, &name)?;
+                Ok(ProjectOutput::Opened { name, project })
+            }),
+        ProjectTask::Load { name } => {
+            // Another program (a command-line production) may be writing it.
+            hold(store, held, &name)?;
+            store
+                .load(&name)
+                .map(|project| ProjectOutput::Opened { name, project })
+                .map_err(|e| e.to_string())
+        }
         ProjectTask::Save { name, project } => store
             .save(&name, &project)
             .map(|()| ProjectOutput::Saved(project))
             .map_err(|e| e.to_string()),
-        ProjectTask::Delete { name } => store
-            .delete(&name)
-            .map(|()| ProjectOutput::Deleted)
-            .map_err(|e| e.to_string()),
+        ProjectTask::Delete { name } => {
+            if held.as_ref().is_some_and(|lock| lock.name() == name) {
+                *held = None;
+            }
+            store
+                .delete(&name)
+                .map(|()| ProjectOutput::Deleted)
+                .map_err(|e| e.to_string())
+        }
         ProjectTask::Import { name, path } => std::fs::read(path)
             .map_err(|e| e.to_string())
             .and_then(|bytes| store.import_json(&name, &bytes).map_err(|e| e.to_string()))
-            .map(|project| ProjectOutput::Opened { name, project }),
+            .and_then(|project| {
+                hold(store, held, &name)?;
+                Ok(ProjectOutput::Opened { name, project })
+            }),
     }
+}
+
+/// Hold `name` instead of the project held before. A project another
+/// process holds is refused; the previous one stays held then.
+fn hold(store: &ProjectStore, held: &mut Option<ProjectLock>, name: &str) -> Result<(), String> {
+    if held.as_ref().is_some_and(|lock| lock.name() == name) {
+        return Ok(());
+    }
+    *held = Some(store.lock(name).map_err(|e| e.to_string())?);
+    Ok(())
 }
 
 fn media_worker(

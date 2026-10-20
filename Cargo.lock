@@ -3636,13 +3636,15 @@ dependencies = [
  "todo_ai",
  "todo_application",
  "todo_core",
- "todo_extensions",
  "todo_interaction",
  "todo_media",
+ "todo_motion",
  "todo_preview",
  "todo_production",
  "todo_storage",
+ "todo_text",
  "todo_ui",
+ "todo_workflow",
 ]
 
 [[package]]
@@ -3661,19 +3663,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "todo_extensions"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "todo_process",
- "todo_production",
- "uuid",
- "zip",
+ "todo_motion",
 ]
 
 [[package]]
@@ -3699,6 +3689,15 @@ dependencies = [
  "todo_process",
  "todo_storage",
  "todo_text",
+ "uuid",
+]
+
+[[package]]
+name = "todo_motion"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
  "uuid",
 ]
 
@@ -3760,6 +3759,19 @@ dependencies = [
  "todo_application",
  "todo_core",
  "todo_interaction",
+]
+
+[[package]]
+name = "todo_workflow"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "todo_process",
+ "todo_production",
+ "uuid",
+ "zip",
 ]
 
 [[package]]

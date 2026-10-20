@@ -12,5 +12,7 @@
 | --- | --- | --- |
 | `source-han-serif-sc-heavy.ttf` | 思源宋 Heavy（SIL OFL） | 内置样式 `grunge-red-echo` |
 | `noto-sans-sc-bold.otf` | Noto Sans SC Bold（SIL OFL） | 字幕与缺字回退 |
+| `zcool-kuaile.ttf` | 站酷快乐体 ZCOOL KuaiLe（SIL OFL，google/fonts） | 内置样式 `subtitle-kuaile`（口播字幕） |
+| `mashanzheng.ttf` | 马善政毛笔 Ma Shan Zheng（SIL OFL，google/fonts） | 内置样式 `quote-white-brush`（黑底金句） |
 
 **授权：** 内置样式只使用 SIL Open Font License 字体。许可证文本随字体发行包提供；不再把需要另行商用授权的字魂字体放进安装包。

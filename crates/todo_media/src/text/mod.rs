@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use todo_core::TransformBounds;
 use todo_text::{measure, render, FontLibrary, RasterRequest, TextBlock};
 
+mod catalog;
+pub use catalog::{font_catalog, font_preview, style_preview, FontFile, FontRecord, FONT_MANIFEST};
+
 /// Bumped when rasterizer output changes so stale cached PNGs are not reused.
 const RENDER_VERSION: u32 = 1;
 
@@ -67,9 +70,19 @@ fn bounds(block: TextBlock) -> TransformBounds {
     }
 }
 
-/// `TODO_FONTS_DIR` (`;`-separated), the packaged `dependencies/fonts`, then the
-/// Windows font folder for fallbacks such as Microsoft YaHei.
+/// [`packaged_font_dirs`], then the Windows font folder for fallbacks such as
+/// Microsoft YaHei.
 pub fn font_dirs(root: &Path) -> Vec<PathBuf> {
+    let mut dirs = packaged_font_dirs(root);
+    let windows =
+        std::env::var_os("WINDIR").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+    dirs.push(windows.join("Fonts"));
+    dirs
+}
+
+/// The font library proper: `TODO_FONTS_DIR` (`;`-separated), then the
+/// packaged `dependencies/fonts`.
+pub fn packaged_font_dirs(root: &Path) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = std::env::var("TODO_FONTS_DIR")
         .ok()
         .map(|raw| {
@@ -81,9 +94,6 @@ pub fn font_dirs(root: &Path) -> Vec<PathBuf> {
         })
         .unwrap_or_default();
     dirs.push(root.join("dependencies").join("fonts"));
-    let windows =
-        std::env::var_os("WINDIR").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
-    dirs.push(windows.join("Fonts"));
     dirs
 }
 

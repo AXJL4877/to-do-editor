@@ -1,4 +1,6 @@
-mod adapters;
+// The adapters live in the library target (they are shared with offline tests);
+// reusing them here keeps the binary from compiling a second copy.
+pub(crate) use todo_app::adapters;
 mod runtime;
 use eframe::egui;
 fn main() -> eframe::Result<()> {

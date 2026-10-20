@@ -11,6 +11,19 @@ pub fn media_files() -> Option<Vec<PathBuf>> {
         )
         .pick_files()
 }
+
+/// Workflow media_bin: text + audio + video + images.
+pub fn workflow_bin_files() -> Option<Vec<PathBuf>> {
+    rfd::FileDialog::new()
+        .add_filter(
+            "素材",
+            &[
+                "txt", "md", "mp3", "wav", "m4a", "ogg", "flac", "aac", "mp4", "mov", "webm",
+                "mkv", "png", "jpg", "jpeg", "webp", "bmp",
+            ],
+        )
+        .pick_files()
+}
 pub fn project_file() -> Option<PathBuf> {
     rfd::FileDialog::new()
         .add_filter("工程 JSON", &["json"])

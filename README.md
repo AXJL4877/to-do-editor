@@ -15,7 +15,7 @@ to_do/
     todo_storage      local project documents and atomic persistence
     todo_preview      preview_host.exe protocol
     todo_ai           durable chat/image/speech service tasks and artifact cache
-    todo_extensions   extension registry, worker pool, budgets and checks
+    todo_workflow     workflow packages: registry, worker pool, budgets, graph
     todo_production   production documents, timing, items and placement rules
     todo_app          eframe host + wiring
   dependencies/       packaged native media tools (FFmpeg / FFprobe) and text fonts
@@ -91,16 +91,18 @@ protocol. The standard-library SDK is in `extensions/sdk/python`; before enablin
 run its manifest and worker self-check:
 
 ```powershell
-cargo run -p todo_extensions --example check_extension -- extensions/builtin/chalk-hand
+cargo run -p todo_workflow --example check_extension -- extensions/builtin/chalk-hand
 ```
 
-The worker receives a fenced work directory. Chat, image and speech requests are deduplicated
+The worker receives a fenced work directory. Language, image, video, multimodal and audio requests are deduplicated
 by their task fingerprint and recover from the durable AI journal after a restart. Paid online
 probe or generation commands are intentionally separate from the offline checks above.
 
 Open **AI 成片** from the editor toolbar to inspect the built-in extension cards. The panel
 reports missing credentials and missing worker files; **AI 设置** stores non-secret configuration
 atomically and writes API keys through the Windows credential store.
+Modules and extensions call the capability-first `AiRouter`; provider adapters remain inside
+`todo_ai`. See [the AI router contract](docs/architecture/ai-router.md).
 
 Media processing runs directly in Rust workers. No Node/npm installation, local
 HTTP server, or backend port is required for builds, tests or startup. FFmpeg and
@@ -218,14 +220,16 @@ Folder ownership and extension rules: [项目文件夹分工](docs/architecture/
 
 `todo_application::control` exposes transport-independent context queries,
 library imports with job receipts, source-range placement, sequential atomic edit
-batches, dry runs, and undo/redo. Built-in assistants and external AI adapters can
-share this API. Hosts execute the returned `AppUpdate` through their existing
-effect handler; no model connection or HTTP/MCP server is started.
+batches, dry runs, and undo/redo. The desktop app now exposes the same contract to
+a local Agent through the JSONL Agent Bridge. Hosts execute the returned `AppUpdate`
+through their existing effect handler, and `render_preview` returns PNG frames from
+the same renderer used by the program monitor.
 
 ```powershell
 cargo run -p todo_application --example control
 ```
 
 Protocol, integration rules and JSON examples: [共用编辑能力层](docs/architecture/shared-control.md).
+Agent discovery, JSONL requests and preview review: [Agent Bridge v1](docs/architecture/agent-bridge.md).
 
 Native media layout and runtime behavior: [Rust 媒体处理](docs/architecture/native-media.md).

@@ -10,18 +10,27 @@ pub use presentation::ai_settings::{
     normalize_base_url, AiSettingsError, AiSettingsView, AvailableModelView, KeySource,
     ModelCapability, ProxyChoice,
 };
+pub use presentation::assets::{
+    assets_view, font_preview_key, panel_styles, style_preview_key, AssetsInput, AssetsView,
+    FontCard, FontInput, MotionCard, MotionOrigin, MotionPose, MotionTarget, StyleCard,
+    FONT_SAMPLE, STYLE_SAMPLE,
+};
+pub use todo_core::MotionKind;
 pub use presentation::production::{
-    production_view, production_view_with_document, when_visible, ChoiceView, ElementView,
-    ExtensionCardView, ExtensionStatus, FailureView, ParamInput, ParamValue, ParamView,
-    ProductionNodeStatus, ProductionNodeView, ProductionPanelView, ProductionView, ScriptView,
-    SegmentView, VariantView,
+    paint_workflow_panel, production_view, production_view_with_document, when_visible, ChoiceView,
+    ElementView, ExtensionCardView, ExtensionStatus, FlowNodeView, ParamInput, ParamValue,
+    ParamView, ProblemAction, ProblemView, ProductionNodeStatus, ProductionPanelView,
+    ProductionView, ScriptView, SegmentView, StageView, VariantView, WorkflowEdgeView,
+    WorkflowEntryView, WorkflowMediaFileView, WorkflowNodeView, WorkflowPanelView,
+    WorkflowParamFieldView,
 };
 pub use presentation::{
     fmt_clock, fmt_ruler_tick, fmt_tick, status_text, tick_step, wave_span, AlignGuideView,
     ClipProperties, ClipView, DropPreview, EditorViewModel, ExplorerNode, FolderNodeView,
     LibraryEntryView, LibraryFolderView, LibraryItemView, LibraryMediaView, LibraryViewModel,
-    MarqueeView, MoveTargetView, PreviewView, SourceProperties, StyleOption, TextProperties, Tick,
-    TimelineViewModel, TrackView, Viewport,
+    MarqueeView, MotionOption, MotionProperties, MotionSlot, MoveTargetView, PreviewView,
+    SourceProperties, StyleOption, TextProperties, Tick,
+    TimelineViewModel, TrackView, TransitionMark, Viewport,
 };
 pub use preview_viewport::{
     PreviewProjection, PreviewViewport, PREVIEW_ZOOM_MAX, PREVIEW_ZOOM_MIN,
@@ -36,7 +45,7 @@ pub use timeline::{
 pub use todo_application::ProductionEdit;
 pub use todo_application::{AssetRequest, CloseChoice, MonitorPane, PeakStrip, PeaksCache};
 pub use todo_core::{
-    ClipTransform, MediaKind, MediaScaleMode, TextAlign, TextContent, TextIntro, TrackKind,
+    ClipTransform, MediaKind, MediaScaleMode, MotionRef, TextAlign, TextContent, TextIntro, TrackKind,
     Transform, TransformBounds, TrimEdge,
 };
 pub use todo_production::production::ElementPatch;

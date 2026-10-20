@@ -33,6 +33,12 @@ pub enum DomainError {
     InvalidText(String),
     InvalidTextStyle(String),
     TextStyleNotFound(String),
+    /// No motion preset of the required kind has this id.
+    MotionNotFound(String),
+    InvalidMotion(String),
+    /// A transition needs a clip ending where this one starts.
+    NoAdjacentClip(String),
+    InvalidAudio,
 }
 
 impl DomainError {
@@ -64,6 +70,10 @@ impl DomainError {
             Self::InvalidText(_) => "invalid_text",
             Self::InvalidTextStyle(_) => "invalid_text_style",
             Self::TextStyleNotFound(_) => "text_style_not_found",
+            Self::MotionNotFound(_) => "motion_not_found",
+            Self::InvalidMotion(_) => "invalid_motion",
+            Self::NoAdjacentClip(_) => "no_adjacent_clip",
+            Self::InvalidAudio => "invalid_audio",
         }
     }
 }

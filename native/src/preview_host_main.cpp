@@ -27,6 +27,9 @@
 
 static HWND g_popup = nullptr;
 static HWND g_owner = nullptr;
+// Popup-local rectangles left transparent so editor menus and tooltips that
+// overlap the preview stay visible (the popup sits above its owner).
+static std::vector<RECT> g_clip;
 static HWND g_msg = nullptr;
 static std::wstring g_media_path;
 static double g_seek_sec = 0;
@@ -269,12 +272,50 @@ static void CmdHwnd(const std::string& arg) {
   }
 }
 
+static void ApplyClip() {
+  if (!g_popup || !IsWindow(g_popup)) return;
+  if (g_clip.empty()) {
+    SetWindowRgn(g_popup, nullptr, TRUE);
+    return;
+  }
+  RECT rc{};
+  GetWindowRect(g_popup, &rc);
+  HRGN region = CreateRectRgn(0, 0, rc.right - rc.left, rc.bottom - rc.top);
+  if (!region) return;
+  for (const RECT& cut : g_clip) {
+    HRGN hole = CreateRectRgn(cut.left, cut.top, cut.right, cut.bottom);
+    if (!hole) continue;
+    CombineRgn(region, region, hole, RGN_DIFF);
+    DeleteObject(hole);
+  }
+  // The system owns the region after a successful call.
+  if (!SetWindowRgn(g_popup, region, TRUE)) DeleteObject(region);
+}
+
+// clip <count> (<x> <y> <w> <h>)*: popup-local physical pixels.
+static void CmdClip(const std::string& arg) {
+  std::istringstream input(arg);
+  size_t count = 0;
+  if (!(input >> count) || count > 16) return;
+  std::vector<RECT> rects;
+  rects.reserve(count);
+  for (size_t i = 0; i < count; ++i) {
+    int x = 0, y = 0, w = 0, h = 0;
+    if (!(input >> x >> y >> w >> h) || w <= 0 || h <= 0) return;
+    rects.push_back(RECT{x, y, x + w, y + h});
+  }
+  g_clip = std::move(rects);
+  ApplyClip();
+}
+
 // x,y,w,h are physical screen pixels from Electron screen.dipToScreenRect.
 static void PlacePopup(int x, int y, int w, int h, int visible) {
   w = (std::max)(1, w);
   h = (std::max)(1, h);
   EnsurePreviewClass();
+  bool created = false;
   if (!g_popup || !IsWindow(g_popup)) {
+    created = true;
     g_popup = CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
         kClassName,
@@ -288,11 +329,18 @@ static void PlacePopup(int x, int y, int w, int h, int visible) {
   }
   if (!g_popup) return;
   const bool show = visible && w > 1 && h > 1;
+  RECT before{};
+  GetWindowRect(g_popup, &before);
   SetWindowPos(
       g_popup,
       HWND_TOP,
       x, y, w, h,
       SWP_NOACTIVATE | (show ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+  // A region is in window coordinates: rebuild it when the size changes.
+  if (!g_clip.empty() &&
+      (created || before.right - before.left != w || before.bottom - before.top != h)) {
+    ApplyClip();
+  }
   BindPresenterIfReady();
   g_presenter.resize(w, h);
   if (!PresentStack()) g_presenter.clear();
@@ -544,6 +592,7 @@ static void HandleLine(const std::string& line) {
   else if (cmd == "guides") CmdGuides(arg);
   else if (cmd == "viewport") CmdViewport(arg);
   else if (cmd == "size-screen") CmdSizeScreen(arg);
+  else if (cmd == "clip") CmdClip(arg);
   else if (cmd == "layers-begin") {
     g_pending_layers.clear();
     g_layers_configuring = true;

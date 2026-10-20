@@ -16,6 +16,6 @@ pub mod work;
 pub use production::{PackRef, Production, SplitMode, PRODUCTION_SPEC};
 pub use segment::{CastMember, Limits, Outline, Unit};
 pub use tasks::{
-    Capability, ChatMessage, ChatRequest, ChatRole, ImageRequest, Provider, SpeechRequest, TaskKey,
-    TaskRequest, TaskSpec, TASK_SPEC_VERSION,
+    AudioRequest, Capability, ChatMessage, ChatRole, ImageRequest, LanguageRequest,
+    MultimodalRequest, Provider, TaskKey, TaskRequest, TaskSpec, VideoRequest, TASK_SPEC_VERSION,
 };

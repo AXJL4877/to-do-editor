@@ -1,3 +1,5 @@
+mod lock;
+
 use std::{fs, io, path::PathBuf};
 
 use todo_core::{create_project, Project};
@@ -7,6 +9,7 @@ use crate::{
     filesystem::{atomic, paths},
     project_document, StorageError,
 };
+pub use lock::ProjectLock;
 
 #[derive(Debug, Clone)]
 pub struct ProjectStore {
@@ -75,18 +78,31 @@ impl ProjectStore {
         Ok(media)
     }
 
-    /// Save an existing project. A late save cannot recreate a deleted project.
+    /// Take the project for this process: no other process may save or
+    /// delete it until the lock drops. Fails with `Busy` while another
+    /// process holds it.
+    pub fn lock(&self, name: &str) -> Result<ProjectLock, StorageError> {
+        let name = paths::normalize_name(name)?;
+        let data = paths::data_dir(&self.repo_root, true)?
+            .ok_or_else(|| StorageError::UnsafePath(self.repo_root.join("data")))?;
+        lock::acquire(&data, &name)
+    }
+
+    /// Save an existing project. A late save cannot recreate a deleted project,
+    /// and a project another process holds is never written.
     pub fn save(&self, name: &str, project: &Project) -> Result<(), StorageError> {
         let name = paths::normalize_name(name)?;
         let bytes = project_document::encode(project)?;
-        let path = self.existing_project(&name)?.join("project.json");
-        atomic::write(&path, &bytes)
+        let directory = self.existing_project(&name)?;
+        self.writable(&name)?;
+        atomic::write(&directory.join("project.json"), &bytes)
     }
 
     /// Retain the complete directory, including its media, under data/.trash.
     pub fn delete(&self, name: &str) -> Result<(), StorageError> {
         let name = paths::normalize_name(name)?;
         let project = self.existing_project(&name)?;
+        self.writable(&name)?;
         let data = project
             .parent()
             .ok_or_else(|| StorageError::UnsafePath(project.clone()))?;
@@ -107,6 +123,16 @@ impl ProjectStore {
         let bytes = project_document::encode(&project)?;
         self.create_document(&name, &bytes)?;
         Ok(project)
+    }
+
+    fn writable(&self, name: &str) -> Result<(), StorageError> {
+        let Some(data) = paths::data_dir(&self.repo_root, false)? else {
+            return Ok(());
+        };
+        match lock::holder(&data, name)? {
+            lock::Holder::Other(who) => Err(StorageError::Busy(name.to_owned(), who)),
+            lock::Holder::Nobody | lock::Holder::ThisProcess => Ok(()),
+        }
     }
 
     fn existing_project(&self, name: &str) -> Result<PathBuf, StorageError> {

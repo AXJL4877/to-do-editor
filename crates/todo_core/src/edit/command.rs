@@ -6,8 +6,9 @@ use super::{
 use crate::{
     add_track, clip_end, compact_tracks, delete_clips, delete_track, find_clip, insert_track_below,
     linked_clip_ids, move_track, place_media, place_media_range, razor_clips, set_media_scale_mode,
-    set_project_duration, set_project_fps, set_project_output_size, validate_project, DomainError,
-    MediaScaleMode, Project, TextContent, TrackKind, Transform, TrimEdge,
+    set_project_duration, set_project_fps, set_project_output_size, validate_project, ClipAudio,
+    DomainError, MediaScaleMode, MotionPreset, MotionRef, Project, TextContent, TrackKind,
+    Transform, TrimEdge,
 };
 
 /// Semantic project edits; no input-device or layout concepts cross this boundary.
@@ -130,6 +131,32 @@ pub enum EditCommand {
     },
     /// One progressive-placement batch of an AI production.
     ApplyGenerated(Vec<super::GeneratedEdit>),
+    /// Copy library presets into the project before clips use them.
+    AddMotions {
+        presets: Vec<MotionPreset>,
+    },
+    SetIntro {
+        clip_id: String,
+        intro: Option<MotionRef>,
+    },
+    SetOutro {
+        clip_id: String,
+        outro: Option<MotionRef>,
+    },
+    /// Transition into the clip from its adjacent same-track predecessor.
+    SetTransition {
+        clip_id: String,
+        transition: Option<MotionRef>,
+    },
+    SetAudio {
+        clip_id: String,
+        audio: Option<ClipAudio>,
+    },
+    /// Show another library item in a media clip (timing and motion stay).
+    ReplaceMedia {
+        clip_id: String,
+        media_id: String,
+    },
 }
 
 fn require_clips(project: &Project, ids: &[String]) -> Result<(), DomainError> {
@@ -292,6 +319,23 @@ pub fn execute_edit(project: Project, command: EditCommand) -> Result<Project, D
             folder_id,
         } => move_media(project, &media_id, folder_id)?,
         EditCommand::ApplyGenerated(edits) => super::apply_generated(project, edits)?,
+        EditCommand::AddMotions { presets } => super::motion::add_motions(project, presets)?,
+        EditCommand::SetIntro { clip_id, intro } => {
+            super::motion::set_intro(project, &clip_id, intro)?
+        }
+        EditCommand::SetOutro { clip_id, outro } => {
+            super::motion::set_outro(project, &clip_id, outro)?
+        }
+        EditCommand::SetTransition {
+            clip_id,
+            transition,
+        } => super::motion::set_transition(project, &clip_id, transition)?,
+        EditCommand::SetAudio { clip_id, audio } => {
+            super::motion::set_audio(project, &clip_id, audio)?
+        }
+        EditCommand::ReplaceMedia { clip_id, media_id } => {
+            super::motion::replace_media(project, &clip_id, &media_id)?
+        }
     };
     validate_project(&next)?;
     Ok(next)

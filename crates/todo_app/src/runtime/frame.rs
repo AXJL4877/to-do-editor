@@ -6,22 +6,39 @@ use todo_application::{
     AppAction, AppEvent, AppUpdate, AssetRequest, EditorCommand, Effect, MediaOutput, Route,
     CLOCK_POLL_SECS,
 };
-use todo_interaction::{
-    status_text, AvailableModelView, Intent, ModelCapability, PreviewPointerKind,
-};
+use todo_interaction::{status_text, Intent, PreviewPointerKind};
 use todo_preview::PreviewNavigationKind as Navigation;
 use todo_preview::{HostEvent, PreviewPointerKind as HostPointer};
+use todo_interaction::{assets_view, AssetsInput};
 use todo_ui::{
-    ai_settings_open, close_project_settings, draw_ai_settings, draw_close_prompt, draw_editor,
-    draw_export, draw_production_panel, draw_projects, export_open, production_panel_open,
-    project_settings_open, AiSettingsAction, BG,
+    agent_open, assets_dock, close_project_settings, draw_agent, draw_ai_settings,
+    draw_assets_dock, draw_close_prompt, draw_editor, draw_export, draw_production_dock,
+    draw_projects, draw_workflow_overlay, export_open, open_workflow, production_panel_open,
+    project_settings_open, workflow_open_id, AssetsAction, LeftTab, BG,
 };
+
+/// Any surface that can occupy the editor canvas must suspend the independent
+/// native preview window. The preview is a separate HWND, so egui's painter
+/// order cannot cover it reliably by itself.
+/// The AI production dock is part of the layout and never overlaps it; menus
+/// and tooltips over the preview are cut out of it instead (`overlays_over`).
+fn preview_overlay_open(ctx: &egui::Context, close_prompt: bool) -> bool {
+    close_prompt
+        || project_settings_open(ctx)
+        || todo_ui::ai_settings_open(ctx)
+        || agent_open(ctx)
+        || export_open(ctx)
+        || todo_ui::workflow_fullscreen_open(ctx)
+}
 
 impl eframe::App for App {
     fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {
         BG.to_normalized_gamma_f32()
     }
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.poll_agent_bridge(ctx);
+        self.poll_agent_render(ctx);
+        self.poll_director(ctx);
         let pixels_per_point = ctx.pixels_per_point();
         ctx.input(|input| {
             self.window_state
@@ -96,81 +113,21 @@ impl eframe::App for App {
             .map(|host| host.poll())
             .unwrap_or_default();
         for report in reports {
-            match report {
-                HostReport::Output(output) => {
+            match self.ai_report(report) {
+                Some(HostReport::Output(output)) => {
                     let update = self.workspace.on_event(AppEvent::Production(output));
                     self.handle(update, ctx);
                 }
-                HostReport::Notice(message) => self.notice(message),
-                HostReport::Models { provider, models } => {
-                    if provider == todo_production::Provider::Huniu {
-                        self.ai_settings.huniu_models = models
-                            .iter()
-                            .map(|model| AvailableModelView {
-                                id: model.id.clone(),
-                                capabilities: model
-                                    .capabilities
-                                    .iter()
-                                    .map(|capability| match capability {
-                                        todo_ai::ModelCapability::Text => ModelCapability::Text,
-                                        todo_ai::ModelCapability::Image => ModelCapability::Image,
-                                        todo_ai::ModelCapability::Video => ModelCapability::Video,
-                                    })
-                                    .collect(),
-                            })
-                            .collect();
-                        self.ai_settings.huniu_model_status = Some(format!(
-                            "已发现 {} 个可用模型",
-                            self.ai_settings.huniu_models.len()
-                        ));
-                        if !self.ai_settings.huniu_models.iter().any(|model| {
-                            model.id == self.ai_settings.huniu_chat_model
-                                && model.capabilities.contains(&ModelCapability::Text)
-                        }) {
-                            if let Some(model) =
-                                self.ai_settings.huniu_models.iter().find(|model| {
-                                    model.capabilities.contains(&ModelCapability::Text)
-                                })
-                            {
-                                self.ai_settings.huniu_chat_model = model.id.clone();
-                            }
-                        }
-                        if !self.ai_settings.huniu_models.iter().any(|model| {
-                            model.id == self.ai_settings.huniu_image_model
-                                && model.capabilities.contains(&ModelCapability::Image)
-                        }) {
-                            if let Some(model) =
-                                self.ai_settings.huniu_models.iter().find(|model| {
-                                    model.capabilities.contains(&ModelCapability::Image)
-                                })
-                            {
-                                self.ai_settings.huniu_image_model = model.id.clone();
-                            }
-                        }
-                    }
-                }
-                HostReport::ModelsFailed {
-                    provider,
-                    class,
-                    message,
-                } => {
-                    let provider_name = match provider {
-                        todo_production::Provider::Huniu => "虎妞",
-                        todo_production::Provider::Volc => "火山",
-                    };
-                    if provider == todo_production::Provider::Huniu {
-                        self.ai_settings.huniu_model_status =
-                            Some(format!("发现失败：{class}：{message}"));
-                    }
-                    self.notice(format!("{provider_name} 模型发现失败：{class}：{message}"));
-                }
+                Some(HostReport::Notice(message)) => self.notice(message),
+                Some(report @ HostReport::AgentReply { .. }) => self.agent_report(report, ctx),
+                _ => {}
             }
         }
         self.sync_edit_proxies(ctx);
         if self.workspace.route() != Route::Editor || self.workspace.close_prompt() {
             close_project_settings(ctx);
             todo_ui::close_ai_settings(ctx);
-            todo_ui::close_production_panel(ctx);
+            todo_ui::close_agent(ctx);
             todo_ui::set_export_open(ctx, false);
         }
         let now = self.now();
@@ -185,11 +142,7 @@ impl eframe::App for App {
                 Err(e) => self.notice(format!("预览：{e}")),
             }
         }
-        let preview_input_blocked = self.workspace.close_prompt()
-            || project_settings_open(ctx)
-            || ai_settings_open(ctx)
-            || production_panel_open(ctx)
-            || export_open(ctx);
+        let preview_input_blocked = preview_overlay_open(ctx, self.workspace.close_prompt());
         while let Some(event) = self.preview.poll() {
             if let HostEvent::PreviewNavigation(input) = event {
                 if preview_input_blocked {
@@ -263,18 +216,77 @@ impl eframe::App for App {
         let mut active = false;
         let mut intents = Vec::new();
         let mut requests = Vec::new();
+        // Dock list + `~` fullscreen both need the workflow catalogue.
+        let production_view =
+            (self.workspace.route() == Route::Editor).then(|| self.production_panel());
+        let mut production_action = todo_ui::ProductionAction::None;
+        let mut assets_action = AssetsAction::None;
+        let mut assets_tab = LeftTab::Media;
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(BG))
             .show(ctx, |ui| {
                 if let Some(editor) = self.workspace.editor() {
-                    let mut view = self.controller.view(editor);
+                    let mut view = self
+                        .controller
+                        .view(editor, self.workspace.motion_library());
                     if view.status.is_none() {
                         view.status = self.proxies.summary();
                     }
                     active = view.monitor_active;
                     requests = self.controller.asset_requests(&view);
-                    let (output, slot) =
+                    let (mut output, slot) =
                         draw_editor(ui, &view, self.workspace.peaks(), &mut self.thumbs);
+                    if let (Some(rect), Some(panel)) =
+                        (todo_ui::production_dock(ui.ctx()), production_view.as_ref())
+                    {
+                        if production_panel_open(ui.ctx()) {
+                            let mut dock = ui.new_child(
+                                egui::UiBuilder::new()
+                                    .id_salt("production_dock")
+                                    .max_rect(rect),
+                            );
+                            dock.set_clip_rect(rect);
+                            production_action =
+                                draw_production_dock(&mut dock, panel, &mut self.thumbs);
+                        }
+                    }
+                    if let Some((rect, tab)) = assets_dock(ui.ctx()) {
+                        assets_tab = tab;
+                        if tab == LeftTab::Fonts {
+                            let missing = self.fonts.iter().any(|font| {
+                                !self.thumbs.contains(&todo_interaction::font_preview_key(
+                                    &font.file,
+                                ))
+                            });
+                            if missing {
+                                super::assets::fill_font_previews(
+                                    &crate::adapters::paths::repo_root(),
+                                    &self.fonts,
+                                    Some(editor.project()),
+                                    &mut self.thumbs,
+                                );
+                            }
+                        }
+                        let assets = assets_view(AssetsInput {
+                            motions: self.motion_library.entries(),
+                            fonts: self.fonts.clone(),
+                            project: Some(editor.project()),
+                            selected: view.properties.as_ref(),
+                            warnings: self.asset_warnings.clone(),
+                            motions_dir: self.motions_dir.clone(),
+                            fonts_dir: self.fonts_dir.clone(),
+                        });
+                        let mut dock = ui.new_child(
+                            egui::UiBuilder::new()
+                                .id_salt("assets_dock")
+                                .max_rect(rect),
+                        );
+                        dock.set_clip_rect(rect);
+                        let (asset_intents, action) =
+                            draw_assets_dock(&mut dock, &assets, tab, &mut self.thumbs);
+                        assets_action = action;
+                        output.extend(asset_intents);
+                    }
                     intents = if self.workspace.close_prompt() {
                         Vec::new()
                     } else {
@@ -296,29 +308,33 @@ impl eframe::App for App {
             self.workspace.close_prompt(),
             self.workspace.saving(),
         ));
-        match draw_ai_settings(ctx, &mut self.ai_settings) {
-            AiSettingsAction::Save => {
-                self.save_ai_settings();
+        if let Some(panel) = production_view.as_ref() {
+            let open_id = workflow_open_id(ctx);
+            let graph = open_id.as_ref().and_then(|id| {
+                self.production
+                    .as_ref()
+                    .and_then(|host| host.workflow_panel(id))
+            });
+            let title = open_id
+                .as_ref()
+                .and_then(|id| {
+                    panel
+                        .workflows
+                        .iter()
+                        .find(|e| e.extension_id == *id)
+                        .map(|e| e.name.as_str())
+                })
+                .unwrap_or("工作流");
+            let wf = draw_workflow_overlay(ctx, panel, graph.as_ref(), title);
+            if wf != todo_ui::ProductionAction::None {
+                production_action = wf;
             }
-            AiSettingsAction::TestConnection => {
-                if self.save_ai_settings() {
-                    self.ai_settings.huniu_model_status = Some("正在读取模型目录…".into());
-                    match self.production.as_mut() {
-                        Some(host) => {
-                            if let Err(message) = host.test_connection() {
-                                self.notice(format!("连接测试：{message}"));
-                            } else {
-                                self.notice("正在测试虎妞对话接口…".into());
-                            }
-                        }
-                        None => self.notice("连接测试：AI 服务没有启动".into()),
-                    }
-                }
-            }
-            AiSettingsAction::None => {}
         }
-        let production_view = self.production_panel();
-        match draw_production_panel(ctx, &production_view, &mut self.thumbs) {
+        let settings = draw_ai_settings(ctx, &mut self.ai_settings);
+        self.ai_settings_action(settings);
+        let agent_action = draw_agent(ctx, &mut self.agent_view);
+        self.handle_agent_action(agent_action, ctx);
+        match production_action {
             todo_ui::ProductionAction::OpenSettings => todo_ui::set_ai_settings_open_ctx(ctx, true),
             todo_ui::ProductionAction::Start {
                 extension,
@@ -333,6 +349,10 @@ impl eframe::App for App {
             }
             todo_ui::ProductionAction::Remove { production } => {
                 let update = self.workspace.remove_production(&production);
+                self.handle(update, ctx);
+            }
+            todo_ui::ProductionAction::Restore { production } => {
+                let update = self.workspace.restore_production(&production);
                 self.handle(update, ctx);
             }
             todo_ui::ProductionAction::Edit { production, edit } => {
@@ -359,8 +379,66 @@ impl eframe::App for App {
                 });
                 self.handle(update, ctx);
             }
+            todo_ui::ProductionAction::WorkflowCreate => {
+                if let Some(host) = &mut self.production {
+                    match host.create_workflow("未命名工作流") {
+                        Ok(id) => {
+                            open_workflow(ctx, id);
+                            self.notice("已新建工作流".into());
+                        }
+                        Err(e) => self.notice(format!("新建失败：{e}")),
+                    }
+                }
+            }
+            todo_ui::ProductionAction::WorkflowSave {
+                extension,
+                positions,
+                edits,
+            } => {
+                if let Some(host) = &mut self.production {
+                    match host.save_workflow_graph(&extension, &positions, &edits) {
+                        Ok(()) => self.notice("工作流已保存".into()),
+                        Err(e) => self.notice(format!("保存失败：{e}")),
+                    }
+                }
+            }
+            todo_ui::ProductionAction::WorkflowSaveParams {
+                extension,
+                node_id,
+                params,
+            } => {
+                if let Some(host) = &mut self.production {
+                    match host.save_workflow_node_params(&extension, &node_id, &params) {
+                        Ok(()) => self.notice("工作流参数已保存".into()),
+                        Err(e) => self.notice(format!("保存失败：{e}")),
+                    }
+                }
+            }
+            todo_ui::ProductionAction::WorkflowPickMedia { extension, node_id } => {
+                if let Some(paths) = crate::adapters::desktop::workflow_bin_files() {
+                    if let Some(host) = &mut self.production {
+                        match host.add_workflow_media_files(&extension, &node_id, &paths) {
+                            Ok(n) => self.notice(format!("已添加 {n} 个文件到素材容器")),
+                            Err(e) => self.notice(format!("添加失败：{e}")),
+                        }
+                    }
+                }
+            }
+            todo_ui::ProductionAction::WorkflowRemoveMedia {
+                extension,
+                node_id,
+                path,
+            } => {
+                if let Some(host) = &mut self.production {
+                    match host.remove_workflow_media_file(&extension, &node_id, &path) {
+                        Ok(()) => self.notice("已从容器移除该文件".into()),
+                        Err(e) => self.notice(format!("移除失败：{e}")),
+                    }
+                }
+            }
             todo_ui::ProductionAction::None => {}
         }
+        self.handle_assets_action(assets_action, assets_tab);
         match draw_export(ctx, &mut self.export) {
             todo_ui::ExportAction::ChooseOutput => self.handle(
                 AppUpdate {
@@ -429,21 +507,20 @@ impl eframe::App for App {
                 self.dispatch(AppAction::Editor(EditorCommand::Frame { now }), ctx);
             }
         }
-        // Re-read after UI so a settings modal opened this frame hides the native popup.
-        // The AI production panel is a side window anchored to the right of
-        // the editor. It can cover part of the monitor, but hiding the native
-        // preview for the whole monitor leaves a misleading black canvas in
-        // the uncovered area. Keep the preview alive underneath it; only
-        // modal/settings/export surfaces that own the editor canvas should
-        // suspend the native popup.
-        let overlay_blocks_preview = self.workspace.close_prompt()
-            || project_settings_open(ctx)
-            || ai_settings_open(ctx)
-            || export_open(ctx);
+        // Re-read after UI so a surface opened this frame hides the native
+        // popup before the next OS composition pass. The preview is a separate
+        // HWND, so every editor overlay must participate in this gate.
+        let overlay_blocks_preview = preview_overlay_open(ctx, self.workspace.close_prompt());
+        let hole = hole.filter(|_| self.workspace.route() == Route::Editor);
+        let overlays = hole
+            .as_ref()
+            .map(|hole| todo_ui::overlays_over(ctx, hole))
+            .unwrap_or_default();
         self.preview.sync_popup(
             ctx,
             frame,
-            hole.filter(|_| self.workspace.route() == Route::Editor),
+            hole,
+            &overlays,
             active && !overlay_blocks_preview,
         );
         let preview_view = if overlay_blocks_preview {

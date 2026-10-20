@@ -25,6 +25,10 @@ impl App {
         let Some(host) = &self.production else {
             return ProductionPanelView {
                 project_open: self.workspace.editor().is_some(),
+                service_problem: Some(match &self.production_error {
+                    Some(error) => format!("AI 服务启动失败：{error}"),
+                    None => "AI 服务没有启动".into(),
+                }),
                 ..ProductionPanelView::default()
             };
         };
@@ -34,6 +38,7 @@ impl App {
             .map(|editor| editor.project_name().to_owned());
         ProductionPanelView {
             extensions: host.cards(),
+            workflows: host.workflow_entries(),
             productions: self
                 .workspace
                 .production_status()
@@ -43,6 +48,7 @@ impl App {
                         status,
                         host.extension_name(&status.extension).as_deref(),
                         self.workspace.production(&status.id),
+                        host.workflow_panel(&status.extension),
                     );
                     // The document stores files relative to its production
                     // workdir. The UI needs an absolute key for the media
@@ -68,6 +74,7 @@ impl App {
                 })
                 .collect(),
             project_open: self.workspace.editor().is_some(),
+            service_problem: None,
         }
     }
 

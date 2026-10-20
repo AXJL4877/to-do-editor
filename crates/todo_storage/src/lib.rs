@@ -8,4 +8,4 @@ mod projects;
 
 pub use error::StorageError;
 pub use productions::{ProductionStore, ProductionSummary};
-pub use projects::ProjectStore;
+pub use projects::{ProjectLock, ProjectStore};

@@ -63,6 +63,9 @@ pub struct Project {
     /// Styles referenced by text clips, copied in when first used.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub text_styles: Vec<TextStyle>,
+    /// Motion presets used by clips and not built in, copied in on first use.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub motions: Vec<todo_motion::MotionPreset>,
 }
 
 fn normalize_tracks(mut tracks: Vec<Track>) -> Vec<Track> {
@@ -97,6 +100,7 @@ pub fn create_project(
         folders: Vec::new(),
         tracks: normalize_tracks(tracks.unwrap_or_else(create_default_tracks)),
         text_styles: Vec::new(),
+        motions: Vec::new(),
     }
 }
 

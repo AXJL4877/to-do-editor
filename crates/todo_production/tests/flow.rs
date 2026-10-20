@@ -20,7 +20,6 @@ fn spec() -> ProductionSpec {
     let mut vars = BTreeMap::new();
     vars.insert("palette".to_owned(), "white chalk only".to_owned());
     ProductionSpec {
-        chat_model: "gpt-6-astra".into(),
         planner_system: g["pack"]["system"].as_str().unwrap().into(),
         max_elements: 4,
         board_sec: 10.0,
@@ -30,7 +29,6 @@ fn spec() -> ProductionSpec {
             roles: serde_json::from_value(assets["roles"].clone()).unwrap(),
             avoid: serde_json::from_value(assets["avoid"].clone()).unwrap(),
             vars,
-            model: "gpt-image-2".into(),
             size: "1024x1024".into(),
             quality: Some("low".into()),
             transparent: false,
@@ -39,6 +37,7 @@ fn spec() -> ProductionSpec {
             speaker: "zh_female_mizai_uranus_bigtts".into(),
             resource_id: "seed-tts-2.0".into(),
             sample_rate: 16000,
+            speech_rate: None,
         },
         subtitle_chars: Some(18),
         pacing: Pacing::default(),
@@ -125,7 +124,7 @@ fn targets(work: &[Work]) -> Vec<&Target> {
 fn voice_all(doc: &mut Production, spec: &ProductionSpec) {
     for w in plan_work(doc, spec) {
         if let Target::Voice { segment } = &w.target {
-            let TaskRequest::Speech(speech) = &w.spec.request else {
+            let TaskRequest::Audio(speech) = &w.spec.request else {
                 panic!()
             };
             let (raw, words, pcm) = fake_voice(&speech.text, 16000);

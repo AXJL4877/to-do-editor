@@ -1,18 +1,24 @@
 use egui::{Color32, RichText, Ui};
 use todo_interaction::{AiSettingsView, AvailableModelView, KeySource, ModelCapability};
 
-use crate::theme::{button, Btn, BORDER, BRAND, DANGER, DIM, MUTED, PANEL, PANEL_2, TEXT};
+use crate::theme::{button, Btn, BORDER, BRAND, DANGER, DIM, MUTED, PANEL, PANEL_2, SUCCESS, TEXT};
 
-/// Draws the settings form and reports whether the user pressed Save or Test.
-/// Persistence and service restart remain application effects.
+/// Draws the settings form and reports what the app should do. Persistence,
+/// service restart and the requests themselves remain app effects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiSettingsAction {
     None,
+    /// Save the form (and restart the service when its address changed).
     Save,
+    /// Read the gateway's model list; free, sent when the dialog opens.
+    ListModels,
+    /// Save, then send one tiny chat request: a real, billed call, so only
+    /// on the user's click.
     TestConnection,
 }
 
 const OPEN_ID: &str = "todo_ui_ai_settings_open";
+const AUTO_TEST_ID: &str = "todo_ui_ai_settings_auto_test_sent";
 
 pub fn set_open(ui: &Ui, open: bool) {
     set_open_ctx(ui.ctx(), open);
@@ -59,66 +65,87 @@ fn model_field(
             [84.0, 28.0],
             egui::Label::new(RichText::new(label).size(12.0).color(MUTED)),
         );
-        ui.add(
-            egui::TextEdit::singleline(value)
-                .desired_width(220.0)
-                .hint_text(hint),
-        );
         let available: Vec<&AvailableModelView> = models
             .iter()
             .filter(|model| model.capabilities.contains(&capability))
             .collect();
         if available.is_empty() {
+            ui.add(
+                egui::TextEdit::singleline(value)
+                    .desired_width(340.0)
+                    .hint_text(hint),
+            );
             return;
         }
         egui::ComboBox::from_id_salt(("model", id))
-            .selected_text(format!("发现 {} 个", available.len()))
-            .width(92.0)
+            .selected_text(value.as_str())
+            .width(340.0)
             .show_ui(ui, |ui| {
                 for model in available {
-                    if ui.selectable_label(value == &model.id, &model.id).clicked() {
-                        *value = model.id.clone();
-                    }
+                    ui.selectable_value(value, model.id.clone(), &model.id);
                 }
             });
     });
 }
 
-fn model_catalog(ui: &mut Ui, models: &[AvailableModelView], status: Option<&str>) {
+/// "连接" row: the explicit test button, the model catalogue state and the
+/// last test result.
+fn connection_row(ui: &mut Ui, view: &AiSettingsView) -> bool {
+    let mut test = false;
     ui.add_space(10.0);
     ui.horizontal(|ui| {
-        ui.add_sized([84.0, 24.0], egui::Label::new(""));
-        ui.label(RichText::new("模型能力").size(12.0).color(MUTED));
-        if let Some(status) = status {
-            ui.label(RichText::new(status).size(11.0).color(BRAND));
+        ui.add_sized(
+            [84.0, 28.0],
+            egui::Label::new(RichText::new("连接").size(12.0).color(MUTED)),
+        );
+        let label = if view.huniu_testing {
+            "测试中…"
+        } else {
+            "测试连接"
+        };
+        test = button(ui, label, Btn::Normal, !view.huniu_testing)
+            .on_hover_text(
+                "保存后发送一条很短的对话请求，确认 Key 和对话模型可用（会消耗极少额度）",
+            )
+            .clicked();
+        if let Some((ok, message)) = &view.huniu_connection {
+            ui.label(
+                RichText::new(message)
+                    .size(11.5)
+                    .color(if *ok { SUCCESS } else { DANGER }),
+            );
         }
     });
-    for (capability, label) in [
-        (ModelCapability::Text, "文本"),
-        (ModelCapability::Image, "图片"),
-        (ModelCapability::Video, "视频"),
-    ] {
-        let names: Vec<&str> = models
-            .iter()
-            .filter(|model| model.capabilities.contains(&capability))
-            .map(|model| model.id.as_str())
-            .collect();
-        if names.is_empty() {
-            continue;
-        }
-        ui.horizontal_wrapped(|ui| {
-            ui.add_sized([84.0, 22.0], egui::Label::new(""));
-            ui.label(RichText::new(format!("{label}：")).size(11.0).color(MUTED));
-            for name in names {
+    let models = &view.huniu_models;
+    let status = view.huniu_model_status.as_deref();
+    if status.is_some() || !models.is_empty() {
+        ui.horizontal(|ui| {
+            ui.add_sized([84.0, 18.0], egui::Label::new(""));
+            if let Some(status) = status {
+                ui.label(RichText::new(status).size(11.0).color(MUTED));
+            }
+            if !models.is_empty() {
+                let count = |capability| {
+                    models
+                        .iter()
+                        .filter(|model| model.capabilities.contains(&capability))
+                        .count()
+                };
                 ui.label(
-                    RichText::new(name)
-                        .size(11.0)
-                        .color(TEXT)
-                        .background_color(PANEL),
+                    RichText::new(format!(
+                        "（语言 {} · 图片 {} · 视频 {} · 多模态 {}）",
+                        count(ModelCapability::Language),
+                        count(ModelCapability::Image),
+                        count(ModelCapability::Video),
+                        count(ModelCapability::Multimodal),
+                    ))
+                    .size(11.0)
+                    .color(DIM),
                 );
             }
         });
     }
+    test
 }
 
 fn key_color(source: KeySource) -> Color32 {
@@ -192,93 +219,122 @@ fn service_card(ui: &mut Ui, title: &str, subtitle: &str, add: impl FnOnce(&mut 
         });
 }
 
-pub fn draw(ui: &mut Ui, view: &mut AiSettingsView) -> AiSettingsAction {
-    let mut action = AiSettingsAction::None;
+fn draw_body(ui: &mut Ui, view: &mut AiSettingsView) -> bool {
+    let mut test = false;
     ui.vertical(|ui| {
         ui.label(RichText::new("AI 设置").strong().size(22.0).color(TEXT));
         ui.label(
-            RichText::new("配置生成内容、服务地址和密钥来源，保存后新任务立即使用")
+            RichText::new("AI 成片用到的服务。Key 只保存在本机的 Windows 凭据管理器里。")
                 .size(12.0)
                 .color(MUTED),
         );
         ui.add_space(16.0);
 
-        service_card(ui, "虎妞", "对话与图片生成", |ui| {
-            field(ui, "服务地址", &mut view.huniu_base_url, Some("https://…"));
-            model_field(
-                ui,
-                "chat",
-                "对话模型",
-                &mut view.huniu_chat_model,
-                &view.huniu_models,
-                ModelCapability::Text,
-                "默认：geminiflash3.1",
-            );
-            model_field(
-                ui,
-                "image",
-                "生图模型",
-                &mut view.huniu_image_model,
-                &view.huniu_models,
-                ModelCapability::Image,
-                "例如 gpt-image-2",
-            );
-            key_card(
-                ui,
-                view.huniu_key.as_deref(),
-                view.huniu_key_source,
-                &mut view.huniu_key_entry,
-                &mut view.huniu_clear_key,
-            );
-            model_catalog(ui, &view.huniu_models, view.huniu_model_status.as_deref());
-        });
+        service_card(
+            ui,
+            "模型能力",
+            "模块按能力调用，供应商由后台路由",
+            |ui| {
+                model_field(
+                    ui,
+                    "chat",
+                    "语言模型",
+                    &mut view.huniu_language_model,
+                    &view.huniu_models,
+                    ModelCapability::Language,
+                    "默认：geminiflash3.1",
+                );
+                model_field(
+                    ui,
+                    "image",
+                    "生图模型",
+                    &mut view.huniu_image_model,
+                    &view.huniu_models,
+                    ModelCapability::Image,
+                    "例如 gpt-image-2",
+                );
+                model_field(
+                    ui,
+                    "video",
+                    "视频模型",
+                    &mut view.huniu_video_model,
+                    &view.huniu_models,
+                    ModelCapability::Video,
+                    "例如 sora-2",
+                );
+                model_field(
+                    ui,
+                    "multimodal",
+                    "多模态模型",
+                    &mut view.huniu_multimodal_model,
+                    &view.huniu_models,
+                    ModelCapability::Multimodal,
+                    "例如 gemini-3.8-flash",
+                );
+                field(
+                    ui,
+                    "音频模型",
+                    &mut view.volc_audio_model,
+                    Some("seed-tts-2.0"),
+                );
+            },
+        );
 
         ui.add_space(10.0);
-        service_card(ui, "火山", "配音与字幕时间线", |ui| {
-            field(ui, "服务地址", &mut view.volc_base_url, Some("https://…"));
-            field(
-                ui,
-                "默认音色",
-                &mut view.volc_speaker,
-                Some("zh_female_mizai_uranus_bigtts"),
-            );
-            key_card(
-                ui,
-                view.volc_key.as_deref(),
-                view.volc_key_source,
-                &mut view.volc_key_entry,
-                &mut view.volc_clear_key,
-            );
-        });
-
-        ui.add_space(14.0);
-        ui.label(
-            RichText::new("测试连接会发送一次最小虎妞对话请求，不会生成图片或配音")
-                .size(11.0)
-                .color(DIM),
+        service_card(
+            ui,
+            "服务连接",
+            "地址和密钥只配置一次，能力路由自动复用",
+            |ui| {
+                field(ui, "虎妞地址", &mut view.huniu_base_url, Some("https://…"));
+                field(
+                    ui,
+                    "虎妞渠道",
+                    &mut view.huniu_strategy,
+                    Some("例如 XUE"),
+                );
+                key_card(
+                    ui,
+                    view.huniu_key.as_deref(),
+                    view.huniu_key_source,
+                    &mut view.huniu_key_entry,
+                    &mut view.huniu_clear_key,
+                );
+                field(ui, "火山地址", &mut view.volc_base_url, Some("https://…"));
+                field(
+                    ui,
+                    "默认音色",
+                    &mut view.volc_speaker,
+                    Some("zh_female_mizai_uranus_bigtts"),
+                );
+                key_card(
+                    ui,
+                    view.volc_key.as_deref(),
+                    view.volc_key_source,
+                    &mut view.volc_key_entry,
+                    &mut view.volc_clear_key,
+                );
+                test = connection_row(ui, view);
+            },
         );
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            if button(ui, "测试连接", Btn::Ghost, true).clicked() {
-                action = AiSettingsAction::TestConnection;
-            }
-            if button(ui, "保存设置", Btn::Primary, true).clicked() {
-                action = AiSettingsAction::Save;
-                set_open(ui, false);
-            }
-            if button(ui, "取消", Btn::Normal, true).clicked() {
-                set_open(ui, false);
-            }
-        });
     });
-    action
+    test
 }
 
 pub fn draw_modal(ctx: &egui::Context, view: &mut AiSettingsView) -> AiSettingsAction {
     if !is_open(ctx) {
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new(AUTO_TEST_ID), false));
         return AiSettingsAction::None;
     }
-    let mut action = AiSettingsAction::None;
+    let first_open = ctx.data(|data| {
+        !data
+            .get_temp::<bool>(egui::Id::new(AUTO_TEST_ID))
+            .unwrap_or(false)
+    });
+    if first_open {
+        ctx.data_mut(|data| data.insert_temp(egui::Id::new(AUTO_TEST_ID), true));
+    }
+    let mut action = first_open.then_some(AiSettingsAction::ListModels);
     let response = egui::Modal::new(egui::Id::new("todo_ai_settings_modal"))
         .frame(
             egui::Frame::NONE
@@ -290,14 +346,30 @@ pub fn draw_modal(ctx: &egui::Context, view: &mut AiSettingsView) -> AiSettingsA
         .show(ctx, |ui| {
             ui.set_width(520.0);
             egui::ScrollArea::vertical()
-                .max_height(600.0)
+                .max_height(520.0)
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
-                    action = draw(ui, view);
+                    if draw_body(ui, view) {
+                        action = Some(AiSettingsAction::TestConnection);
+                    }
                 });
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(8.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if button(ui, "保存", Btn::Primary, true).clicked() {
+                    set_open(ui, false);
+                    action = Some(AiSettingsAction::Save);
+                }
+                if button(ui, "取消", Btn::Normal, true).clicked() {
+                    set_open(ui, false);
+                    action = None;
+                }
+            });
         });
     if response.should_close() {
         close(ctx);
+        action = None;
     }
-    action
+    action.unwrap_or(AiSettingsAction::None)
 }

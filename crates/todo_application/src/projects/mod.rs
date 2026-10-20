@@ -67,6 +67,8 @@ pub struct Workspace {
     /// Virtual folder that receives the in-flight import (`None` = library root).
     import_folder_id: Option<String>,
     productions: productions::Productions,
+    /// Library presets beyond the built-ins (user and extensions), set by the app.
+    motions: Vec<todo_core::MotionPreset>,
 }
 
 impl Default for Workspace {
@@ -90,6 +92,7 @@ impl Default for Workspace {
             raster_jobs: HashMap::new(),
             import_folder_id: None,
             productions: Default::default(),
+            motions: Vec::new(),
         }
     }
 }

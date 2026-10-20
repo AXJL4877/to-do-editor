@@ -3,6 +3,7 @@
 //! here; see [`crate::secrets`].
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub const CONFIG_RELATIVE: &str = "config/ai.json";
 pub const HUNIU_DEFAULT_URL: &str = "https://huniuai.com";
@@ -33,6 +34,9 @@ pub enum ConfigError {
 pub struct ConfigFile {
     #[serde(default, skip_serializing_if = "HuniuFile::is_empty")]
     pub huniu: HuniuFile,
+    /// Optional dedicated endpoint for the language capability (e.g. DeepSeek).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<LanguageFile>,
     #[serde(default, skip_serializing_if = "VolcFile::is_empty")]
     pub volc: VolcFile,
     #[serde(default, skip_serializing_if = "LimitsFile::is_empty")]
@@ -47,16 +51,26 @@ pub struct HuniuFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub chat_model: Option<String>,
+    pub language_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image_size: Option<String>,
+    pub video_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub vision_model: Option<String>,
-    /// Channel routing; `price_first` keeps generation on the cheaper channels.
+    pub multimodal_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_size: Option<String>,
+    /// Huniu channel routing, for example `XUE` or `price_first`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strategy: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LanguageFile {
+    /// Origin without `/v1`, e.g. `https://api.deepseek.com`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
 }
 
 impl HuniuFile {
@@ -71,7 +85,7 @@ pub struct VolcFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resource_id: Option<String>,
+    pub audio_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
 }
@@ -95,6 +109,8 @@ pub struct LimitsFile {
     pub speech_inflight: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_paid_retries: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_resubmit_sec: Option<u64>,
 }
 
 impl LimitsFile {
@@ -116,17 +132,18 @@ pub enum ProxyMode {
 pub struct HuniuSettings {
     /// Origin without `/v1`, e.g. `https://huniuai.com`.
     pub base_url: String,
-    pub chat_model: String,
+    pub language_model: String,
     pub image_model: String,
+    pub video_model: String,
+    pub multimodal_model: String,
     pub image_size: String,
-    pub vision_model: String,
     pub strategy: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct VolcSettings {
     pub base_url: String,
-    pub resource_id: String,
+    pub audio_model: String,
     pub speaker: String,
 }
 
@@ -138,11 +155,16 @@ pub struct Limits {
     pub speech_inflight: usize,
     /// Extra attempts allowed after an unknown outcome of a billed image request.
     pub image_paid_retries: u32,
+    /// An image request still unanswered after this long is sent again (the
+    /// earlier send keeps running; the first image back wins).
+    pub image_resubmit_after: Duration,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AiConfig {
     pub huniu: HuniuSettings,
+    /// Direct language endpoint; `None` keeps everything on huniu.
+    pub language_base_url: Option<String>,
     pub volc: VolcSettings,
     pub limits: Limits,
     pub proxy: ProxyMode,
@@ -191,15 +213,16 @@ impl AiConfig {
         };
         let huniu = HuniuSettings {
             base_url: normalize_base_url(&pick(file.huniu.base_url, HUNIU_DEFAULT_URL))?,
-            chat_model: pick(file.huniu.chat_model, "geminiflash3.1"),
+            language_model: pick(file.huniu.language_model, "geminiflash3.1"),
             image_model: pick(file.huniu.image_model, "gpt-image-2"),
+            video_model: pick(file.huniu.video_model, "sora-2"),
+            multimodal_model: pick(file.huniu.multimodal_model, "gemini-3.8-flash"),
             image_size: pick(file.huniu.image_size, "1024x1024"),
-            vision_model: pick(file.huniu.vision_model, "gemini-3.8-flash"),
-            strategy: Some(pick(file.huniu.strategy, "price_first")).filter(|s| s != "none"),
+            strategy: Some(pick(file.huniu.strategy, "XUE")).filter(|s| s != "none"),
         };
         let volc = VolcSettings {
             base_url: normalize_base_url(&pick(file.volc.base_url, VOLC_DEFAULT_URL))?,
-            resource_id: pick(file.volc.resource_id, "seed-tts-2.0"),
+            audio_model: pick(file.volc.audio_model, "seed-tts-2.0"),
             speaker: pick(file.volc.speaker, "zh_female_mizai_uranus_bigtts"),
         };
         let limits = Limits {
@@ -213,6 +236,9 @@ impl AiConfig {
                 .min(20.0),
             speech_inflight: file.limits.speech_inflight.unwrap_or(2).clamp(1, 16),
             image_paid_retries: file.limits.image_paid_retries.unwrap_or(2).min(10),
+            image_resubmit_after: Duration::from_secs(
+                file.limits.image_resubmit_sec.unwrap_or(300).clamp(30, 1800),
+            ),
         };
         if !valid_size(&huniu.image_size) {
             return Err(ConfigError::Invalid(format!(
@@ -220,8 +246,13 @@ impl AiConfig {
                 huniu.image_size
             )));
         }
+        let language_base_url = match file.language.as_ref().and_then(|l| l.base_url.as_deref()) {
+            Some(raw) => Some(normalize_base_url(raw)?),
+            None => None,
+        };
         Ok(Self {
             huniu,
+            language_base_url,
             volc,
             limits,
             proxy: file.proxy.unwrap_or(ProxyMode::Auto),
@@ -273,8 +304,8 @@ mod tests {
         let config = AiConfig::resolve(file).unwrap();
         assert_eq!(config.huniu.base_url, "https://gateway.example");
         assert_eq!(config.huniu.image_model, "gpt-image-2.5-flare");
-        assert_eq!(config.huniu.chat_model, "geminiflash3.1");
-        assert_eq!(config.huniu.strategy.as_deref(), Some("price_first"));
+        assert_eq!(config.huniu.language_model, "geminiflash3.1");
+        assert_eq!(config.huniu.strategy.as_deref(), Some("XUE"));
         assert_eq!(config.volc.base_url, VOLC_DEFAULT_URL);
         assert_eq!(config.volc.speaker, "S_abc");
         assert_eq!(config.limits.image_inflight, 64);
@@ -307,7 +338,7 @@ mod tests {
         );
         let mut file = ConfigFile::default();
         file.huniu.base_url = Some("https://my-gateway.example".into());
-        file.volc.resource_id = Some("seed-icl-2.0".into());
+        file.volc.audio_model = Some("seed-icl-2.0".into());
         AiConfig::save(&root, &file).unwrap();
         assert_eq!(AiConfig::load_file(&root).unwrap(), file);
         assert_eq!(

@@ -20,13 +20,28 @@ use todo_production::{Capability, Provider, TaskKey, TaskRequest, TaskSpec};
 use tokio::sync::{Notify, Semaphore};
 use tokio::time::Instant;
 
+/// A dedicated endpoint for the language capability (e.g. DeepSeek direct).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LanguageEndpoint {
+    pub base_url: String,
+    pub key: Secret,
+}
+
 #[derive(Debug, Clone)]
 pub struct ServiceSettings {
     pub huniu_base_url: String,
+    /// Direct endpoint for language tasks; falls back to `huniu_base_url`.
+    pub language: Option<LanguageEndpoint>,
     pub volc_base_url: String,
-    /// Huniu channel routing (`price_first` in the toolkit).
+    /// Huniu channel routing (for example `XUE`).
     pub huniu_strategy: Option<String>,
     pub keys: HashMap<Provider, Secret>,
+    /// Provider binding for each public capability. Callers never choose a
+    /// provider on a task; this table is the router's private adapter map.
+    pub bindings: HashMap<Capability, Provider>,
+    /// Default model binding for each capability. Empty task models are
+    /// resolved at execution time so the planner's task key remains stable.
+    pub models: HashMap<Capability, String>,
     pub journal_dir: PathBuf,
     pub artifacts_root: PathBuf,
     pub proxy: ProxyMode,
@@ -47,6 +62,8 @@ pub enum WaitReason {
     },
     /// The provider needs a key or balance.
     Attention,
+    /// Another program sharing the task journal is working on it.
+    Elsewhere,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,7 +176,7 @@ impl AiService {
             .map_err(|e| e.to_string())?;
         let slots = HashMap::from([
             (
-                Capability::Chat,
+                Capability::Language,
                 Semaphore::new(settings.limits.chat_inflight),
             ),
             (
@@ -167,8 +184,13 @@ impl AiService {
                 Semaphore::new(settings.limits.image_inflight),
             ),
             (
-                Capability::Speech,
+                Capability::Audio,
                 Semaphore::new(settings.limits.speech_inflight),
+            ),
+            (Capability::Video, Semaphore::new(1)),
+            (
+                Capability::Multimodal,
+                Semaphore::new(settings.limits.chat_inflight),
             ),
         ]);
         let shared = Arc::new(Shared {
@@ -269,12 +291,12 @@ async fn run_loop(
                 if running.contains_key(&key) {
                     continue;
                 }
-                let created = shared
-                    .journal
-                    .lock()
-                    .unwrap()
-                    .ensure(&spec, unix_millis())
-                    .map(|_| ());
+                let created = {
+                    let mut journal = shared.journal.lock().unwrap();
+                    // Another process may have answered it since we started.
+                    journal.refresh(&key);
+                    journal.ensure(&spec, unix_millis()).map(|_| ())
+                };
                 if let Err(error) = created {
                     let _ = shared.events.send(AiEvent::Failed {
                         key,
@@ -290,12 +312,11 @@ async fn run_loop(
                 if running.contains_key(&key) {
                     continue;
                 }
-                let retried = shared
-                    .journal
-                    .lock()
-                    .unwrap()
-                    .retry(&key, unix_millis())
-                    .map(|_| ());
+                let retried = {
+                    let mut journal = shared.journal.lock().unwrap();
+                    journal.refresh(&key);
+                    journal.retry(&key, unix_millis()).map(|_| ())
+                };
                 if retried.is_ok() {
                     running.insert(key.clone(), tokio::spawn(run_task(shared.clone(), key)));
                 }
@@ -372,13 +393,38 @@ async fn list_models(shared: Arc<Shared>, id: u64, provider: Provider) {
         Err(error) => shared.emit(AiEvent::ModelsFailed {
             id,
             provider,
-            class: format!("{:?}", error.class),
+            class: class_name(&error.class).into(),
             message: error.message,
         }),
     }
 }
 
 impl Shared {
+    fn provider_for(&self, capability: Capability) -> Provider {
+        self.settings
+            .bindings
+            .get(&capability)
+            .copied()
+            .unwrap_or(match capability {
+                Capability::Audio => Provider::Volc,
+                Capability::Language
+                | Capability::Image
+                | Capability::Video
+                | Capability::Multimodal => Provider::Huniu,
+            })
+    }
+
+    fn model_for(&self, capability: Capability, requested: &str) -> String {
+        if !requested.trim().is_empty() {
+            return requested.to_owned();
+        }
+        self.settings
+            .models
+            .get(&capability)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     fn now(&self) -> Duration {
         self.origin.elapsed()
     }
@@ -417,6 +463,30 @@ impl Shared {
             .entry(provider)
             .or_insert_with(|| Breaker::new(self.settings.breaker.clone()))
             .permit(now)
+    }
+
+    /// A free GET of the provider's base address: any HTTP answer, even an
+    /// error status, means the network and the gateway are reachable.
+    async fn reachable(&self, provider: Provider) -> bool {
+        let url = match provider {
+            Provider::Huniu => self.settings.huniu_base_url.clone(),
+            Provider::Volc => self.settings.volc_base_url.clone(),
+        };
+        let sent = self
+            .http
+            .send(crate::net::http::Request {
+                method: reqwest::Method::GET,
+                url,
+                headers: Vec::new(),
+                body: None,
+                head_timeout: Duration::from_secs(15),
+                paid: false,
+            })
+            .await;
+        match sent {
+            Ok(_) => true,
+            Err(failure) => failure.status.is_some(),
+        }
     }
 
     /// Any answer, even an error status, proves the network works.
@@ -460,6 +530,10 @@ impl Shared {
 async fn run_task(shared: Arc<Shared>, key: TaskKey) {
     let started = Instant::now();
     let mut waiting_for_network = false;
+    // Held while this process works on the task: another process sharing
+    // the journal waits for the result instead of paying for it again.
+    let mut claim = None;
+    let mut waiting_elsewhere = false;
     loop {
         let Some(record) = shared.record(&key) else {
             return;
@@ -507,8 +581,35 @@ async fn run_task(shared: Arc<Shared>, key: TaskKey) {
             }
             TaskState::Pending | TaskState::Downloading | TaskState::Submitting => {}
         }
+        if claim.is_none() {
+            let got = shared.journal.lock().unwrap().claim(&key);
+            match got {
+                Some(got) => {
+                    claim = Some(got);
+                    // It may have been finished, or left mid-send, meanwhile.
+                    let mut journal = shared.journal.lock().unwrap();
+                    journal.refresh(&key);
+                    if journal.get(&key).map(|r| r.state) == Some(TaskState::Submitting) {
+                        let budget = shared.settings.limits.image_paid_retries;
+                        let _ = journal.settle_interrupted(&key, budget, unix_millis());
+                    }
+                }
+                None => {
+                    if !waiting_elsewhere {
+                        waiting_elsewhere = true;
+                        shared.emit(AiEvent::Waiting {
+                            key: key.clone(),
+                            reason: WaitReason::Elsewhere,
+                        });
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    shared.journal.lock().unwrap().refresh(&key);
+                }
+            }
+            continue;
+        }
 
-        let provider = record.spec.provider;
+        let provider = shared.provider_for(record.spec.capability());
         let Some(secret) = shared.keys.lock().unwrap().get(&provider).cloned() else {
             shared.emit(AiEvent::NeedsAttention {
                 provider,
@@ -522,7 +623,19 @@ async fn run_task(shared: Arc<Shared>, key: TaskKey) {
             continue;
         };
         match shared.permit(provider) {
-            Permit::Go | Permit::Probe => waiting_for_network = false,
+            Permit::Go => waiting_for_network = false,
+            // The circuit is open: find out whether the network is back with
+            // a free request, not with this task (an image can take minutes
+            // and would hold every other task of the provider until then).
+            Permit::Probe => {
+                if shared.reachable(provider).await {
+                    shared.answered(provider);
+                    waiting_for_network = false;
+                } else {
+                    shared.report(provider, &ErrorClass::Transient);
+                    continue;
+                }
+            }
             Permit::Paused => {
                 shared.emit(AiEvent::Waiting {
                     key: key.clone(),
@@ -667,8 +780,10 @@ async fn attempt(
 ) -> Result<Outcome, AttemptError> {
     let settings = &shared.settings;
     let owner = key.as_str();
-    match (&record.spec.request, record.state) {
-        (TaskRequest::Image(_), TaskState::Downloading) => {
+    let provider = shared.provider_for(record.spec.capability());
+    let request = bind_model(shared, &record.spec.request);
+    match (&request, record.state, provider) {
+        (TaskRequest::Image(_), TaskState::Downloading, Provider::Huniu) => {
             let url = record.remote_url.clone().unwrap_or_default();
             shared.emit(AiEvent::Downloading { key: key.clone() });
             huniu::download_image(
@@ -681,18 +796,8 @@ async fn attempt(
             )
             .await
         }
-        (TaskRequest::Image(request), _) => {
-            shared.pace_image().await;
-            begin_send(shared, key);
-            match huniu::submit_image(
-                &shared.http,
-                &settings.huniu_base_url,
-                secret,
-                request,
-                settings.huniu_strategy.as_deref(),
-            )
-            .await?
-            {
+        (TaskRequest::Image(request), _, Provider::Huniu) => {
+            match submit_image_hedged(shared, key, record, secret, request).await? {
                 huniu::ImageResult::Inline(bytes) => {
                     huniu::store_inline_image(&shared.store, owner, &bytes)
                 }
@@ -715,11 +820,18 @@ async fn attempt(
                 }
             }
         }
-        (TaskRequest::Chat(request), _) => {
+        (TaskRequest::Language(request), _, Provider::Huniu) => {
             begin_send(shared, key);
-            huniu::chat(&shared.http, &settings.huniu_base_url, secret, request).await
+            match &settings.language {
+                Some(language) => {
+                    huniu::chat(&shared.http, &language.base_url, &language.key, request).await
+                }
+                None => {
+                    huniu::chat(&shared.http, &settings.huniu_base_url, secret, request).await
+                }
+            }
         }
-        (TaskRequest::Speech(request), _) => {
+        (TaskRequest::Audio(request), _, Provider::Volc) => {
             begin_send(shared, key);
             volc::synthesize(
                 &shared.http,
@@ -730,6 +842,145 @@ async fn attempt(
                 owner,
             )
             .await
+        }
+        (TaskRequest::Video(_), _, _) => Err(AttemptError::new(
+            ErrorClass::Invalid,
+            "视频能力已接入路由，但当前没有配置视频适配器",
+        )),
+        (TaskRequest::Multimodal(request), _, Provider::Huniu) => {
+            begin_send(shared, key);
+            match &settings.language {
+                // deepseek-flash reads images too; one key serves text and vision.
+                Some(language) => {
+                    crate::providers::vision::vision(
+                        &shared.http,
+                        &language.base_url,
+                        &language.key,
+                        request,
+                    )
+                    .await
+                }
+                None => crate::providers::vision::vision(
+                    &shared.http,
+                    &settings.huniu_base_url,
+                    secret,
+                    request,
+                )
+                .await,
+            }
+        }
+        (_, _, _) => Err(AttemptError::new(
+            ErrorClass::Invalid,
+            "能力与供应商适配器不匹配",
+        )),
+    }
+}
+
+/// Send an image request; while no answer is back after
+/// `limits.image_resubmit_after`, send it again without dropping the earlier
+/// sends, up to the paid budget. The first image back wins and the others are
+/// dropped. Every extra send is billed, so it counts as a paid retry.
+async fn submit_image_hedged(
+    shared: &Shared,
+    key: &TaskKey,
+    record: &TaskRecord,
+    secret: &Secret,
+    request: &todo_production::ImageRequest,
+) -> Result<huniu::ImageResult, AttemptError> {
+    let settings = &shared.settings;
+    let extra = settings
+        .limits
+        .image_paid_retries
+        .saturating_sub(record.paid_retries);
+    let mut sends = tokio::task::JoinSet::new();
+    let launch = |sends: &mut tokio::task::JoinSet<_>| {
+        let (http, base_url, secret, request, strategy) = (
+            shared.http.clone(),
+            settings.huniu_base_url.clone(),
+            secret.clone(),
+            request.clone(),
+            settings.huniu_strategy.clone(),
+        );
+        sends.spawn(async move {
+            huniu::submit_image(&http, &base_url, &secret, &request, strategy.as_deref()).await
+        });
+    };
+    shared.pace_image().await;
+    begin_send(shared, key);
+    launch(&mut sends);
+    let mut resends = 0;
+    let mut resend_at = Instant::now() + settings.limits.image_resubmit_after;
+    let (mut ambiguous, mut last) = (None, None);
+    loop {
+        tokio::select! {
+            joined = sends.join_next() => match joined {
+                Some(Ok(Ok(result))) => return Ok(result),
+                Some(Ok(Err(error))) if error.class == ErrorClass::Ambiguous => {
+                    ambiguous = Some(error)
+                }
+                Some(Ok(Err(error))) => last = Some(error),
+                Some(Err(join)) => {
+                    ambiguous = Some(AttemptError::new(ErrorClass::Ambiguous, join.to_string()))
+                }
+                None => {}
+            },
+            _ = tokio::time::sleep_until(resend_at), if resends < extra => {
+                shared.pace_image().await;
+                shared.update(key, |r| r.paid_retries += 1);
+                begin_send(shared, key);
+                launch(&mut sends);
+                resends += 1;
+                resend_at = Instant::now() + settings.limits.image_resubmit_after;
+                continue;
+            }
+        }
+        if sends.is_empty() {
+            // Nothing in flight: an unknown outcome outranks a plain failure.
+            return Err(ambiguous
+                .or(last)
+                .unwrap_or_else(|| AttemptError::new(ErrorClass::Transient, "no image request")));
+        }
+    }
+}
+
+fn bind_model(shared: &Shared, request: &TaskRequest) -> TaskRequest {
+    let capability = request.capability();
+    let model = |current: &str| shared.model_for(capability, current);
+    match request {
+        TaskRequest::Language(value) => {
+            let mut value = value.clone();
+            if value.model.is_empty() {
+                value.model = model(&value.model);
+            }
+            TaskRequest::Language(value)
+        }
+        TaskRequest::Image(value) => {
+            let mut value = value.clone();
+            if value.model.is_empty() {
+                value.model = model(&value.model);
+            }
+            TaskRequest::Image(value)
+        }
+        TaskRequest::Video(value) => {
+            let mut value = value.clone();
+            if value.model.is_empty() {
+                value.model = model(&value.model);
+            }
+            TaskRequest::Video(value)
+        }
+        TaskRequest::Multimodal(value) => {
+            let mut value = value.clone();
+            if value.model.is_empty() {
+                value.model = model(&value.model);
+            }
+            TaskRequest::Multimodal(value)
+        }
+        TaskRequest::Audio(value) => {
+            let mut value = value.clone();
+            if value.model.is_empty() {
+                value.model = model(&value.model);
+            }
+            TaskRequest::Audio(value)
         }
     }
 }

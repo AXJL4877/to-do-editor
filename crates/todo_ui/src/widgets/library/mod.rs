@@ -3,7 +3,9 @@
 mod icons;
 
 use egui::{Color32, Sense, Ui};
-use todo_interaction::{EditorFocus, EditorViewModel, ExplorerNode, Intent, LibraryItemView};
+use todo_interaction::{
+    EditorFocus, EditorViewModel, ExplorerNode, Intent, LibraryItemView, MediaKind,
+};
 
 use crate::format::clock;
 use crate::theme::{button, Btn, BRAND, DIM, FIELD, MUTED, PANEL, PANEL_2, TEXT};
@@ -21,6 +23,12 @@ pub(super) struct MediaDrag {
 #[derive(Debug, Clone)]
 struct FolderDrag {
     folder_id: String,
+}
+
+#[derive(Debug, Clone)]
+enum DropPreview {
+    Media { name: String, kind: MediaKind },
+    Folder { name: String },
 }
 
 pub(super) fn draw(ui: &mut Ui, vm: &EditorViewModel, thumbs: &mut ThumbCache) -> Vec<Intent> {
@@ -128,6 +136,9 @@ fn draw_root(ui: &mut Ui, vm: &EditorViewModel) -> Vec<Intent> {
     if let Some(intent) = drop_on_folder(ui, &response, None) {
         intents.push(intent);
     }
+    if let Some(preview) = drop_preview(vm, &response, None) {
+        draw_drop_preview(ui, preview, 0, &[]);
+    }
     response.on_hover_text("导入到根目录 · 拖入素材或料箱可移回根目录");
     intents
 }
@@ -201,6 +212,8 @@ fn draw_node(
                 intents.push(intent);
             }
 
+            let preview = drop_preview(vm, &response, Some(id.as_str()));
+
             if response.clicked() {
                 intents.push(Intent::Focus(EditorFocus::Library));
                 intents.push(Intent::LibrarySelectFolder(Some(id.clone())));
@@ -249,6 +262,11 @@ fn draw_node(
                 for child in children {
                     intents.extend(draw_node(ui, vm, child, thumbs, &next_guides));
                 }
+            }
+            if let Some(preview) = preview {
+                let mut preview_guides = guides.to_vec();
+                preview_guides.push(x0 + 5.0);
+                draw_drop_preview(ui, preview, *depth + 1, &preview_guides);
             }
             intents
         }
@@ -412,17 +430,43 @@ fn draw_media_leaf(
 }
 
 fn drop_on_folder(ui: &Ui, response: &egui::Response, folder_id: Option<&str>) -> Option<Intent> {
-    if response.dnd_hover_payload::<MediaDrag>().is_none()
-        && response.dnd_hover_payload::<FolderDrag>().is_none()
-    {
+    let media_drag = response.dnd_hover_payload::<MediaDrag>();
+    let folder_drag = response.dnd_hover_payload::<FolderDrag>();
+    if media_drag.is_none() && folder_drag.is_none() {
         return None;
     }
-    if response.hovered() {
-        ui.painter().rect_stroke(
+    // `Response::hovered()` is deliberately false while another widget is
+    // being dragged. `contains_pointer()` is egui's drag-and-drop hit test.
+    if response.contains_pointer() {
+        let valid = folder_drag
+            .as_ref()
+            .is_none_or(|folder| folder_id != Some(folder.folder_id.as_str()));
+        let accent = if valid { BRAND } else { crate::theme::DANGER };
+        // The tree is sorted by name, so dropping on a row means moving into
+        // that bin rather than silently changing an invisible sibling order.
+        // Keep the target visible even when the row is already selected.
+        ui.painter().rect_filled(
             response.rect,
             0.0,
-            egui::Stroke::new(1.0_f32, BRAND),
+            Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 24),
+        );
+        ui.painter().rect_stroke(
+            response.rect.shrink(1.0),
+            0.0,
+            egui::Stroke::new(1.5_f32, accent),
             egui::StrokeKind::Inside,
+        );
+        let label_rect = egui::Rect::from_min_size(
+            egui::pos2(response.rect.right() - 42.0, response.rect.top() + 3.0),
+            egui::vec2(38.0, response.rect.height() - 6.0),
+        );
+        ui.painter().rect_filled(label_rect, 3.0, PANEL_2);
+        ui.painter().text(
+            label_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            if valid { "放入" } else { "不可" },
+            egui::FontId::proportional(10.0),
+            accent,
         );
     }
     if let Some(media) = response.dnd_release_payload::<MediaDrag>() {
@@ -440,6 +484,94 @@ fn drop_on_folder(ui: &Ui, response: &egui::Response, folder_id: Option<&str>) -
         }
     }
     None
+}
+
+fn drop_preview(
+    vm: &EditorViewModel,
+    response: &egui::Response,
+    folder_id: Option<&str>,
+) -> Option<DropPreview> {
+    // During an egui drag the target response is not `hovered()`, even though
+    // the pointer is inside it. Use the drag-aware hit test so the ghost row
+    // appears while the pointer crosses the tree.
+    if !response.contains_pointer() {
+        return None;
+    }
+    if let Some(media) = response.dnd_hover_payload::<MediaDrag>() {
+        let item = vm
+            .library
+            .items
+            .iter()
+            .find(|entry| entry.item.id == media.media_id)?;
+        return Some(DropPreview::Media {
+            name: item.item.name.clone(),
+            kind: item.item.kind,
+        });
+    }
+    let folder = response.dnd_hover_payload::<FolderDrag>()?;
+    if folder_id == Some(folder.folder_id.as_str()) {
+        return None;
+    }
+    Some(DropPreview::Folder {
+        name: find_folder_name(&vm.library.explorer, &folder.folder_id)
+            .unwrap_or("料箱")
+            .to_owned(),
+    })
+}
+
+fn find_folder_name<'a>(nodes: &'a [ExplorerNode], id: &str) -> Option<&'a str> {
+    for node in nodes {
+        if let ExplorerNode::Folder {
+            id: folder_id,
+            name,
+            children,
+            ..
+        } = node
+        {
+            if folder_id == id {
+                return Some(name);
+            }
+            if let Some(name) = find_folder_name(children, id) {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
+fn draw_drop_preview(ui: &mut Ui, preview: DropPreview, depth: usize, guides: &[f32]) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), Sense::hover());
+    let ghost = Color32::from_rgba_unmultiplied(BRAND.r(), BRAND.g(), BRAND.b(), 18);
+    let text = Color32::from_rgba_unmultiplied(TEXT.r(), TEXT.g(), TEXT.b(), 155);
+    ui.painter().rect_filled(rect, 0.0, ghost);
+    ui.painter().rect_stroke(
+        rect.shrink(1.0),
+        0.0,
+        egui::Stroke::new(
+            1.0_f32,
+            Color32::from_rgba_unmultiplied(BRAND.r(), BRAND.g(), BRAND.b(), 130),
+        ),
+        egui::StrokeKind::Inside,
+    );
+    paint_guides(ui, rect, guides);
+    let x0 = rect.left() + 4.0 + depth as f32 * INDENT;
+    match preview {
+        DropPreview::Media { name, kind } => {
+            icons::media(ui.painter(), icon_rect(rect, x0 + 14.0), kind);
+            paint_name(ui, rect, x0 + 34.0, &name, text, rect.right() - 48.0);
+        }
+        DropPreview::Folder { name } => {
+            icons::folder(ui.painter(), icon_rect(rect, x0 + 14.0), false);
+            paint_name(ui, rect, x0 + 34.0, &name, text, rect.right() - 48.0);
+        }
+    }
+    ui.painter().text(
+        egui::pos2(rect.right() - 7.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        "预览",
+        egui::FontId::proportional(10.0),
+        BRAND,
+    );
 }
 
 #[cfg(test)]

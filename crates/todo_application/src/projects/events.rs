@@ -31,6 +31,13 @@ impl Workspace {
                     {
                         return self.save(after);
                     }
+                    if matches!(after, AfterSave::Stay)
+                        && std::mem::take(&mut self.productions.resave)
+                        && self.saves.is_empty()
+                        && self.editor.as_ref().is_some_and(|e| e.dirty())
+                    {
+                        return self.save(AfterSave::Stay);
+                    }
                     match after {
                         AfterSave::Stay => AppUpdate::default(),
                         AfterSave::Back => self.leave(false),
@@ -167,7 +174,11 @@ impl Workspace {
         let production = self.production_media(ticket, result.is_ok());
         if let Ok(MediaOutput::Adopted(media)) = &result {
             let mut update = AppUpdate::default();
-            for item in media.clone() {
+            for mut item in media.clone() {
+                let path = item.path.as_deref().map(|p| p.replace('\\', "/"));
+                if let Some(name) = path.and_then(|p| self.productions.adopt_names.remove(&p)) {
+                    item.name = name;
+                }
                 let next = self.dispatch(AppAction::Editor(EditorCommand::RegisterMedia(item)));
                 update.effects.extend(next.effects);
                 update.new_clips.extend(next.new_clips);

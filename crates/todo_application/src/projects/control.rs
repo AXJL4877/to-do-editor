@@ -2,6 +2,20 @@ use super::*;
 use crate::control::{batch::run_batch, *};
 
 impl Workspace {
+    /// Library motion presets (user and extensions) clips may name; the
+    /// built-ins are always available. A preset is copied into a project the
+    /// first time an edit or production uses it.
+    pub fn set_motion_library(&mut self, presets: Vec<todo_core::MotionPreset>) {
+        self.motions = presets
+            .into_iter()
+            .filter(|preset| !todo_core::motion::is_builtin_motion(&preset.id))
+            .collect();
+    }
+
+    pub fn motion_library(&self) -> &[todo_core::MotionPreset] {
+        &self.motions
+    }
+
     /// Read one consistent snapshot on the workspace-owning thread.
     pub fn control_context(&self) -> Option<ControlContext> {
         let editor = self.editor.as_ref()?;
@@ -113,6 +127,17 @@ impl Workspace {
                 },
                 AppUpdate::default(),
             )),
+            ControlCommand::Describe { at } => {
+                let editor = self.editor.as_ref().expect("checked above");
+                let mut project = editor.project().clone();
+                project.playhead = editor.playhead();
+                Ok((
+                    ControlResult::Document {
+                        document: Box::new(crate::control::project_view(&project, *at)),
+                    },
+                    AppUpdate::default(),
+                ))
+            }
             ControlCommand::GetImportJob { job_id } => {
                 let job = self.control.job(*job_id).ok_or_else(|| {
                     ControlError::new(
@@ -152,7 +177,8 @@ impl Workspace {
             }
             ControlCommand::ApplyEdits { edits, dry_run } => {
                 let editor = self.editor.as_mut().unwrap();
-                let (project, receipt) = run_batch(editor.project(), edits, *dry_run)?;
+                let (project, receipt) =
+                    run_batch(editor.project(), edits, *dry_run, &self.motions)?;
                 let update = if *dry_run || !receipt.changed {
                     AppUpdate::default()
                 } else {

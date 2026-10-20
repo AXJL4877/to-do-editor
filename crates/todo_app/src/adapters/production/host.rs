@@ -6,15 +6,16 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use todo_ai::{
-    default_paths, AiConfig, AiEvent, AiService, ModelInfo, Secret, Secrets, ServiceSettings,
+use todo_ai::{LanguageEndpoint,
+    default_paths, AiConfig, AiEvent, AiRouter, CapabilityBindings, ModelBinding, ModelInfo,
+    Secret, Secrets, ServiceSettings,
 };
 use todo_application::{
     LocalRunId, Pcm16, ProductionOutput, ProductionSetup, ProductionTask, Recipe, TaskState,
 };
-use todo_extensions::{
-    Budget, Extension, PoolOptions, Registry, RunId, RunRequest, RuntimePaths, WorkerEvent,
-    WorkerPool,
+use todo_workflow::{
+    copy_package, create_blank_workflow, Budget, Extension, Origin, PoolOptions, Registry, RunId,
+    RunRequest, RuntimePaths, WorkerEvent, WorkerPool,
 };
 use todo_interaction::{
     ChoiceView, ExtensionCardView, ExtensionStatus, ParamInput, ParamValue, ParamView, ScriptView,
@@ -56,11 +57,46 @@ pub enum HostReport {
         class: String,
         message: String,
     },
+    /// Result of the explicit chat connection test.
+    Connection {
+        provider: Provider,
+        ok: bool,
+        message: String,
+    },
+    /// The answer to a director request (language or multimodal).
+    AgentReply {
+        request_id: String,
+        result: Result<String, String>,
+    },
+}
+
+/// Plain words for a service error class (settings dialog).
+pub fn class_reason(class: &str) -> &'static str {
+    match class {
+        "auth" => "Key 无效或已过期",
+        "billing" => "账户余额不足",
+        "rate_limited" => "请求太频繁，被限流",
+        "invalid" => "服务不接受这个请求，模型名可能不对",
+        "content_policy" => "请求被安全审核拦截",
+        "transient" | "ambiguous" => "网络或服务暂时不可用",
+        _ => "连接失败",
+    }
+}
+
+/// The reason, plus the service's own words only when the class says nothing.
+pub fn class_message(class: &str, message: &str) -> String {
+    match class_reason(class) {
+        "连接失败" if !message.trim().is_empty() => {
+            let short: String = message.chars().take(80).collect();
+            format!("连接失败：{short}")
+        }
+        reason => reason.to_owned(),
+    }
 }
 
 pub struct ProductionHost {
     root: PathBuf,
-    ai: AiService,
+    ai: AiRouter,
     bridge: ServiceBridge,
     workers: WorkerPool,
     worker_events: mpsc::Receiver<WorkerEvent>,
@@ -79,11 +115,20 @@ pub struct ProductionHost {
     connection_test: Option<TaskKey>,
     connection_test_started: Option<Instant>,
     model_probe: Option<u64>,
+    agent_tasks: HashMap<TaskKey, String>,
 }
 
 fn ai_settings(
     root: &Path,
-) -> Result<(ServiceSettings, HostDefaults, HashMap<Provider, bool>), String> {
+) -> Result<
+    (
+        ServiceSettings,
+        HostDefaults,
+        CapabilityBindings,
+        HashMap<Provider, bool>,
+    ),
+    String,
+> {
     let config = AiConfig::load(root).map_err(|e| e.to_string())?;
     let store = todo_ai::secrets::default_store();
     let secrets = Secrets {
@@ -101,17 +146,82 @@ fn ai_settings(
     }
     let (journal_dir, artifacts_root) = default_paths(root);
     let defaults = HostDefaults {
-        chat_model: config.huniu.chat_model.clone(),
-        image_model: config.huniu.image_model.clone(),
-        voice_resource: config.volc.resource_id.clone(),
+        audio_model: config.volc.audio_model.clone(),
         sample_rate: 24_000,
+    };
+    let bindings = CapabilityBindings {
+        models: HashMap::from([
+            (
+                Capability::Language,
+                ModelBinding {
+                    model: config.huniu.language_model.clone(),
+                    provider: Provider::Huniu,
+                },
+            ),
+            (
+                Capability::Image,
+                ModelBinding {
+                    model: config.huniu.image_model.clone(),
+                    provider: Provider::Huniu,
+                },
+            ),
+            (
+                Capability::Video,
+                ModelBinding {
+                    model: config.huniu.video_model.clone(),
+                    provider: Provider::Huniu,
+                },
+            ),
+            (
+                Capability::Multimodal,
+                ModelBinding {
+                    model: config.huniu.multimodal_model.clone(),
+                    provider: Provider::Huniu,
+                },
+            ),
+            (
+                Capability::Audio,
+                ModelBinding {
+                    model: config.volc.audio_model.clone(),
+                    provider: Provider::Volc,
+                },
+            ),
+        ]),
+    };
+    let language = match &config.language_base_url {
+        Some(base) => secrets
+            .language()
+            .map_err(|error| error.to_string())?
+            .map(|(key, _)| LanguageEndpoint {
+                base_url: base.clone(),
+                key,
+            }),
+        None => None,
     };
     Ok((
         ServiceSettings {
             huniu_base_url: config.huniu.base_url.clone(),
+            language,
             volc_base_url: config.volc.base_url.clone(),
             huniu_strategy: config.huniu.strategy.clone(),
             keys,
+            bindings: HashMap::from([
+                (Capability::Language, Provider::Huniu),
+                (Capability::Image, Provider::Huniu),
+                (Capability::Video, Provider::Huniu),
+                (Capability::Multimodal, Provider::Huniu),
+                (Capability::Audio, Provider::Volc),
+            ]),
+            models: HashMap::from([
+                (Capability::Language, config.huniu.language_model.clone()),
+                (Capability::Image, config.huniu.image_model.clone()),
+                (Capability::Video, config.huniu.video_model.clone()),
+                (
+                    Capability::Multimodal,
+                    config.huniu.multimodal_model.clone(),
+                ),
+                (Capability::Audio, config.volc.audio_model.clone()),
+            ]),
             journal_dir,
             artifacts_root,
             proxy: config.proxy,
@@ -120,6 +230,7 @@ fn ai_settings(
             breaker: todo_ai::net::BreakerPolicy::default(),
         },
         defaults,
+        bindings,
         present,
     ))
 }
@@ -266,6 +377,17 @@ fn param_view(param: &Param, quick: bool) -> ParamView {
     }
 }
 
+fn param_label(param: &todo_production::extension::manifest::Param) -> &str {
+    use todo_production::extension::manifest::Param;
+    match param {
+        Param::Select { label, .. }
+        | Param::Number { label, .. }
+        | Param::Text { label, .. }
+        | Param::Bool { label, .. }
+        | Param::Voice { label, .. } => label,
+    }
+}
+
 fn param_json(value: &ParamValue) -> serde_json::Value {
     match value {
         ParamValue::Text(t) => serde_json::json!(t),
@@ -277,8 +399,8 @@ fn param_json(value: &ParamValue) -> serde_json::Value {
 impl ProductionHost {
     pub fn start(root: impl Into<PathBuf>) -> Result<Self, String> {
         let root = root.into();
-        let (settings, defaults, keys) = ai_settings(&root)?;
-        let (ai, _recovered) = AiService::start(settings)?;
+        let (settings, defaults, bindings, keys) = ai_settings(&root)?;
+        let (ai, _recovered) = AiRouter::start(settings, bindings)?;
         let (worker_tx, worker_events) = mpsc::channel();
         let workers = WorkerPool::start(
             PoolOptions {
@@ -296,7 +418,7 @@ impl ProductionHost {
             let tx = check_tx.clone();
             let runtime = RuntimePaths::new(root.clone());
             std::thread::spawn(move || {
-                let result = todo_extensions::check_extension(&extension, &runtime).map(|_| ());
+                let result = todo_workflow::check_extension(&extension, &runtime).map(|_| ());
                 let _ = tx.send((extension.manifest.id.clone(), result));
             });
         }
@@ -347,6 +469,7 @@ impl ProductionHost {
             connection_test: None,
             connection_test_started: None,
             model_probe: None,
+            agent_tasks: HashMap::new(),
         })
     }
 
@@ -358,22 +481,47 @@ impl ProductionHost {
     /// Submit a fresh, uncached chat request used by the settings dialog.
     /// The nonce deliberately prevents a previous successful test from being
     /// answered from the durable production journal.
+    /// Read the gateway's model catalogue (`GET /v1/models`, free).
+    pub fn list_models(&mut self) -> Result<(), String> {
+        let provider = self
+            .ai
+            .binding(Capability::Language)
+            .map(|binding| binding.provider)
+            .unwrap_or(Provider::Huniu);
+        if !self.keys.get(&provider).copied().unwrap_or(false) {
+            return Err("还没有配置语言能力的 API Key".into());
+        }
+        if self.model_probe.is_none() {
+            self.model_probe = Some(self.ai.list_models(Capability::Language));
+            self.connection_test_started
+                .get_or_insert_with(Instant::now);
+        }
+        Ok(())
+    }
+
+    /// Send one tiny chat request with the configured model and key. It is a
+    /// real (paid) call, so it only runs when the user asks for it.
     pub fn test_connection(&mut self) -> Result<(), String> {
-        if !self.keys.get(&Provider::Huniu).copied().unwrap_or(false) {
-            return Err("虎妞还没有配置 API Key".into());
+        let provider = self
+            .ai
+            .binding(Capability::Language)
+            .map(|binding| binding.provider)
+            .unwrap_or(Provider::Huniu);
+        if !self.keys.get(&provider).copied().unwrap_or(false) {
+            return Err("还没有配置语言能力的 API Key".into());
         }
-        if self.connection_test.is_some() || self.model_probe.is_some() {
-            return Err("连接测试已经在进行中".into());
+        if self.connection_test.is_some() {
+            return Err("正在测试，请稍候".into());
         }
-        self.model_probe = Some(self.ai.list_models(Provider::Huniu));
+        self.list_models()?;
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| e.to_string())?
             .as_nanos();
-        let spec = TaskSpec {
-            provider: Provider::Huniu,
-            request: TaskRequest::Chat(todo_production::ChatRequest {
-                model: self.defaults.chat_model.clone(),
+        let spec = self
+            .ai
+            .prepare(TaskRequest::Language(todo_production::LanguageRequest {
+                model: String::new(),
                 messages: vec![
                     ChatMessage {
                         role: ChatRole::System,
@@ -386,14 +534,13 @@ impl ProductionHost {
                 ],
                 temperature: 0.0,
                 json: false,
-            }),
-        };
-        let key = self.ai.submit(spec.clone());
+            }));
+        let key = self.ai.submit_spec(spec.clone());
         self.submissions.insert(
             key.clone(),
             Submission {
                 spec,
-                capability: Capability::Chat,
+                capability: Capability::Language,
                 workdirs: Vec::new(),
             },
         );
@@ -402,11 +549,122 @@ impl ProductionHost {
         Ok(())
     }
 
+    /// Ask the configured chat model for a structured editing plan. The
+    /// application executes the returned edits through Workspace::control;
+    /// the host only owns the provider call and its retry/journal behavior.
+    /// One request of the built-in director. The director owns prompts and
+    /// parsing; the host only routes the capability call and reports the text.
+    pub fn agent_task(&mut self, request_id: String, request: TaskRequest) -> Result<(), String> {
+        let capability = request.capability();
+        let provider = self
+            .ai
+            .binding(capability)
+            .map(|binding| binding.provider)
+            .unwrap_or(Provider::Huniu);
+        if !self.keys.get(&provider).copied().unwrap_or(false) {
+            return Err("还没有配置这项能力的 API Key".into());
+        }
+        if self.agent_tasks.values().any(|id| id == &request_id) {
+            return Err("这条请求已经在处理".into());
+        }
+        let key = self.ai.submit(request);
+        self.agent_tasks.insert(key, request_id);
+        Ok(())
+    }
+
+    /// Installed styles for the director: what each one is, its parameters
+    /// and, when the package has a `recipe.json`, its review thresholds.
+    pub fn styles(&self) -> Vec<todo_application::director::StyleInfo> {
+        self.registry
+            .list()
+            .filter(|extension| {
+                matches!(self.check_results.get(&extension.manifest.id), Some(Ok(())))
+            })
+            .map(|extension| {
+                let manifest = &extension.manifest;
+                let rubric = extension
+                    .read("recipe.json")
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                    .and_then(|recipe| {
+                        let mut rubric: todo_application::control::review::Rubric =
+                            serde_json::from_value(recipe.get("review")?.clone()).ok()?;
+                        if let Some(style) = recipe
+                            .pointer("/text/subtitle/style")
+                            .and_then(serde_json::Value::as_str)
+                        {
+                            rubric.subtitle_styles = vec![style.to_owned()];
+                        }
+                        Some(rubric)
+                    });
+                let params = manifest
+                    .params
+                    .iter()
+                    // The redraw parameter is the director's, not the model's.
+                    .filter(|param| {
+                        rubric.as_ref().and_then(|r| r.redraw.as_deref()) != Some(param.id())
+                    })
+                    .map(|param| match param {
+                        todo_production::extension::manifest::Param::Select {
+                            id,
+                            label,
+                            options,
+                            ..
+                        } => format!(
+                            "{id}（{label}，可选 {}）",
+                            options
+                                .iter()
+                                .map(|o| o.value.as_str())
+                                .collect::<Vec<_>>()
+                                .join("/")
+                        ),
+                        other => format!("{}（{}）", other.id(), param_label(other)),
+                    })
+                    .collect();
+                let assets = extension
+                    .read("assets/library/library.json")
+                    .and_then(|text| serde_json::from_str::<Vec<serde_json::Value>>(&text).ok())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|entry| {
+                        let text = |key: &str| entry.get(key)?.as_str().map(str::to_owned);
+                        let path = extension.dir.join("assets/library").join(text("file")?);
+                        (text("kind")? != "plate" && path.is_file()).then(|| {
+                            todo_application::director::StyleAsset {
+                                id: text("id").unwrap_or_default(),
+                                name: text("name").unwrap_or_default(),
+                                desc: text("desc").unwrap_or_default(),
+                                path: path.to_string_lossy().into_owned(),
+                            }
+                        })
+                    })
+                    .collect();
+                let draw_style = extension
+                    .read("recipe.json")
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                    .and_then(|recipe| {
+                        recipe
+                            .pointer("/card/style")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                    });
+                todo_application::director::StyleInfo {
+                    id: manifest.id.clone(),
+                    name: manifest.name.clone(),
+                    description: manifest.description.clone(),
+                    params,
+                    rubric,
+                    assets,
+                    draw_style,
+                }
+            })
+            .collect()
+    }
+
     /// New service addresses or proxy: restart the AI service. Its journal
     /// keeps every task; in-flight ones resume and report as usual.
     pub fn reconfigure(&mut self) -> Result<(), String> {
-        let (settings, defaults, keys) = ai_settings(&self.root)?;
-        let (ai, _) = AiService::start(settings)?;
+        let (settings, defaults, bindings, keys) = ai_settings(&self.root)?;
+        let (ai, _) = AiRouter::start(settings, bindings)?;
         self.ai = ai;
         self.defaults = defaults.clone();
         self.keys = keys;
@@ -415,7 +673,7 @@ impl ProductionHost {
         // journal answers finished ones without a new request.
         let specs: Vec<TaskSpec> = self.submissions.values().map(|s| s.spec.clone()).collect();
         for spec in specs {
-            self.ai.submit(spec);
+            self.ai.submit_spec(spec);
         }
         Ok(())
     }
@@ -571,7 +829,7 @@ impl ProductionHost {
             ),
         };
         if let Some(input) = &manifest.input.script {
-            if script.trim().is_empty() {
+            if script.trim().is_empty() && !input.optional {
                 return Err(format!("请填写{}", input.label));
             }
             if script.chars().count() > input.max_length {
@@ -683,8 +941,9 @@ impl ProductionHost {
     }
 
     fn submit(&mut self, workdir: &str, spec: TaskSpec) {
+        let spec = self.ai.prepare(spec.request);
         let capability = spec.capability();
-        let key = self.ai.submit(spec.clone());
+        let key = self.ai.submit_spec(spec.clone());
         let dir = self.root.join(workdir);
         let entry = self.submissions.entry(key).or_insert(Submission {
             spec,
@@ -712,7 +971,7 @@ impl ProductionHost {
             for dir in &submission.workdirs {
                 materialize(&source, &dir.join(&relative))?;
             }
-            if submission.capability == Capability::Speech {
+            if submission.capability == Capability::Audio {
                 let bytes = std::fs::read(&source).map_err(|e| e.to_string())?;
                 let (samples, rate) =
                     todo_production::voice::read_wav(&bytes).ok_or("配音不是 WAV")?;
@@ -740,7 +999,11 @@ impl ProductionHost {
             }
             self.model_probe = None;
             self.connection_test_started = None;
-            reports.push(HostReport::Notice("虎妞连接测试超时（30 秒）".into()));
+            reports.push(HostReport::Connection {
+                provider: Provider::Huniu,
+                ok: false,
+                message: "30 秒内没有响应，请检查网络或服务地址".into(),
+            });
         }
         while let Ok((id, result)) = self.checks.try_recv() {
             self.check_results.insert(id, result);
@@ -807,10 +1070,17 @@ impl ProductionHost {
                             self.connection_test_started = None;
                         }
                         self.submissions.remove(&key);
-                        reports.push(HostReport::Notice(format!(
-                            "虎妞连接成功：{}",
-                            self.defaults.chat_model
-                        )));
+                        reports.push(HostReport::Connection {
+                            provider: Provider::Huniu,
+                            ok: true,
+                            message: format!(
+                                "连接正常，对话模型 {} 可用",
+                                self.ai
+                                    .binding(Capability::Language)
+                                    .map(|binding| binding.model.as_str())
+                                    .unwrap_or("未绑定")
+                            ),
+                        });
                     }
                     AiEvent::Failed {
                         key,
@@ -823,9 +1093,11 @@ impl ProductionHost {
                             self.connection_test_started = None;
                         }
                         self.submissions.remove(&key);
-                        reports.push(HostReport::Notice(format!(
-                            "虎妞连接失败：{class}：{message}"
-                        )));
+                        reports.push(HostReport::Connection {
+                            provider: Provider::Huniu,
+                            ok: false,
+                            message: class_message(&class, &message),
+                        });
                     }
                     AiEvent::Cancelled { key } => {
                         self.connection_test = None;
@@ -833,7 +1105,11 @@ impl ProductionHost {
                             self.connection_test_started = None;
                         }
                         self.submissions.remove(&key);
-                        reports.push(HostReport::Notice("连接测试已取消".into()));
+                        reports.push(HostReport::Connection {
+                            provider: Provider::Huniu,
+                            ok: false,
+                            message: "测试已取消".into(),
+                        });
                     }
                     // Progress and retry states stay quiet; the final result
                     // below is the useful feedback for a settings dialog.
@@ -871,6 +1147,68 @@ impl ProductionHost {
                 }
                 continue;
             }
+            if let Some(request_id) = event_key.and_then(|key| self.agent_tasks.get(key).cloned()) {
+                match event {
+                    AiEvent::Done {
+                        key,
+                        output,
+                        artifact,
+                        ..
+                    } => {
+                        self.agent_tasks.remove(&key);
+                        // Pictures answer with their file, text requests with text.
+                        let text = match artifact {
+                            Some(artifact) => self
+                                .ai
+                                .artifact_path(&artifact)
+                                .to_string_lossy()
+                                .into_owned(),
+                            None => output
+                                .and_then(|value| {
+                                    value
+                                        .get("text")
+                                        .and_then(serde_json::Value::as_str)
+                                        .map(str::to_owned)
+                                })
+                                .unwrap_or_default(),
+                        };
+                        reports.push(HostReport::AgentReply {
+                            request_id,
+                            result: Ok(text),
+                        });
+                    }
+                    AiEvent::Failed {
+                        key,
+                        class,
+                        message,
+                        ..
+                    } => {
+                        self.agent_tasks.remove(&key);
+                        reports.push(HostReport::AgentReply {
+                            request_id,
+                            result: Err(class_message(&class, &message)),
+                        });
+                    }
+                    AiEvent::Cancelled { key } => {
+                        self.agent_tasks.remove(&key);
+                        reports.push(HostReport::AgentReply {
+                            request_id,
+                            result: Err("Agent 请求已取消".into()),
+                        });
+                    }
+                    AiEvent::Generating { .. }
+                    | AiEvent::Downloading { .. }
+                    | AiEvent::Waiting { .. } => {}
+                    AiEvent::Models { .. } | AiEvent::ModelsFailed { .. } => {}
+                    AiEvent::NeedsAttention { attention, .. } => {
+                        reports.push(HostReport::AgentReply {
+                            request_id,
+                            result: Err(format!("Agent 服务需要处理：{attention:?}")),
+                        });
+                    }
+                }
+                continue;
+            }
             self.bridge.on_ai_event(&self.ai, &event);
             let output = match event {
                 AiEvent::Generating { key } => Some(ProductionOutput::TaskState {
@@ -893,6 +1231,7 @@ impl ProductionHost {
                             format!("第 {attempt} 次重试，{} 秒后（{message}）", after.as_secs())
                         }
                         todo_ai::WaitReason::Attention => "等待处理 key 或余额".into(),
+                        todo_ai::WaitReason::Elsewhere => "另一个程序正在生成，等它的结果".into(),
                     }),
                 }),
                 AiEvent::Done {
@@ -1010,6 +1349,232 @@ impl ProductionHost {
         self.registry.get(id).map(|e| e.manifest.name.clone())
     }
 
+    /// Declared workflow graph for the panel (None for narration / no graph).
+    pub fn workflow_panel(&self, extension_id: &str) -> Option<todo_interaction::WorkflowPanelView> {
+        let extension = self.registry.get(extension_id)?;
+        let workflow = extension.workflow().ok()??;
+        Some(todo_interaction::WorkflowPanelView {
+            nodes: workflow
+                .node_cards()
+                .into_iter()
+                .map(|n| {
+                    let fields = workflow_inspector_fields(&n.node_type, &n.params);
+                    let files = media_bin_files(&n.params);
+                    todo_interaction::WorkflowNodeView {
+                        id: n.id,
+                        node_type: n.node_type,
+                        label: n.label,
+                        summary: n.summary,
+                        docs: n.docs,
+                        status: todo_interaction::ProductionNodeStatus::Queued,
+                        detail: None,
+                        inputs: n
+                            .inputs
+                            .into_iter()
+                            .map(|p| format!("{}:{}", p.name, p.kind))
+                            .collect(),
+                        outputs: n
+                            .outputs
+                            .into_iter()
+                            .map(|p| format!("{}:{}", p.name, p.kind))
+                            .collect(),
+                        x: n.x,
+                        y: n.y,
+                        fields,
+                        files,
+                    }
+                })
+                .collect(),
+            edges: workflow
+                .edges()
+                .iter()
+                .map(|e| todo_interaction::WorkflowEdgeView {
+                    from: e.from.clone(),
+                    to: e.to.clone(),
+                    out: e.out.clone(),
+                    input: e.input.clone(),
+                })
+                .collect(),
+        })
+    }
+
+    /// Packages that declare a workflow graph (side dock list).
+    pub fn workflow_entries(&self) -> Vec<todo_interaction::WorkflowEntryView> {
+        let mut entries: Vec<_> = self
+            .registry
+            .list()
+            .filter(|e| e.manifest.graph.is_some())
+            .map(|extension| {
+                let status = match self.check_results.get(&extension.manifest.id) {
+                    None => ExtensionStatus::Checking,
+                    Some(Err(e)) if e.contains("Python") || e.contains("python") => {
+                        ExtensionStatus::RuntimeMissing
+                    }
+                    Some(Err(_)) => ExtensionStatus::SelfCheckFailed,
+                    Some(Ok(())) => ExtensionStatus::Ready,
+                };
+                let summary = extension.manifest.description.clone();
+                let summary = {
+                    let first = summary
+                        .split(['。', '；', '\n'])
+                        .next()
+                        .unwrap_or_default()
+                        .trim();
+                    let mut out: String = first.chars().take(36).collect();
+                    if first.chars().count() > 36 {
+                        out.push('…');
+                    }
+                    out
+                };
+                todo_interaction::WorkflowEntryView {
+                    extension_id: extension.manifest.id.clone(),
+                    name: extension.manifest.name.clone(),
+                    summary,
+                    origin_user: extension.origin == Origin::User,
+                    status,
+                }
+            })
+            .collect();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        entries
+    }
+
+    fn rescan_registry(&mut self) {
+        self.registry = Registry::scan(
+            &self.root.join("extensions/builtin"),
+            &self.root.join("extensions/user"),
+        );
+    }
+
+    /// Create a blank user workflow; returns its extension id.
+    pub fn create_workflow(&mut self, name: &str) -> Result<String, String> {
+        let user = self.root.join("extensions/user");
+        std::fs::create_dir_all(&user).map_err(|e| e.to_string())?;
+        let id = create_blank_workflow(&user, name)?;
+        self.rescan_registry();
+        self.check_results.insert(id.clone(), Ok(()));
+        Ok(id)
+    }
+
+    /// Ensure the package is writable under extensions/user (copy builtin if needed).
+    fn writable_extension(&mut self, extension_id: &str) -> Result<std::sync::Arc<Extension>, String> {
+        let extension = self
+            .registry
+            .get(extension_id)
+            .ok_or_else(|| format!("找不到扩展 {extension_id}"))?;
+        if extension.origin == Origin::User {
+            return Ok(extension);
+        }
+        let user_dir = self.root.join("extensions/user").join(extension_id);
+        copy_package(&extension.dir, &user_dir)?;
+        self.rescan_registry();
+        self.registry
+            .get(extension_id)
+            .ok_or_else(|| format!("覆盖后仍找不到 {extension_id}"))
+    }
+
+    /// Persist inspector edits into the extension's graph.json (keeps files list).
+    pub fn save_workflow_node_params(
+        &mut self,
+        extension_id: &str,
+        node_id: &str,
+        edits: &BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        let extension = self.writable_extension(extension_id)?;
+        let workflow = extension
+            .workflow()
+            .map_err(|ps| {
+                ps.iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })?
+            .ok_or_else(|| "扩展没有工作流图".to_string())?;
+        let node = workflow
+            .nodes()
+            .iter()
+            .find(|n| n.id == node_id)
+            .ok_or_else(|| format!("没有节点 {node_id}"))?;
+        let mut params = node.params.clone();
+        for (key, raw) in edits {
+            if key == "files" {
+                continue;
+            }
+            let value = if let Ok(n) = raw.parse::<i64>() {
+                serde_json::json!(n)
+            } else if let Ok(n) = raw.parse::<f64>() {
+                serde_json::json!(n)
+            } else {
+                serde_json::json!(raw)
+            };
+            params.insert(key.clone(), value);
+        }
+        extension.save_node_params(node_id, params)
+    }
+
+    /// Save full graph: node positions + optional per-node field edits.
+    pub fn save_workflow_graph(
+        &mut self,
+        extension_id: &str,
+        positions: &BTreeMap<String, (f32, f32)>,
+        edits: &BTreeMap<String, BTreeMap<String, String>>,
+    ) -> Result<(), String> {
+        let extension = self.writable_extension(extension_id)?;
+        let workflow = extension
+            .workflow()
+            .map_err(|ps| {
+                ps.iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })?
+            .ok_or_else(|| "扩展没有工作流图".to_string())?;
+        let mut graph = workflow.graph.clone();
+        for node in &mut graph.nodes {
+            if let Some(&(x, y)) = positions.get(&node.id) {
+                node.x = Some(x as f64);
+                node.y = Some(y as f64);
+            }
+            if let Some(fields) = edits.get(&node.id) {
+                for (key, raw) in fields {
+                    if key == "files" {
+                        continue;
+                    }
+                    let value = if let Ok(n) = raw.parse::<i64>() {
+                        serde_json::json!(n)
+                    } else if let Ok(n) = raw.parse::<f64>() {
+                        serde_json::json!(n)
+                    } else {
+                        serde_json::json!(raw)
+                    };
+                    node.params.insert(key.clone(), value);
+                }
+            }
+        }
+        extension.save_graph(&graph)
+    }
+
+    /// Pick-and-copy files into a media_bin node.
+    pub fn add_workflow_media_files(
+        &mut self,
+        extension_id: &str,
+        node_id: &str,
+        sources: &[std::path::PathBuf],
+    ) -> Result<usize, String> {
+        let extension = self.writable_extension(extension_id)?;
+        extension.add_media_bin_files(node_id, sources)
+    }
+
+    pub fn remove_workflow_media_file(
+        &mut self,
+        extension_id: &str,
+        node_id: &str,
+        rel_path: &str,
+    ) -> Result<(), String> {
+        let extension = self.writable_extension(extension_id)?;
+        extension.remove_media_bin_file(node_id, rel_path)
+    }
+
     /// Extension cards for the production panel.
     pub fn cards(&self) -> Vec<ExtensionCardView> {
         let mut cards: Vec<ExtensionCardView> = self
@@ -1055,6 +1620,7 @@ impl ProductionHost {
                         label: s.label.clone(),
                         max_length: s.max_length,
                         placeholder: s.placeholder.clone(),
+                        optional: s.optional,
                     }),
                 }
             })
@@ -1084,6 +1650,131 @@ impl ProductionHost {
         }
         cards
     }
+}
+
+fn media_bin_files(
+    params: &serde_json::Map<String, serde_json::Value>,
+) -> Vec<todo_interaction::WorkflowMediaFileView> {
+    params
+        .get("files")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|f| {
+            let path = f.get("path")?.as_str()?.to_owned();
+            let kind = f.get("kind")?.as_str()?.to_owned();
+            let name = f
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_else(|| {
+                    path.rsplit('/').next().unwrap_or(path.as_str())
+                })
+                .to_owned();
+            Some(todo_interaction::WorkflowMediaFileView { path, kind, name })
+        })
+        .collect()
+}
+
+fn workflow_inspector_fields(
+    node_type: &str,
+    params: &serde_json::Map<String, serde_json::Value>,
+) -> Vec<todo_interaction::WorkflowParamFieldView> {
+    use todo_interaction::WorkflowParamFieldView;
+    use todo_production::extension::nodes::{self, ParamField};
+    let Some(spec) = nodes::lookup(node_type) else {
+        return Vec::new();
+    };
+    spec.fields
+        .iter()
+        .map(|field| match field {
+            ParamField::Select {
+                id,
+                label,
+                hint,
+                options,
+                default,
+            } => {
+                let value = params
+                    .get(*id)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(default)
+                    .to_owned();
+                WorkflowParamFieldView::Select {
+                    id: (*id).into(),
+                    label: (*label).into(),
+                    hint: (*hint).into(),
+                    options: options
+                        .iter()
+                        .map(|(v, l)| ((*v).into(), (*l).into()))
+                        .collect(),
+                    value,
+                }
+            }
+            ParamField::Number {
+                id,
+                label,
+                hint,
+                min,
+                max,
+                step,
+                default,
+                unit,
+            } => {
+                let value = params
+                    .get(*id)
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(*default);
+                WorkflowParamFieldView::Number {
+                    id: (*id).into(),
+                    label: (*label).into(),
+                    hint: (*hint).into(),
+                    min: *min,
+                    max: *max,
+                    step: *step,
+                    unit: unit.map(|u| u.to_owned()),
+                    value,
+                }
+            }
+            ParamField::Text {
+                id,
+                label,
+                hint,
+                default,
+                placeholder,
+            } => {
+                let value = params
+                    .get(*id)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(default)
+                    .to_owned();
+                WorkflowParamFieldView::Text {
+                    id: (*id).into(),
+                    label: (*label).into(),
+                    hint: (*hint).into(),
+                    placeholder: (*placeholder).into(),
+                    value,
+                }
+            }
+            ParamField::FileKinds {
+                id,
+                label,
+                hint,
+                accept,
+            } => {
+                let accept = params
+                    .get(*id)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(accept)
+                    .to_owned();
+                WorkflowParamFieldView::FileKinds {
+                    id: (*id).into(),
+                    label: (*label).into(),
+                    hint: (*hint).into(),
+                    accept,
+                }
+            }
+        })
+        .collect()
 }
 
 fn uuid_like() -> String {

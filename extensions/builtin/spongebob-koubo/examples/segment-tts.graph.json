@@ -1,0 +1,39 @@
+{
+  "spec": "todo-graph/1",
+  "nodes": [
+    {
+      "id": "script",
+      "type": "script",
+      "label": "原始口播"
+    },
+    {
+      "id": "segment",
+      "type": "segment_script",
+      "label": "口播分段",
+      "params": {
+        "mode": "semantic",
+        "target": 120,
+        "max": 200
+      }
+    },
+    {
+      "id": "tts",
+      "type": "tts",
+      "label": "口播转 TTS",
+      "params": {
+        "voice": "S_RksT6Z6g2",
+        "rate": 16
+      }
+    },
+    {
+      "id": "done",
+      "type": "done",
+      "label": "完成"
+    }
+  ],
+  "edges": [
+    { "from": "script", "to": "segment", "out": "script", "in": "text" },
+    { "from": "script", "to": "tts", "out": "script", "in": "text" },
+    { "from": "tts", "to": "done", "out": "audio", "in": "result" }
+  ]
+}
