@@ -18,11 +18,22 @@ dependencies/python-*.zip
 # Licensed font files; only the README is tracked
 dependencies/fonts/*
 !dependencies/fonts/README.md
+!dependencies/fonts/fonts.json
 /cache/
 
 # Project media under data/
 data/**/media/
+data/.trash/
+data/.locks/
 *.mp4
+
+# Local scratch / screenshots at repo root
+/Snipaste_*.jpg
+/Snipaste_*.png
+/*.mp4
+
+# Personal notes (not project docs)
+/docs/*.txt
 
 # Machine-local AI settings (paths only; keys stay in the 密匙 .env or Credential Manager)
 /config/ai.json
