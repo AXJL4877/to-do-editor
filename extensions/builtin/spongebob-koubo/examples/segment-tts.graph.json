@@ -34,6 +34,6 @@
   "edges": [
     { "from": "script", "to": "segment", "out": "script", "in": "text" },
     { "from": "script", "to": "tts", "out": "script", "in": "text" },
-    { "from": "tts", "to": "done", "out": "audio", "in": "result" }
+    { "from": "tts", "to": "done", "out": "clips", "in": "result" }
   ]
 }

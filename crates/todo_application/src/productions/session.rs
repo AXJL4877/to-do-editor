@@ -4,7 +4,7 @@ use super::{
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use todo_core::Project;
-use todo_production::extension::items::Item;
+use todo_production::items::Item;
 use todo_production::narration::{self, NarrationLayout};
 use todo_production::placement::{self, PlacementInput, PlacementPlan};
 use todo_production::production::{Edit, Rendered, WorkflowRecord};
@@ -222,6 +222,85 @@ impl ProductionSession {
 
     pub fn runs(&self) -> impl Iterator<Item = LocalRunId> + '_ {
         self.runs.keys().copied()
+    }
+
+    pub fn set_workdir(&mut self, workdir: String) {
+        if !self.setup.workdir.is_empty() && self.setup.workdir != workdir {
+            let current = self.setup.workdir.as_str();
+            let keep_production = is_production_workdir(current) && is_cache_run_workdir(&workdir);
+            if keep_production {
+                // Resume must not point placement at a fresh cache/workflow-runs
+                // tree — relative media paths under productions/.../work would break.
+                let line = format!(
+                    "续跑已复用原工作目录 {current}（忽略 cache run {workdir}）"
+                );
+                if !self.attention.contains(&line) {
+                    self.attention.push(line);
+                }
+                self.dirty = true;
+                return;
+            }
+            let line = format!(
+                "工作目录已切换（{current} → {workdir}）。已入轨相对路径可能失效；续跑应复用原 production workdir。"
+            );
+            if !self.attention.contains(&line) {
+                self.attention.push(line);
+            }
+        }
+        self.setup.workdir = workdir;
+        self.dirty = true;
+    }
+
+    pub fn set_canvas(&mut self, canvas: todo_workflow::workflow::protocol::Canvas) {
+        self.setup.canvas = canvas;
+        self.dirty = true;
+    }
+
+    pub fn set_workflow_script(&mut self, script: &str) {
+        self.doc.script = script.to_owned();
+        if let Recipe::Workflow { input, .. } = &mut self.setup.recipe {
+            *input = serde_json::json!({ "script": script });
+        }
+        self.dirty = true;
+    }
+
+    /// Register a canvas-driven graph run (no worker pool). Items arrive via
+    /// [`ProductionOutput::RunItems`] with this id.
+    pub fn attach_canvas_run(
+        &mut self,
+        next_run: &mut LocalRunId,
+    ) -> LocalRunId {
+        self.runs
+            .retain(|_, (purpose, _)| !matches!(purpose, RunPurpose::Workflow { .. }));
+        let fp = self.workflow_fingerprint(match &self.setup.recipe {
+            Recipe::Workflow { input, .. } => input,
+            _ => &serde_json::Value::Null,
+        });
+        let kept = self
+            .doc
+            .workflow
+            .take()
+            .map(|r| r.items)
+            .unwrap_or_default();
+        self.doc.workflow = Some(WorkflowRecord {
+            fingerprint: fp.clone(),
+            items: kept,
+            result: None,
+            error: None,
+        });
+        *next_run += 1;
+        let run = *next_run;
+        self.runs.insert(
+            run,
+            (
+                RunPurpose::Workflow {
+                    fingerprint: fp,
+                },
+                RunBuffer::default(),
+            ),
+        );
+        self.dirty = true;
+        run
     }
 
     fn spec(&self) -> Option<&work::ProductionSpec> {
@@ -503,6 +582,9 @@ impl ProductionSession {
                     return false;
                 };
                 if let RunPurpose::Workflow { .. } = purpose {
+                    // Same-rev deletes stay deleted (production-pipeline §4).
+                    // A new rev may place again; explicit "放回" uses
+                    // restore_production. Do not clear tombstones on emit.
                     // Workflow items go on the timeline as they arrive.
                     if let Some(record) = self.doc.workflow.as_mut() {
                         for item in &items {
@@ -725,7 +807,7 @@ impl ProductionSession {
             }
             RunPurpose::Plate { fingerprint } => {
                 let file = buffer.items.iter().find_map(|i| match &i.source {
-                    todo_production::extension::items::ItemSource::File { file, .. } => {
+                    todo_production::items::ItemSource::File { file, .. } => {
                         Some(file.clone())
                     }
                     _ => None,
@@ -752,8 +834,24 @@ impl ProductionSession {
                     .filter(|r| r.fingerprint == fingerprint)
                 {
                     record.items.retain(|i| emitted.contains(i.key.as_str()));
-                    record.result = Some(result);
-                    record.error = None;
+                    let ok = result
+                        .get("ok")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+                    record.result = Some(result.clone());
+                    if ok {
+                        record.error = None;
+                    } else {
+                        // Keep failure visible: UI treats error as Failed even when
+                        // result is also present.
+                        record.error = Some(
+                            result
+                                .get("error")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("工作流失败")
+                                .to_owned(),
+                        );
+                    }
                 }
             }
         }
@@ -791,6 +889,46 @@ impl ProductionSession {
         })
     }
 
+    /// Recover the state written by the old progressive placement path when a
+    /// whole production was recorded as deleted before its media was saved.
+    ///
+    /// This is deliberately narrow: it only runs when there are no clips for
+    /// this production, no item was ever recorded as placed, every current
+    /// item is tombstoned at its current revision, and the persisted error is
+    /// the media-registration failure. A real user deletion therefore keeps
+    /// its tombstone and remains opt-in through `restore_production`.
+    pub fn recover_stale_placement(&mut self, project: &Project) -> bool {
+        if self.doc.placement.placed.is_empty()
+            && self.doc.placement.error.as_deref()
+                == Some("多个素材无法入轨（路径缺失或登记失败）")
+        {
+            let (items, _) = self.items();
+            let all_current_tombstoned = !items.is_empty()
+                && items.iter().all(|item| {
+                    self.doc
+                        .placement
+                        .tombstones
+                        .contains(&(item.key.clone(), item.rev.clone()))
+                });
+            let has_timeline_clip = project.tracks.iter().any(|track| {
+                track.clips.iter().any(|clip| {
+                    clip.origin
+                        .as_ref()
+                        .is_some_and(|origin| origin.production == self.doc.id)
+                })
+            });
+            if all_current_tombstoned && !has_timeline_clip {
+                self.doc.placement.tombstones.clear();
+                self.doc.placement.error = None;
+                self.attention
+                    .retain(|line| !line.starts_with("入轨未成功："));
+                self.dirty = true;
+                return true;
+            }
+        }
+        false
+    }
+
     /// Record a plan that reached the timeline.
     pub fn placed(&mut self, plan: &PlacementPlan) {
         placement::record(&mut self.doc.placement, plan);
@@ -824,9 +962,10 @@ impl ProductionSession {
             None => {
                 self.run_failures.clear();
                 if let Some(record) = self.doc.workflow.as_mut() {
-                    if record.error.take().is_some() {
-                        record.fingerprint.clear();
-                    }
+                    // Clear the error so the host can start again, but keep
+                    // fingerprint + items so resume stays the same logical run
+                    // (placement / tombstones stay coherent — see onrail B6).
+                    let _ = record.error.take();
                 }
                 Vec::new()
             }
@@ -1060,11 +1199,18 @@ impl ProductionSession {
                 .contains(&(i.key.clone(), i.rev.clone()))
         };
         let deleted = items.iter().filter(|i| deleted_item(i)).count();
+        let placement_stuck = self
+            .attention
+            .iter()
+            .any(|line| line.starts_with("入轨未成功"));
         let timeline: Vec<StatusState> = items
             .iter()
             .map(|i| {
                 if placement.placed.get(&i.key) == Some(&i.rev) || deleted_item(i) {
                     StatusState::Done
+                } else if placement_stuck {
+                    // Adopt/ApplyGenerated failed: not "still placing".
+                    StatusState::Failed
                 } else {
                     StatusState::Running
                 }
@@ -1133,14 +1279,14 @@ impl ProductionSession {
     pub fn media_name(&self, path: &str) -> Option<String> {
         let (items, _) = self.items();
         let item = items.iter().find(|item| {
-            matches!(&item.source, todo_production::extension::items::ItemSource::File { file, .. }
+            matches!(&item.source, todo_production::items::ItemSource::File { file, .. }
                 if placement::media_path(&self.setup.workdir, file) == path)
         })?;
         Some(self.key_name(&item.key, item.role))
     }
 
-    fn key_name(&self, key: &str, role: todo_production::extension::items::ItemRole) -> String {
-        use todo_production::extension::items::ItemRole;
+    fn key_name(&self, key: &str, role: todo_production::items::ItemRole) -> String {
+        use todo_production::items::ItemRole;
         let segment = |id: &str| {
             self.doc
                 .segments
@@ -1228,5 +1374,195 @@ impl ProductionSession {
             self.doc.placement.tombstones.clear();
             self.dirty = true;
         }
+    }
+
+    /// Surface a placement / ApplyGenerated / adopt failure for UI + Bridge.
+    /// Keeps a single「入轨未成功」card so 80+ file failures stay readable.
+    pub fn note_placement_error(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        let short = if message.contains("素材登记失败") || message.contains("无法入轨") {
+            "多个素材无法入轨（路径缺失或登记失败）".into()
+        } else {
+            message.chars().take(120).collect::<String>()
+        };
+        self.attention
+            .retain(|line| !line.starts_with("入轨未成功："));
+        self.attention.insert(
+            0,
+            format!("入轨未成功：{short}。可点「重试」或改时间轴锁定后重试。"),
+        );
+        self.doc.placement.error = Some(short);
+        self.dirty = true;
+    }
+
+    pub fn clear_placement_errors(&mut self) {
+        self.attention
+            .retain(|line| !line.starts_with("入轨未成功："));
+        if self.doc.placement.error.take().is_some() {
+            self.dirty = true;
+        }
+    }
+
+    /// Whether this production still needs the given repository-relative media path.
+    pub fn needs_media_path(&self, path: &str) -> bool {
+        let (items, _) = self.items();
+        items.iter().any(|item| {
+            matches!(
+                &item.source,
+                todo_production::items::ItemSource::File { file, .. }
+                    if placement::media_path(&self.setup.workdir, file) == path
+            )
+        })
+    }
+
+    /// How many of this production's file items sit in the unadoptable set.
+    pub fn unadoptable_count(&self, unadoptable: &BTreeSet<String>) -> usize {
+        let (items, _) = self.items();
+        items
+            .iter()
+            .filter_map(|item| match &item.source {
+                todo_production::items::ItemSource::File { file, .. } => {
+                    Some(placement::media_path(&self.setup.workdir, file))
+                }
+                _ => None,
+            })
+            .filter(|path| unadoptable.contains(path))
+            .collect::<BTreeSet<_>>()
+            .len()
+    }
+}
+
+fn is_production_workdir(path: &str) -> bool {
+    let n = path.replace('\\', "/");
+    n.contains("/productions/") && (n.ends_with("/work") || n.contains("/work/") || n.ends_with("/work"))
+}
+
+fn is_cache_run_workdir(path: &str) -> bool {
+    path.replace('\\', "/").contains("cache/workflow-runs")
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+    use todo_core::create_project;
+    use todo_production::items::{ItemRole, ItemSource};
+    use todo_production::production::{PackRef, WorkflowRecord};
+    use todo_production::segment::Limits;
+    use todo_production::{Production, SplitMode};
+    use todo_workflow::workflow::protocol::Canvas;
+
+    fn workflow_session() -> ProductionSession {
+        let doc = Production::new(
+            "w",
+            PackRef {
+                id: "studio.workflow-test".into(),
+                version: "1.0.0".into(),
+            },
+            "script",
+            BTreeMap::new(),
+            SplitMode::Paragraph,
+            Limits {
+                target: 12,
+                max: 60,
+            },
+        );
+        let mut session = ProductionSession::new(
+            "p",
+            doc,
+            ProductionSetup {
+                extension: "studio.workflow-test".into(),
+                recipe: Recipe::Workflow {
+                    op: "run".into(),
+                    input: json!({ "script": "script" }),
+                },
+                canvas: Canvas {
+                    width: 1920,
+                    height: 1080,
+                    fps: 30.0,
+                },
+                workdir: "data/p/productions/w/work".into(),
+            },
+        );
+        session.doc.workflow = Some(WorkflowRecord {
+            fingerprint: "fp-keep".into(),
+            items: Vec::new(),
+            result: None,
+            error: Some("network down".into()),
+        });
+        session
+    }
+
+    #[test]
+    fn whole_run_retry_keeps_workflow_fingerprint() {
+        let mut session = workflow_session();
+        let _ = session.retry(None);
+        let record = session.doc.workflow.as_ref().unwrap();
+        assert_eq!(record.fingerprint, "fp-keep");
+        assert!(record.error.is_none());
+    }
+
+    #[test]
+    fn set_workdir_change_surfaces_attention() {
+        let mut session = workflow_session();
+        session.set_workdir("data/p/productions/w/work-b".into());
+        assert!(
+            session
+                .attention
+                .iter()
+                .any(|line| line.contains("工作目录已切换")),
+            "{:?}",
+            session.attention
+        );
+    }
+
+    #[test]
+    fn set_workdir_refuses_cache_run_over_production_work() {
+        let mut session = workflow_session();
+        let kept = session.setup.workdir.clone();
+        session.set_workdir("cache/workflow-runs/studio-x-1".into());
+        assert_eq!(session.setup.workdir, kept);
+        assert!(
+            session
+                .attention
+                .iter()
+                .any(|line| line.contains("续跑已复用原工作目录")),
+            "{:?}",
+            session.attention
+        );
+    }
+
+    #[test]
+    fn stale_all_deleted_placement_is_recovered_without_timeline_clips() {
+        let mut session = workflow_session();
+        let item = Item {
+            key: "visual/s1".into(),
+            rev: "v1-services/a.png".into(),
+            role: ItemRole::Visual,
+            lane: 0,
+            start: 0.0,
+            duration: 1.0,
+            source: ItemSource::File {
+                file: "services/a.png".into(),
+                r#in: 0.0,
+            },
+            transform: None,
+            intro: None,
+            outro: None,
+            transition: None,
+            link: None,
+            gain: None,
+            fade: None,
+        };
+        session.doc.workflow.as_mut().unwrap().items = vec![item.clone()];
+        session.doc.workflow.as_mut().unwrap().result = Some(json!({"ok": true}));
+        session.doc.placement.tombstones.insert((item.key, item.rev));
+        session.doc.placement.error = Some("多个素材无法入轨（路径缺失或登记失败）".into());
+        let project = create_project(Some(1920.0), Some(1080.0), Some(30.0), None, None);
+
+        assert!(session.recover_stale_placement(&project));
+        assert!(session.doc.placement.tombstones.is_empty());
+        assert!(session.doc.placement.error.is_none());
     }
 }

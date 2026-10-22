@@ -14,7 +14,7 @@ use todo_app::adapters::workflow::HostServices;
 use todo_ai::{
     AiConfig, AiRouter, CapabilityBindings, ModelBinding, ServiceSettings,
 };
-use todo_production::extension::HostDefaults;
+use todo_workflow::workflow::HostDefaults;
 use todo_production::{Capability, Provider};
 use todo_workflow::runner::{run, RunInput};
 use todo_workflow::{Registry, RunId, WorkerPool};
@@ -58,11 +58,17 @@ fn main() {
         secrets.language().ok().flatten().map(|(key, _)| todo_ai::LanguageEndpoint {
             base_url: base.clone(),
             key,
+            model: config
+                .language_model
+                .clone()
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or_else(|| "deepseek-flash".into()),
         })
     });
     println!(
-        "language: {:?} model {:?}",
-        config.language_base_url, config.language_model
+        "language: {:?} endpoint_model {:?}",
+        config.language_base_url,
+        language.as_ref().map(|e| e.model.as_str())
     );
     // 调试：日志/产物都放在本次运行目录，不读也不写全局 cache
     let stamp = std::time::SystemTime::now()
@@ -76,6 +82,10 @@ fn main() {
     let _ = todo_ai::default_paths(&root);
     let journal_dir = workdir.join("journal");
     let artifacts_root = workdir.join("blobs");
+    let language_model = language
+        .as_ref()
+        .map(|endpoint| endpoint.model.clone())
+        .unwrap_or_else(|| config.huniu.language_model.clone());
     let settings = ServiceSettings {
         huniu_base_url: config.huniu.base_url.clone(),
         language,
@@ -90,10 +100,10 @@ fn main() {
             (Capability::Audio, Provider::Volc),
         ]),
         models: std::collections::HashMap::from([
-            (Capability::Language, config.language_model.clone().unwrap_or_else(|| config.huniu.language_model.clone())),
+            (Capability::Language, language_model.clone()),
             (Capability::Image, config.huniu.image_model.clone()),
             (Capability::Video, config.huniu.video_model.clone()),
-            (Capability::Multimodal, "deepseek-flash".to_string()),
+            (Capability::Multimodal, config.huniu.multimodal_model.clone()),
             (Capability::Audio, config.volc.audio_model.clone()),
         ]),
         journal_dir,
@@ -107,7 +117,7 @@ fn main() {
         models: std::collections::HashMap::from([
             (
                 Capability::Language,
-                ModelBinding { model: config.language_model.clone().unwrap_or_else(|| config.huniu.language_model.clone()), provider: Provider::Huniu },
+                ModelBinding { model: language_model, provider: Provider::Huniu },
             ),
             (
                 Capability::Image,
@@ -150,6 +160,7 @@ fn main() {
     let mut bridge = ServiceBridge::new(
         HostDefaults {
             audio_model: config.volc.audio_model.clone(),
+            speaker: config.volc.speaker.clone(),
             sample_rate: 24_000,
         },
         &root,
@@ -194,10 +205,11 @@ fn main() {
     );
     for node in &report.nodes {
         println!(
-            "  {:<14} {:<16} {}{}",
+            "  {:<14} {:<16} {:<6} {:>6.2}s{}",
             node.id,
             node.node_type,
             if node.ok { "ok" } else { "FAILED" },
+            node.duration_ms as f64 / 1000.0,
             if node.message.is_empty() {
                 String::new()
             } else {

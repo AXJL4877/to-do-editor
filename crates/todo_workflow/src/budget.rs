@@ -4,8 +4,8 @@
 //! worker restarts do not consume another unit for the same call.
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
-use todo_production::extension::manifest::Service;
-use todo_production::extension::protocol::{ServiceError, ServiceErrorClass};
+use crate::workflow::manifest::Service;
+use crate::workflow::protocol::{ServiceError, ServiceErrorClass};
 use todo_production::tasks::fingerprint;
 
 #[derive(Debug, Clone)]

@@ -62,7 +62,7 @@ PSNR 未过，但**不是编码质量问题**：CRF 18 → 14（文件 8.5 MB �
 | --- | --- |
 | `todo_production::tasks::SpeechRequest` | 新增 `speech_rate: Option<i32>` |
 | `todo_ai::providers::volc::request_body` | `audio_params.speech_rate`（夹取 −50..100） |
-| `todo_production::extension::protocol::SpeechCall` | 新增 `rate`，worker 可直接传语速 |
+| `todo_workflow::workflow::protocol::SpeechCall` | 新增 `rate`，worker 可直接传语速 |
 | `todo_production::work::VoiceSpec` | 新增 `speech_rate`，长口播配方同样支持 |
 | `todo_app/examples/export_project.rs` | 通用导出工具：`export_project <project> [out] [--check]`，`TODO_EXPORT_PRESET=high` |
 | `scripts/koubo.py` / `scripts/koubo.md` | 可复用流水线（六段式 + 配置） |

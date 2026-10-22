@@ -2,10 +2,10 @@
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-use todo_production::extension::graph::{Graph, GRAPH_SPEC};
-use todo_production::extension::items::{validate_items, Item};
-use todo_production::extension::manifest::{Kind, Manifest, Service};
-use todo_production::extension::protocol::{
+use todo_workflow::workflow::graph::{Graph, GRAPH_SPEC};
+use todo_production::items::{validate_items, Item};
+use todo_workflow::workflow::manifest::{Kind, Manifest, Service};
+use todo_workflow::workflow::protocol::{
     HostMessage, ServiceCall, ServiceErrorClass, WorkerMessage,
 };
 
@@ -79,8 +79,12 @@ fn the_spongebob_package_declares_a_valid_graph() {
     let graph: Graph = serde_json::from_str(&graph_text).unwrap();
     assert_eq!(graph.spec, GRAPH_SPEC);
     let order = graph.topo_order().expect("DAG");
-    assert_eq!(order.first().copied(), Some("script"));
+    assert!(
+        order.first().is_some_and(|id| *id == "script" || *id == "media_bin"),
+        "sources first: {order:?}"
+    );
     assert_eq!(order.last().copied(), Some("done"));
+    assert!(order.iter().any(|id| *id == "script"));
     assert!(order.iter().any(|id| *id == "picture_batch"));
 }
 
@@ -366,7 +370,7 @@ fn items_are_checked_before_they_reach_the_timeline() {
 
 #[test]
 fn the_chalk_hand_recipe_drives_the_pipeline() {
-    use todo_production::extension::{narration_spec, HostDefaults};
+    use todo_workflow::workflow::{narration_spec, HostDefaults};
     use todo_production::production::SplitMode;
     let dir = package("chalk-hand");
     let manifest: Manifest =
@@ -374,6 +378,7 @@ fn the_chalk_hand_recipe_drives_the_pipeline() {
             .unwrap();
     let host = HostDefaults {
         audio_model: "seed-tts-2.0".into(),
+        speaker: "zh_female_mizai_uranus_bigtts".into(),
         sample_rate: 24000,
     };
     let given: BTreeMap<String, Value> = serde_json::from_value(

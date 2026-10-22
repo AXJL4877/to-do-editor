@@ -75,7 +75,11 @@ impl Workspace {
                 "requestId must contain 1..128 nonblank bytes",
             ));
         }
-        if request.session_id != self.generation {
+        // Agents bootstrap with get_context (often sessionId=0) to learn the
+        // live session — do not require a match for that command alone.
+        if request.session_id != self.generation
+            && !matches!(request.command, ControlCommand::GetContext)
+        {
             return Err(ControlError::new(
                 "session_conflict",
                 "Read a new context before controlling this project session",
@@ -200,7 +204,168 @@ impl Workspace {
                     self.editor_update(update),
                 ))
             }
+            ControlCommand::GetProductionContext { production_id } => {
+                Ok((self.production_context_result(production_id.as_deref())?, AppUpdate::default()))
+            }
+            ControlCommand::GetWorkflowRun {
+                run_id,
+                production_id,
+            } => Ok((
+                self.workflow_run_result(production_id.as_deref(), *run_id)?,
+                AppUpdate::default(),
+            )),
+            ControlCommand::ListExtensions
+            | ControlCommand::StartWorkflow { .. }
+            | ControlCommand::CancelWorkflow { .. }
+            | ControlCommand::RetryWorkflow { .. }
+            | ControlCommand::ImportExtension { .. } => Err(ControlError::new(
+                "workflow_host_required",
+                "此命令需由正在运行的桌面宿主（Agent Bridge）执行，与 UI 共用 ProductionHost；请通过 Bridge 发送，勿直接改 JSON",
+            )),
         }
+    }
+
+    fn production_context_result(
+        &self,
+        production_id: Option<&str>,
+    ) -> Result<ControlResult, ControlError> {
+        let mut productions = Vec::new();
+        for status in self.production_status() {
+            if production_id.is_some_and(|id| id != status.id) {
+                continue;
+            }
+            let Some(doc) = self.production(&status.id) else {
+                continue;
+            };
+            let local_run_ids: Vec<u64> = self
+                .productions
+                .sessions
+                .get(&status.id)
+                .map(|s| s.runs().collect())
+                .unwrap_or_default();
+            let has_live_run = !local_run_ids.is_empty();
+            let blocked = self.productions.rejected.contains_key(&status.id);
+            let session = self.productions.sessions.get(&status.id);
+            let unadoptable = session
+                .map(|s| s.unadoptable_count(&self.productions.unadoptable))
+                .unwrap_or(0);
+            let pending_adopt = session
+                .map(|s| {
+                    self.productions
+                        .adopting
+                        .iter()
+                        .filter(|path| s.needs_media_path(path))
+                        .count()
+                })
+                .unwrap_or(0);
+            productions.push(crate::control::snapshot_from_with_placement(
+                &status,
+                doc,
+                local_run_ids,
+                has_live_run,
+                blocked,
+                unadoptable,
+                pending_adopt,
+            ));
+        }
+        if let Some(id) = production_id {
+            if productions.is_empty() {
+                return Err(ControlError::new(
+                    "production_not_found",
+                    &format!("没有成片会话 {id}"),
+                ));
+            }
+        }
+        Ok(ControlResult::ProductionContext {
+            context: ProductionContextView { productions },
+        })
+    }
+
+    fn workflow_run_result(
+        &self,
+        production_id: Option<&str>,
+        run_id: Option<u64>,
+    ) -> Result<ControlResult, ControlError> {
+        let id = if let Some(pid) = production_id {
+            pid.to_owned()
+        } else if let Some(run) = run_id {
+            self.productions
+                .sessions
+                .iter()
+                .find(|(_, s)| s.owns_run(run))
+                .map(|(id, _)| id.clone())
+                .ok_or_else(|| {
+                    ControlError::new("run_not_found", &format!("没有本地 runId={run}"))
+                })?
+        } else {
+            self.productions
+                .sessions
+                .keys()
+                .next()
+                .cloned()
+                .ok_or_else(|| {
+                    ControlError::new(
+                        "production_not_found",
+                        "当前工程没有成片/工作流会话；先 start_workflow 或打开已有成片",
+                    )
+                })?
+        };
+        let status = self
+            .productions
+            .sessions
+            .get(&id)
+            .map(|s| s.status())
+            .ok_or_else(|| ControlError::new("production_not_found", &format!("没有成片 {id}")))?;
+        let doc = self
+            .production(&id)
+            .ok_or_else(|| ControlError::new("production_not_found", &format!("没有成片 {id}")))?;
+        let local_run_ids: Vec<u64> = self
+            .productions
+            .sessions
+            .get(&id)
+            .map(|s| s.runs().collect())
+            .unwrap_or_default();
+        let has_live_run = !local_run_ids.is_empty();
+        let blocked = self.productions.rejected.contains_key(&id);
+        let session = self.productions.sessions.get(&id);
+        let unadoptable = session
+            .map(|s| s.unadoptable_count(&self.productions.unadoptable))
+            .unwrap_or(0);
+        let pending_adopt = session
+            .map(|s| {
+                self.productions
+                    .adopting
+                    .iter()
+                    .filter(|path| s.needs_media_path(path))
+                    .count()
+            })
+            .unwrap_or(0);
+        let snap = crate::control::snapshot_from_with_placement(
+            &status,
+            doc,
+            local_run_ids.clone(),
+            has_live_run,
+            blocked,
+            unadoptable,
+            pending_adopt,
+        );
+        let phase = status
+            .stages
+            .iter()
+            .find_map(|s| s.phase.as_ref().map(|(p, f)| (p.clone(), *f)));
+        Ok(ControlResult::WorkflowRun {
+            run: WorkflowRunView {
+                production_id: snap.production_id,
+                extension_id: snap.extension_id,
+                run_id: run_id.or_else(|| local_run_ids.last().copied()),
+                run_state: snap.run_state,
+                phase: phase.as_ref().map(|(p, _)| p.clone()),
+                fraction: phase.map(|(_, f)| f),
+                error: snap.workflow_error,
+                placement: snap.placement,
+                nodes: snap.nodes,
+            },
+        })
     }
 
     fn control_reply(

@@ -123,7 +123,7 @@ README.md
 
 ## 6b. 工作流图 IR `todo-graph/1`（可选）
 
-`kind = workflow` 可声明 `"graph": "graph.json"`，用**数据**描述步骤与依赖，供日后宿主按节点调度与调试；当前版本做安装期校验（类型 / 端口 / 参数 / DAG），**仍由 `worker.ops` 的 `run` 执行**。运行时 payload 校验见 `todo_production::extension::nodes::validate_payload`。
+`kind = workflow` 可声明 `"graph": "graph.json"`，用**数据**描述步骤与依赖，供日后宿主按节点调度与调试；当前版本做安装期校验（类型 / 端口 / 参数 / DAG），**仍由 `worker.ops` 的 `run` 执行**。运行时 payload 校验见 `todo_workflow::workflow::nodes::validate_payload`。
 
 ```jsonc
 {
@@ -157,8 +157,9 @@ README.md
 | `script` | `text?` ← **script_text** | `script` → **script_text** | （可选备注） |
 | `segment_script` | `text` ← **script_text** | `segments` → **segments** | `mode`: `semantic`\|`length`\|`paragraph`；`target`/`max` 字数 |
 | `tts`（别名 `speech`） | `text` ← **script_text** | `audio` → **speech_clip** | `voice`，`rate` (-50~100) |
-| `subtitles` | `script` + `speech` | `cues` → **subtitle_cues** | — |
-| `emit` / `ground_emit` / `picture_batch` / … | 见目录 | **items** 或过渡 `any` | — |
+| `subtitles` | `script` + `speech` | `cues` → **subtitle_cues** | `maxChars`（默认 18，6–32） |
+| `split_shots` | `speech` + `cues` + 可选 `segments` | `shots` → **any** | 有 `segments` 时按口播段落对齐，否则按字幕断点合并 |
+| `emit` / `ground_emit` / `picture_batch` / … | 见目录 | **items** 或过渡 `any` | 入轨节点会把 speech / cues / image 等服务结果适配为 `todo-items/1` |
 | `done` | `result?` any | — | — |
 
 **script_text**：`{ "text": string }`（非空，≤ 12000 字）。
@@ -167,7 +168,7 @@ README.md
 
 **speech_clip**（一段 TTS）：`{ "file": "….mp3|wav|…", "duration": 秒, "timeline": { "duration", "chars": [{ "id", "text", "start", "end" }] } }`。`chars` 的起止是**相对本段音频**的逐字时间，不得超出 `duration`。
 
-说明：`segment_script` 产出多段文本；`tts` 一次处理**一段**口播。整篇先分段再逐段配音，需日后的 map/foreach 节点（或循环调用 `tts`）；当前可对整篇 `script` 直接连 `tts`。
+说明：`segment_script` 产出带原文 `text` 的多段文本；`tts` 接收到 segments 时会使用原文生成连续音轨，同时保留分段信息给 `split_shots`，避免每条短字幕都被误当成一个镜头。
 
 ## 7. 工作程序协议 `todo-worker/1`
 
@@ -248,9 +249,9 @@ README.md
 | --- | --- |
 | 运行前 | 必需输入未接线 → 直接返回「还有必需输入没接线：node.port」；有环 → 拒绝 |
 | 触发 | `trigger` 发出 `{trigger:true, at}`；`media_bin` 读 `params.files`，文本文件拼成 `text`，其余进 `files` |
-| 分段 | `segment_script`：`paragraph`/`length` 走 `todo_production::segment` 规则；`semantic` 调 chat 只选切点，模型答歪时自动退回规则切分（整条流不中断） |
+| 分段 | `segment_script`：`paragraph`/`length` 走 `todo_production::segment` 规则；`semantic` 调 chat 只选切点，模型答歪时自动退回规则切分（整条流不中断），并保留原文供下游复用 |
 | 外部 API | `llm_chat`/`image_gen`/`multimodal`/`tts`/`subtitles` 全部经 `Services` trait（宿主实现），runner 不联网 |
-| 出片 | `split_shots` 按字幕条合成镜头（<1.2s 合并）；`label_shots` 给每镜标签；`choose_motions` 从白名单派 `intro/outro/transition`；`ground_emit`/`picture_batch` 产出条目并 emit |
+| 出片 | `split_shots` 优先按口播段落对齐字幕、再合并过短 cue；`label_shots` 给每镜标签；`choose_motions` 从白名单派 `intro/outro/transition`；`ground_emit`/`picture_batch` 产出条目并 emit |
 | 校验 | 每个输出过 `nodes::validate_payload`，类型不对立即报错并停止下游 |
 
 安装/画布保存只做**草稿**校验（必需端口未接也能先建图）；严格校验发生在运行前。
@@ -273,7 +274,8 @@ README.md
 | 节点 | 可调参数 | 运行后面板显示 |
 | --- | --- | --- |
 | `llm_chat` | `model`（留空用 AI 设置）、`json`（自然语言 / 强制 JSON）、`system`、`temperature` | 回复预览（JSON 片段） |
-| `segment_script` | `mode`、`target`、`max`、`model` | `{mode, segments[{id,text,chars}]}` |
+| `segment_script` | `mode`、`target`、`max`、`model` | `{mode, text, segments[{id,text,chars}]}` |
+| `image_prompt` | `model`、`system`、`cast`、`style`、`temperature` | 口播 N 块 → 同数量生图提示（整篇一次、锁死条数） |
 | `image_gen` | `size`（1024x1024…）、`model`、`style`、`transparent` | 生成图缩略图 + 路径 |
 | `multimodal` | `model`、`mode`、`temperature` | 回复预览 |
 | `tts` | `voice`（S_… 克隆音）、`rate` | 音频文件 + 时长 |
@@ -310,3 +312,45 @@ job.resume(Ok(payload));   // 结果回填，继续 advance
 - 节点参数 `model` 现在是**下拉**：`跟随 AI 设置` / `当前：<已配置模型>` / 已知可用名（按能力给：语言 `deepseek-flash`、`deepseek-v4-pro`、`claude-fable-5`；生图 `gpt-image-2`；多模态 `deepseek-flash`、`gemini-3.8-flash`）。
 - `config/ai.json` 的 `language` 块新增 `model`；不填时回落到 `huniu.languageModel`。改了模型要重启 App 才会重新读配置。
 - AI 日志里的**失败任务不再被回放**：再次提交会真正重试（`TaskState::Failed` → 重新入队）；只有"可能已扣费"的 `Ambiguous` 才需要手动重试。这修掉了"改了模型/重新运行还是同一个 400"的问题。
+
+### 节点用时与产物字数
+
+- 每个 `NodeRun` 带 `duration_ms`：从进入该节点算起，**包含等待外部调用的时间**；本地节点通常 0.00s，模型调用就是真实耗时。
+- 面板上：完成的节点显示 `输出端口 · 1.2s`，正在跑的节点显示 `运行中 3.4s`（每秒刷新），据此判断是"在跑"还是"真卡住"。
+- 产物预览上限 6000 字，标题旁标注 `最近产物 · N 字`；`script_text` 本身上限 12000 字（校验层），脚本节点到分段节点是**整段透传**，不会截断（有 5280 字用例断言）。
+
+### 节点命令窗（运行日志）
+
+每个节点在自己的检查器里有一条**渐进式命令窗**（`运行日志`，可折叠，失败时自动展开）：
+
+```
+▶ segment（segment_script）开始
+→ 语义分段：5200 字 / 200 个语义单元，目标 120 字
+← 收到结果 1445 字
+✓ 完成，用时 10.0s
+```
+
+- 运行中就能看到已发生的行（`→` 是刚发出的请求，`←` 是收到结果），配合 `运行中 Ns` 判断是"在跑"还是"卡住"；
+- 失败时 `✗ 调用失败：<后端原文>` 直接显示，不用再翻后台日志；
+- 数据来自 `NodeRun.logs`；运行中的节点读 `WorkflowJob::current_logs()`，完成后读报告。
+
+### 参数即时生效 + 原始终端
+
+- 检查器里改的参数**不保存也生效**：`WorkflowRun` 带上 `edits`（node → field → 值），宿主 `apply_workflow_edits` 合并进图后再建 job。之前必须点「保存参数」才会生效，这是"改了上限字数没反应"的原因。
+- 每次运行建一份 `cache/workflow-runs/<id>-<ts>/run.log`，逐行追加带时间戳的节点日志（`[  12.3s] → 语义分段：5200 字 …`）。
+- 全屏工作流底部预留洞口；「终端」/「运行」会把 **Windows 原生 conhost**（`Get-Content -Wait run.log`）嵌进该洞，不是检查器里的仿终端折叠块。
+
+### 停止
+
+运行中面板顶部显示「停止」（与进度 `3/12 · 等待 tts` 并排）：
+
+- 取消该运行的所有在途任务（`bridge.keys_for_calls("wf-<run>-")` + 多模态 key），不会白扣费；
+- 已完成的节点结果保留，未完成的那个节点记一条 `✗ 已停止`；
+- 报告写入 `workflow_runs`，面板随即显示"已停止"，终端日志补一行 `■ 用户停止`。
+
+### 重试可见 + 黑色原始终端
+
+- `AiEvent::Generating` 每次发送都会发一次，所以日志按**次数**记录：`· 第 3 次发送，等待模型响应`（前 3 次逐条，之后每 5 次一条），不再是每 0.6 秒刷一行。
+- 同一调用连续发送 **12 次**仍未成功 → 取消 AI 任务，经 `bridge.fail_direct` 结束节点（chat 走 direct，不是 `workflow_results`）。
+- 独立语言端点（`config.language`）的模型名与虎妞 `languageModel` **隔离**：chat 强制用端点自己的 model；多模态/生图始终走虎妞，不串 DeepSeek 聊天源。
+- 「终端」把去边框的原生控制台 `SetWindowPos` 到洞口（与预览 HWND 同款叠层），关闭全屏时隐藏。

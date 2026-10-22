@@ -314,15 +314,16 @@ fn paint(
         if let Some(payload) = egui::DragAndDrop::payload::<MediaDrag>(ui.ctx()) {
             if let Some(pointer) = drop_target {
                 let time = f64::from(pointer.x - origin.x - label_w) / vm.px_per_sec;
+                let primary = payload.primary().to_owned();
                 intents.push(Intent::MediaDragHover {
-                    media_id: payload.media_id.clone(),
+                    media_id: primary.clone(),
                     track_id: track.id.clone(),
                     time,
                 });
                 if let Some(preview) = vm
                     .drop_preview
                     .as_ref()
-                    .filter(|preview| preview.media_id == payload.media_id)
+                    .filter(|preview| preview.media_id == primary)
                 {
                     ui.ctx().set_cursor_icon(if preview.allowed {
                         egui::CursorIcon::Copy
@@ -333,11 +334,13 @@ fn paint(
                 if release_pos.is_some() {
                     if let Some(payload) = egui::DragAndDrop::take_payload::<MediaDrag>(ui.ctx()) {
                         intents.push(Intent::Focus(EditorFocus::Timeline));
-                        intents.push(Intent::PlaceMedia {
-                            media_id: payload.media_id.clone(),
-                            track_id: Some(track.id.clone()),
-                            time: Some(time),
-                        });
+                        for media_id in &payload.media_ids {
+                            intents.push(Intent::PlaceMedia {
+                                media_id: media_id.clone(),
+                                track_id: Some(track.id.clone()),
+                                time: Some(time),
+                            });
+                        }
                     }
                 }
             }
@@ -727,7 +730,7 @@ mod tests {
                         egui::DragAndDrop::set_payload(
                             ctx,
                             MediaDrag {
-                                media_id: "source".into(),
+                                media_ids: vec!["source".into()],
                             },
                         );
                     }

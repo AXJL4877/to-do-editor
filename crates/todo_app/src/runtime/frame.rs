@@ -11,11 +11,22 @@ use todo_preview::PreviewNavigationKind as Navigation;
 use todo_preview::{HostEvent, PreviewPointerKind as HostPointer};
 use todo_interaction::{assets_view, AssetsInput};
 use todo_ui::{
-    agent_open, assets_dock, close_project_settings, draw_agent, draw_ai_settings,
+    agent_open, assets_dock, close_project_settings, close_workflow, draw_agent, draw_ai_settings,
     draw_assets_dock, draw_close_prompt, draw_editor, draw_export, draw_production_dock,
     draw_projects, draw_workflow_overlay, export_open, open_workflow, production_panel_open,
-    project_settings_open, workflow_open_id, AssetsAction, LeftTab, BG,
+    project_settings_open, workflow_fullscreen_open, workflow_open_id,
+    AssetsAction, LeftTab, BG,
 };
+
+/// Modal / prompt surfaces that sit above the editor (and above the workflow
+/// fullscreen canvas). Native preview HWND must hide under these.
+fn modal_overlay_open(ctx: &egui::Context, close_prompt: bool) -> bool {
+    close_prompt
+        || project_settings_open(ctx)
+        || todo_ui::ai_settings_open(ctx)
+        || agent_open(ctx)
+        || export_open(ctx)
+}
 
 /// Any surface that can occupy the editor canvas must suspend the independent
 /// native preview window. The preview is a separate HWND, so egui's painter
@@ -23,12 +34,7 @@ use todo_ui::{
 /// The AI production dock is part of the layout and never overlaps it; menus
 /// and tooltips over the preview are cut out of it instead (`overlays_over`).
 fn preview_overlay_open(ctx: &egui::Context, close_prompt: bool) -> bool {
-    close_prompt
-        || project_settings_open(ctx)
-        || todo_ui::ai_settings_open(ctx)
-        || agent_open(ctx)
-        || export_open(ctx)
-        || todo_ui::workflow_fullscreen_open(ctx)
+    modal_overlay_open(ctx, close_prompt) || todo_ui::workflow_fullscreen_open(ctx)
 }
 
 impl eframe::App for App {
@@ -311,9 +317,13 @@ impl eframe::App for App {
         if let Some(panel) = production_view.as_ref() {
             let open_id = workflow_open_id(ctx);
             let graph = open_id.as_ref().and_then(|id| {
+                let canvas = self.workspace.editor().map(|e| {
+                    let p = e.project();
+                    (p.width, p.height, p.fps)
+                });
                 self.production
                     .as_ref()
-                    .and_then(|host| host.workflow_panel(id))
+                    .and_then(|host| host.workflow_panel(id, canvas))
             });
             let title = open_id
                 .as_ref()
@@ -325,9 +335,14 @@ impl eframe::App for App {
                         .map(|e| e.name.as_str())
                 })
                 .unwrap_or("工作流");
-            let wf = draw_workflow_overlay(ctx, panel, graph.as_ref(), title);
+            let wf =
+                draw_workflow_overlay(ctx, panel, graph.as_ref(), title, &mut self.thumbs);
             if wf != todo_ui::ProductionAction::None {
                 production_action = wf;
+            }
+            // Workflow fullscreen owns Ctrl+S → save the graph, not the project.
+            if open_id.is_some() {
+                intents.retain(|intent| !matches!(intent, todo_interaction::Intent::Save));
             }
         }
         let settings = draw_ai_settings(ctx, &mut self.ai_settings);
@@ -379,6 +394,11 @@ impl eframe::App for App {
                 });
                 self.handle(update, ctx);
             }
+            todo_ui::ProductionAction::OpenExternal { path } => {
+                if let Err(error) = open_external_path(&path) {
+                    self.notice(format!("无法打开：{error}"));
+                }
+            }
             todo_ui::ProductionAction::WorkflowCreate => {
                 if let Some(host) = &mut self.production {
                     match host.create_workflow("未命名工作流") {
@@ -390,11 +410,100 @@ impl eframe::App for App {
                     }
                 }
             }
-            todo_ui::ProductionAction::WorkflowRun { extension, script } => {
+            todo_ui::ProductionAction::WorkflowDelete { extension } => {
+                if workflow_open_id(ctx).as_deref() == Some(extension.as_str()) {
+                    close_workflow(ctx);
+                }
                 if let Some(host) = &mut self.production {
-                    match host.start_workflow(&extension, script) {
-                        Ok(()) => self.notice("工作流已开始运行".into()),
+                    match host.delete_workflow(&extension) {
+                        Ok(()) => self.notice("已删除工作流".into()),
+                        Err(e) => self.notice(format!("删除失败：{e}")),
+                    }
+                }
+            }
+            todo_ui::ProductionAction::WorkflowRun {
+                extension,
+                script,
+                edits,
+            } => match self.canvas() {
+                None => self.notice("请先打开工程再运行工作流".into()),
+                Some((project, canvas)) => {
+                    let prepared = self.production.as_ref().map(|host| {
+                        (
+                            host.extension_version(&extension)
+                                .unwrap_or_else(|| "0".into()),
+                            host.alloc_workflow_workdir(&extension),
+                        )
+                    });
+                    let run_result = match prepared {
+                        None => Err("AI 服务没有启动".into()),
+                        Some((_version, Err(e))) => Err(e),
+                        Some((version, Ok((_alloc_abs, alloc_rel)))) => {
+                            match self.workspace.bind_canvas_workflow(
+                                &extension,
+                                &version,
+                                &script,
+                                alloc_rel,
+                                canvas,
+                            ) {
+                                Err(e) => Err(e),
+                                Ok(run_id) => {
+                                    let production_id = self
+                                        .workspace
+                                        .production_status()
+                                        .into_iter()
+                                        .find(|s| s.extension == extension)
+                                        .map(|s| s.id)
+                                        .unwrap_or_default();
+                                    let host = self.production.as_mut().unwrap();
+                                    // Durable productions/.../work — never cache/workflow-runs.
+                                    match host.production_workdir(&project, &production_id) {
+                                        Err(e) => Err(e),
+                                        Ok(durable_rel) => {
+                                            match host.workdir_path(&project, &production_id) {
+                                                Err(e) => Err(e),
+                                                Ok(durable_abs) => {
+                                                    let _ =
+                                                        std::fs::create_dir_all(&durable_abs);
+                                                    if let Err(e) = self
+                                                        .workspace
+                                                        .set_production_workdir(
+                                                            &production_id,
+                                                            durable_rel,
+                                                        )
+                                                    {
+                                                        Err(e)
+                                                    } else {
+                                                        host.start_workflow(
+                                                            &extension,
+                                                            script,
+                                                            &edits,
+                                                            run_id,
+                                                            durable_abs,
+                                                        )
+                                                        .map(|()| {
+                                                            host.workflow_log_path(&extension)
+                                                        })
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    };
+                    match run_result {
+                        Ok(_) => self.notice("工作流已开始运行".into()),
                         Err(e) => self.notice(format!("无法运行：{e}")),
+                    }
+                }
+            }
+            todo_ui::ProductionAction::WorkflowStop { extension } => {
+                if let Some(host) = &mut self.production {
+                    match host.stop_workflow(&extension) {
+                        Ok(()) => self.notice("已停止工作流".into()),
+                        Err(e) => self.notice(e),
                     }
                 }
             }
@@ -432,6 +541,55 @@ impl eframe::App for App {
                     }
                 }
             }
+            todo_ui::ProductionAction::WorkflowImportMediaPick {
+                extension,
+                x,
+                y,
+                target_node,
+                positions,
+            } => {
+                if let Some(paths) = crate::adapters::desktop::workflow_bin_files() {
+                    if let Some(host) = &mut self.production {
+                        match host.import_workflow_media(
+                            &extension,
+                            &paths,
+                            x,
+                            y,
+                            target_node.as_deref(),
+                            &positions,
+                        ) {
+                            Ok((node_id, n)) => {
+                                self.notice(format!("已导入 {n} 个文件 → {node_id}（image 可接 ref）"))
+                            }
+                            Err(e) => self.notice(format!("导入失败：{e}")),
+                        }
+                    }
+                }
+            }
+            todo_ui::ProductionAction::WorkflowImportMedia {
+                extension,
+                paths,
+                x,
+                y,
+                target_node,
+                positions,
+            } => {
+                if let Some(host) = &mut self.production {
+                    match host.import_workflow_media(
+                        &extension,
+                        &paths,
+                        x,
+                        y,
+                        target_node.as_deref(),
+                        &positions,
+                    ) {
+                        Ok((node_id, n)) => {
+                            self.notice(format!("已导入 {n} 个文件 → {node_id}（image 可接 ref）"))
+                        }
+                        Err(e) => self.notice(format!("导入失败：{e}")),
+                    }
+                }
+            }
             todo_ui::ProductionAction::WorkflowRemoveMedia {
                 extension,
                 node_id,
@@ -441,6 +599,19 @@ impl eframe::App for App {
                     match host.remove_workflow_media_file(&extension, &node_id, &path) {
                         Ok(()) => self.notice("已从容器移除该文件".into()),
                         Err(e) => self.notice(format!("移除失败：{e}")),
+                    }
+                }
+            }
+            todo_ui::ProductionAction::WorkflowClearNodeCache {
+                extension,
+                node_id,
+            } => {
+                if let Some(host) = &mut self.production {
+                    match host.clear_workflow_node_cache(&extension, &node_id) {
+                        Ok(()) => self.notice(format!(
+                            "已清除节点 {node_id} 的生图缓存（下次运行将重新请求生图）"
+                        )),
+                        Err(e) => self.notice(format!("清除缓存失败：{e}")),
                     }
                 }
             }
@@ -550,6 +721,9 @@ impl eframe::App for App {
                     }
                 }
             }
+            todo_ui::ProductionAction::SeekPlayhead { time } => {
+                intents.push(todo_interaction::Intent::Seek(time.max(0.0)));
+            }
             todo_ui::ProductionAction::None => {}
         }
         self.handle_assets_action(assets_action, assets_tab);
@@ -637,6 +811,14 @@ impl eframe::App for App {
             &overlays,
             active && !overlay_blocks_preview,
         );
+        // Live log is drawn in egui (no native cmd HWND — that flashed / flickered).
+        if workflow_fullscreen_open(ctx) {
+            if let Some(ext) = workflow_open_id(ctx) {
+                if let Some(host) = &mut self.production {
+                    let _ = host.ensure_workflow_log(&ext);
+                }
+            }
+        }
         let preview_view = if overlay_blocks_preview {
             None
         } else {
@@ -647,10 +829,15 @@ impl eframe::App for App {
         if let Err(error) = self.preview.sync_view(preview_view) {
             self.notice(format!("预览控制框：{error}"));
         }
+        let workflow_busy = self
+            .production
+            .as_ref()
+            .is_some_and(|host| host.workflow_busy());
         if self.preview.syncing_restore()
             || self.workspace.editor().is_some_and(|e| e.playing())
             || self.workspace.busy()
             || self.controller.preview_gesture_active()
+            || workflow_busy
         {
             ctx.request_repaint_after(Duration::from_millis(16));
         } else {
@@ -665,4 +852,37 @@ impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.window_state.save(storage);
     }
+}
+
+fn open_external_path(path: &str) -> Result<(), String> {
+    let file = std::path::Path::new(path);
+    if !file.is_file() {
+        return Err(format!("找不到文件：{path}"));
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", path])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    #[allow(unreachable_code)]
+    Err("当前平台不支持外开".into())
 }

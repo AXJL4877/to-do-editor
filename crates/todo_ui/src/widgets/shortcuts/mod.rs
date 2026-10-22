@@ -52,11 +52,13 @@ pub(super) fn collect(ctx: &Context, vm: &EditorViewModel) -> Vec<Intent> {
             // Timeline: Delete / Backspace still remove clips.
             if vm.focus == EditorFocus::Library {
                 if deleting {
-                    if let Some(media_id) = &vm.library.selected_id {
-                        intents.push(Intent::RemoveMedia {
-                            media_id: media_id.clone(),
-                            cascade: false,
-                        });
+                    if !vm.library.selected_ids.is_empty() {
+                        for media_id in &vm.library.selected_ids {
+                            intents.push(Intent::RemoveMedia {
+                                media_id: media_id.clone(),
+                                cascade: false,
+                            });
+                        }
                     } else if let Some(id) = &vm.library.selected_folder_id {
                         intents.push(Intent::LibraryDeleteFolder { id: id.clone() });
                     }

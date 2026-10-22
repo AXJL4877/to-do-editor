@@ -22,6 +22,7 @@ pub use presentation::production::{
     ParamView, ProblemAction, ProblemView, ProductionNodeStatus, ProductionPanelView,
     ProductionView, ScriptView, SegmentView, StageView, VariantView, WorkflowEdgeView,
     WorkflowEntryView, WorkflowMediaFileView, WorkflowNodeView, WorkflowPanelView,
+    WorkflowTextBlockView,
     WorkflowParamFieldView, WorkflowTypeChoice,
 };
 pub use presentation::{

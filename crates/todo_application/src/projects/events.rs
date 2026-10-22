@@ -171,7 +171,8 @@ impl Workspace {
             let update = editor.text_raster_done(digest, outcome);
             return self.editor_update(update);
         }
-        let production = self.production_media(ticket, result.is_ok());
+        let err = result.as_ref().err().map(String::as_str);
+        let production = self.production_media(ticket, result.is_ok(), err);
         if let Ok(MediaOutput::Adopted(media)) = &result {
             let mut update = AppUpdate::default();
             for mut item in media.clone() {
@@ -179,7 +180,7 @@ impl Workspace {
                 if let Some(name) = path.and_then(|p| self.productions.adopt_names.remove(&p)) {
                     item.name = name;
                 }
-                let next = self.dispatch(AppAction::Editor(EditorCommand::RegisterMedia(item)));
+                let next = self.dispatch(AppAction::Editor(EditorCommand::AdoptMedia(item)));
                 update.effects.extend(next.effects);
                 update.new_clips.extend(next.new_clips);
             }
@@ -189,9 +190,15 @@ impl Workspace {
         }
         if production {
             if let Err(message) = &result {
-                self.problem("production", format!("成片素材登记失败：{message}"));
+                self.problem(
+                    "production",
+                    format!(
+                        "成片素材登记失败：{message}。可点「重试」再次入轨；其它已就绪条目会继续放置。"
+                    ),
+                );
             }
-            return AppUpdate::default();
+            // Keep placing everything that does not depend on the failed files.
+            return self.advance_productions();
         }
         if !self.jobs.complete(ticket, result.is_ok(), self.now) {
             return AppUpdate::default();

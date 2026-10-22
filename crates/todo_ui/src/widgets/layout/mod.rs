@@ -351,7 +351,6 @@ fn paint_splitter(ui: &Ui, rect: Rect, response: egui::Response, vertical: bool)
         [rect.center() - grip, rect.center() + grip],
         egui::Stroke::new(3.0_f32, if active { BRAND } else { DIM }),
     );
-    response.on_hover_text("拖动调整大小 · 双击恢复默认");
 }
 
 #[cfg(test)]

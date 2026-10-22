@@ -158,12 +158,14 @@ fn clicking_done_commits_a_live_typed_duration_edit() {
             .count(),
         1
     );
-    assert_eq!(
+    assert!(
         intents
             .iter()
-            .filter(|intent| matches!(intent, Intent::CommitEdit))
-            .count(),
-        1,
+            .any(|intent| matches!(intent, Intent::CommitEdit)),
         "Done must finish the edit for undo/save: {intents:?}"
+    );
+    assert!(
+        intents.iter().any(|intent| matches!(intent, Intent::Save)),
+        "Done must persist project duration/settings: {intents:?}"
     );
 }

@@ -109,7 +109,7 @@ fn primary_click_selects_media_without_removing() {
     }
     assert!(intents
         .iter()
-        .any(|i| matches!(i, Intent::LibrarySelect(id) if id == "jpg1")));
+        .any(|i| matches!(i, Intent::LibrarySelect { id, .. } if id == "jpg1")));
     assert!(!intents
         .iter()
         .any(|i| matches!(i, Intent::RemoveMedia { .. })));
@@ -166,7 +166,7 @@ fn media_row_drag_carries_the_identifier() {
         }
     }
     let payload = egui::DragAndDrop::payload::<MediaDrag>(&ctx).expect("drag");
-    assert_eq!(payload.media_id, "jpg1");
+    assert_eq!(payload.media_ids, vec!["jpg1".to_owned()]);
 }
 
 #[test]
@@ -201,7 +201,7 @@ fn dragging_media_over_a_folder_shows_the_ghost_destination_row() {
     egui::DragAndDrop::set_payload(
         &ctx,
         MediaDrag {
-            media_id: "jpg1".into(),
+            media_ids: vec!["jpg1".into()],
         },
     );
     let second = ctx.run(

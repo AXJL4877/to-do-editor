@@ -496,6 +496,26 @@ fn speech_streams_audio_and_word_times_into_a_wav() {
 }
 
 #[test]
+fn speech_resource_mismatch_finishes_with_an_error_after_one_request() {
+    let server = FakeServer::start();
+    server.on("/api/v3/tts/unidirectional", vec![Behaviour::text(200,
+        "{\"code\":55000000,\"message\":\"resource ID is mismatched with speaker related resource\"}\n")]);
+    let dir = scratch("speech-resource-mismatch");
+    let (service, _) = AiService::start(settings(&server, &dir)).unwrap();
+    let key = service.submit(TaskSpec {
+        request: TaskRequest::Audio(AudioRequest {
+            model: "seed-tts-2.0".into(), text: "你好".into(),
+            speaker: "S_test".into(), resource_id: "seed-tts-2.0".into(),
+            sample_rate: 24000, speech_rate: None,
+        }),
+    });
+    let (event, _) = until_final(&service, &key, Duration::from_secs(3));
+    assert!(matches!(event, AiEvent::Failed { class, message, .. }
+        if class == "invalid" && message.contains("mismatched")));
+    assert_eq!(server.count("POST", "/api/v3/tts/unidirectional"), 1);
+}
+
+#[test]
 fn invalid_requests_fail_at_once() {
     let server = FakeServer::start();
     server.on(

@@ -7,7 +7,7 @@ use crate::Extension;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use todo_production::extension::manifest::{Runtime as ManifestRuntime, RuntimeKind};
+use crate::workflow::manifest::{Runtime as ManifestRuntime, RuntimeKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimePaths {
@@ -189,7 +189,7 @@ fn sanitize_environment(command: &mut Command, app_root: &Path, extension_id: &s
 mod tests {
     use super::*;
     use crate::registry::Origin;
-    use todo_production::extension::manifest::{Manifest, Requires, Runtime, RuntimeKind, Worker};
+    use crate::workflow::manifest::{Manifest, Requires, Runtime, RuntimeKind, Worker};
 
     fn extension(dir: &Path, runtime: RuntimeKind, entry: &str) -> Extension {
         Extension {
@@ -199,7 +199,7 @@ mod tests {
                 name: "测试".into(),
                 version: "1.0.0".into(),
                 description: String::new(),
-                kind: todo_production::extension::manifest::Kind::Workflow,
+                kind: crate::workflow::manifest::Kind::Workflow,
                 input: Default::default(),
                 params: Vec::new(),
                 quick: Vec::new(),

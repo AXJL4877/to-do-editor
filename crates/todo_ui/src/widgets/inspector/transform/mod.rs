@@ -39,13 +39,11 @@ pub(super) fn draw(ui: &mut Ui, properties: &ClipProperties) -> Vec<Intent> {
                 } else {
                     properties.transform.y
                 };
-                let response = ui
-                    .add(
-                        egui::DragValue::new(&mut value)
-                            .speed(0.005)
-                            .fixed_decimals(3),
-                    )
-                    .on_hover_text("位置以画布宽高为单位：0 为居中，1 为一个画布宽度或高度");
+                let response = ui.add(
+                    egui::DragValue::new(&mut value)
+                        .speed(0.005)
+                        .fixed_decimals(3),
+                );
                 let mut transform = properties.transform;
                 if axis == "X" {
                     transform.x = value

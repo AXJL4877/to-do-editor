@@ -15,7 +15,7 @@ use todo_application::{
 };
 use todo_core::{create_project, AlphaPacking};
 use todo_interaction::ParamValue;
-use todo_production::extension::protocol::Canvas;
+use todo_workflow::workflow::protocol::Canvas;
 use todo_production::TaskRequest;
 
 fn repo() -> PathBuf {

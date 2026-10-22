@@ -1,17 +1,11 @@
 //! `todo-worker/1`: one JSON message per stdout line between host and worker.
-use super::items::Item;
 use super::manifest::Service;
 use serde::{Deserialize, Serialize};
+use todo_production::items::Item;
 
 pub const WORKER_SPEC: &str = "todo-worker/1";
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Canvas {
-    pub width: u32,
-    pub height: u32,
-    pub fps: f64,
-}
+pub use todo_production::items::Canvas;
 
 /// Host → worker.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -137,7 +131,7 @@ pub enum WorkerMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChatCall {
-    pub messages: Vec<crate::tasks::ChatMessage>,
+    pub messages: Vec<todo_production::tasks::ChatMessage>,
     #[serde(default)]
     pub json: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

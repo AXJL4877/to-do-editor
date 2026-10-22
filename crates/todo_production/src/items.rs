@@ -1,9 +1,47 @@
-//! `todo-items/1`: what an extension puts on the timeline. Stable keys and
+//! `todo-items/1`: what a workflow puts on the timeline. Stable keys and
 //! content revisions let the host place results progressively, replace them
 //! in place and respect the user's deletions and moves.
-use super::manifest::valid_relative_path;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+
+/// Program canvas size (shared by worker protocol and narration layout).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Canvas {
+    pub width: u32,
+    pub height: u32,
+    pub fps: f64,
+}
+
+/// Package-relative path without `..`, roots, drive letters or reserved names.
+pub fn valid_relative_path(path: &str) -> bool {
+    const RESERVED: &[&str] = &["con", "prn", "aux", "nul"];
+    if path.is_empty()
+        || path.len() > 240
+        || path.starts_with('/')
+        || path.contains('\\')
+        || path.contains(':')
+    {
+        return false;
+    }
+    path.split('/').all(|part| {
+        let stem = part
+            .split('.')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        !part.is_empty()
+            && part != "."
+            && part != ".."
+            && !part.ends_with('.')
+            && !part.ends_with(' ')
+            && !part.chars().any(|c| c.is_control())
+            && !RESERVED.contains(&stem.as_str())
+            && !(stem.len() == 4
+                && (stem.starts_with("com") || stem.starts_with("lpt"))
+                && stem.as_bytes()[3].is_ascii_digit())
+    })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

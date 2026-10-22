@@ -6,8 +6,8 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
 use todo_process::{Duplex, Output};
-use todo_production::extension::items::validate_items;
-use todo_production::extension::protocol::{Canvas, HostMessage, WorkerMessage, WORKER_SPEC};
+use todo_production::items::validate_items;
+use crate::workflow::protocol::{Canvas, HostMessage, WorkerMessage, WORKER_SPEC};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CheckReport {
@@ -147,7 +147,7 @@ fn offline_fixtures(
 
 #[derive(Debug, PartialEq)]
 struct FixtureOutput {
-    items: Vec<todo_production::extension::items::Item>,
+    items: Vec<todo_production::items::Item>,
     result: Value,
 }
 

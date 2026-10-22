@@ -19,12 +19,14 @@ pub(super) fn draw(ui: &mut Ui, clip_id: &str, text: &TextProperties) -> Vec<Int
 
     ui.label(egui::RichText::new("文字").color(MUTED));
     let mut value = content.text.clone();
-    let response = ui.add(
-        egui::TextEdit::multiline(&mut value)
-            .desired_rows(2)
-            .desired_width(f32::INFINITY)
-            .hint_text("输入文字，回车换行"),
-    );
+    let response = crate::theme::with_input_radius(ui, |ui| {
+        ui.add(
+            egui::TextEdit::multiline(&mut value)
+                .desired_rows(2)
+                .desired_width(f32::INFINITY)
+                .hint_text("输入文字，回车换行"),
+        )
+    });
     let change = (response.changed() && value != content.text).then(|| {
         let mut next = content.clone();
         next.text = value;
@@ -67,7 +69,7 @@ pub(super) fn draw(ui: &mut Ui, clip_id: &str, text: &TextProperties) -> Vec<Int
                         .range(1.0..=100.0)
                         .suffix(" %"),
                 )
-                .on_hover_text("字高占画布高度的百分比");
+                .on_hover_text("相对画布高度");
             let change = response.changed().then(|| {
                 let mut next = content.clone();
                 next.layout.font_size = percent / 100.0;
@@ -86,7 +88,7 @@ pub(super) fn draw(ui: &mut Ui, clip_id: &str, text: &TextProperties) -> Vec<Int
                         .range(-0.5..=2.0)
                         .suffix(" em"),
                 )
-                .on_hover_text("字符之间额外间距，以字号为单位");
+                .on_hover_text("字符间距");
             let change = response.changed().then(|| {
                 let mut next = content.clone();
                 next.layout.letter_spacing = spacing;

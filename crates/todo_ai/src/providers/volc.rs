@@ -158,7 +158,9 @@ fn error_class(code: i64, message: &str) -> ErrorClass {
         ErrorClass::Billing
     } else if lower.contains("auth") || lower.contains("api key") || lower.contains("permission") {
         ErrorClass::Auth
-    } else if (40_000_000..50_000_000).contains(&code) {
+    } else if (40_000_000..50_000_000).contains(&code)
+        || (lower.contains("resource") && lower.contains("speaker") && lower.contains("mismatch"))
+    {
         ErrorClass::Invalid
     } else {
         ErrorClass::Transient
@@ -328,6 +330,15 @@ mod tests {
             .feed(b"{\"code\":55000000,\"message\":\"quota exceeded\"}\n")
             .unwrap_err();
         assert_eq!(error.class, ErrorClass::Billing);
+    }
+
+    #[test]
+    fn mismatched_speaker_resource_is_not_retried() {
+        let error = StreamParser::default()
+            .feed(b"{\"code\":55000000,\"message\":\"resource ID is mismatched with speaker related resource\"}\n")
+            .unwrap_err();
+        assert_eq!(error.class, ErrorClass::Invalid);
+        assert_eq!(error_class(55_000_000, "service unavailable"), ErrorClass::Transient);
     }
 
     #[test]

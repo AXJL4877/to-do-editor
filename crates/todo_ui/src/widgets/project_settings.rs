@@ -1,7 +1,10 @@
 use egui::{RichText, Ui};
 use todo_interaction::{EditorViewModel, Intent, MediaScaleMode};
 
-use crate::theme::{button, Btn, BORDER, MUTED, PANEL, TEXT};
+use crate::theme::{
+    button, heading, label_muted, modal_frame, with_input_radius, Btn, BORDER, FIELD, MUTED,
+    PANEL_2, RADIUS,
+};
 
 /// Program-canvas presets for the project settings dialog.
 const OUTPUT_PRESETS: &[(&str, u32, u32)] = &[
@@ -59,125 +62,149 @@ pub(crate) fn draw(ctx: &egui::Context, vm: &EditorViewModel) -> Vec<Intent> {
     let mut intents = Vec::new();
     let mut keep_open = true;
     let response = egui::Modal::new(egui::Id::new("todo_project_settings"))
-        .frame(
-            egui::Frame::NONE
-                .fill(PANEL)
-                .stroke(egui::Stroke::new(1.0_f32, BORDER))
-                .inner_margin(20)
-                .corner_radius(egui::CornerRadius::ZERO),
-        )
+        .frame(modal_frame())
         .show(ctx, |ui| {
-            ui.set_width(380.0);
-            ui.label(
-                RichText::new("工程设置")
-                    .strong()
-                    .size(18.0)
-                    .color(TEXT),
+            ui.set_width(420.0);
+            egui::Frame::NONE
+                .fill(PANEL_2)
+                .inner_margin(egui::Margin::symmetric(20, 14))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(heading("工程设置"));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new(RichText::new("×").size(16.0).color(MUTED))
+                                        .fill(egui::Color32::TRANSPARENT)
+                                        .stroke(egui::Stroke::NONE)
+                                        .corner_radius(egui::CornerRadius::same(RADIUS)),
+                                )
+                                .clicked()
+                            {
+                                keep_open = false;
+                            }
+                        });
+                    });
+                });
+            ui.painter().hline(
+                ui.max_rect().x_range(),
+                ui.cursor().top(),
+                egui::Stroke::new(1.0_f32, BORDER),
             );
-            ui.add_space(4.0);
-            ui.label(
-                RichText::new("节目画布、帧率、落轨缩放与工作区时长")
-                    .size(12.0)
-                    .color(MUTED),
+
+            egui::Frame::NONE
+                .inner_margin(egui::Margin::symmetric(20, 16))
+                .show(ui, |ui| {
+                    with_input_radius(ui, |ui| {
+                        ui.label(label_muted("分辨率"));
+                        ui.add_space(4.0);
+                        egui::ComboBox::from_id_salt("project_settings_output")
+                            .selected_text(output_label(vm.output_width, vm.output_height))
+                            .width(280.0)
+                            .show_ui(ui, |ui| {
+                                for &(name, width, height) in OUTPUT_PRESETS {
+                                    let selected =
+                                        vm.output_width == width && vm.output_height == height;
+                                    if ui.selectable_label(selected, name).clicked() {
+                                        intents.push(Intent::SetProjectOutput { width, height });
+                                    }
+                                }
+                            });
+
+                        ui.add_space(14.0);
+                        ui.label(label_muted("帧率"));
+                        ui.add_space(4.0);
+                        let mut fps = vm.timeline.fps;
+                        egui::ComboBox::from_id_salt("project_settings_fps")
+                            .selected_text(fps_label(fps))
+                            .width(280.0)
+                            .show_ui(ui, |ui| {
+                                for &preset in FPS_PRESETS {
+                                    let selected = (fps - preset).abs() < 1e-6;
+                                    if ui.selectable_label(selected, fps_label(preset)).clicked() {
+                                        fps = preset;
+                                        intents.push(Intent::SetProjectFps { fps: preset });
+                                    }
+                                }
+                            });
+
+                        ui.add_space(14.0);
+                        ui.label(label_muted("落轨缩放"));
+                        ui.add_space(4.0);
+                        let scale_label = match vm.media_scale {
+                            MediaScaleMode::Pixel => "像素匹配",
+                            MediaScaleMode::MatchFrame => "匹配画布",
+                        };
+                        egui::ComboBox::from_id_salt("project_settings_media_scale")
+                            .selected_text(scale_label)
+                            .width(280.0)
+                            .show_ui(ui, |ui| {
+                                for (mode, label) in [
+                                    (MediaScaleMode::Pixel, "像素匹配"),
+                                    (MediaScaleMode::MatchFrame, "匹配画布"),
+                                ] {
+                                    let selected = vm.media_scale == mode;
+                                    if ui.selectable_label(selected, label).clicked() {
+                                        intents.push(Intent::SetMediaScaleMode { mode });
+                                    }
+                                }
+                            });
+
+                        ui.add_space(14.0);
+                        ui.label(label_muted("工作区时长"));
+                        ui.add_space(4.0);
+                        let mut seconds = vm.sequence_duration.unwrap_or(vm.duration).max(1.0);
+                        let duration_edit = ui.add(
+                            egui::DragValue::new(&mut seconds)
+                                .speed(1.0)
+                                .range(1.0..=86_400.0)
+                                .suffix(" 秒"),
+                        );
+                        let change = duration_edit
+                            .changed()
+                            .then_some(Intent::SetProjectDuration { seconds });
+                        super::controls::edit_response(ui, &duration_edit, change, &mut intents);
+                    });
+
+                    if let Some(status) = vm.status.as_deref() {
+                        ui.add_space(12.0);
+                        ui.label(RichText::new(status).size(12.0).color(MUTED));
+                    }
+                });
+
+            ui.painter().hline(
+                ui.max_rect().x_range(),
+                ui.cursor().top(),
+                egui::Stroke::new(1.0_f32, BORDER),
             );
-            ui.add_space(16.0);
-
-            ui.label(RichText::new("分辨率").size(12.0).color(MUTED));
-            ui.add_space(4.0);
-            egui::ComboBox::from_id_salt("project_settings_output")
-                .selected_text(output_label(vm.output_width, vm.output_height))
-                .width(200.0)
-                .show_ui(ui, |ui| {
-                    for &(name, width, height) in OUTPUT_PRESETS {
-                        let selected = vm.output_width == width && vm.output_height == height;
-                        if ui.selectable_label(selected, name).clicked() {
-                            intents.push(Intent::SetProjectOutput { width, height });
+            egui::Frame::NONE
+                .fill(FIELD)
+                .inner_margin(egui::Margin::symmetric(20, 12))
+                .show(ui, |ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if button(ui, "完成", Btn::Primary, true).clicked() {
+                            // Commit any in-progress DragValue edit, then persist.
+                            intents.push(Intent::CommitEdit);
+                            intents.push(Intent::Save);
+                            keep_open = false;
                         }
-                    }
-                })
-                .response
-                .on_hover_text("节目画布分辨率：预览输出框与导出画幅");
-
-            ui.add_space(12.0);
-            ui.label(RichText::new("帧率").size(12.0).color(MUTED));
-            ui.add_space(4.0);
-            let mut fps = vm.timeline.fps;
-            egui::ComboBox::from_id_salt("project_settings_fps")
-                .selected_text(fps_label(fps))
-                .width(200.0)
-                .show_ui(ui, |ui| {
-                    for &preset in FPS_PRESETS {
-                        let selected = (fps - preset).abs() < 1e-6;
-                        if ui.selectable_label(selected, fps_label(preset)).clicked() {
-                            fps = preset;
-                            intents.push(Intent::SetProjectFps { fps: preset });
-                        }
-                    }
-                })
-                .response
-                .on_hover_text("工程帧率：时间轴刻度与剪辑对齐基准");
-
-            ui.add_space(12.0);
-            ui.label(RichText::new("落轨缩放").size(12.0).color(MUTED));
-            ui.add_space(4.0);
-            let scale_label = match vm.media_scale {
-                MediaScaleMode::Pixel => "像素匹配",
-                MediaScaleMode::MatchFrame => "匹配画布分辨率",
-            };
-            egui::ComboBox::from_id_salt("project_settings_media_scale")
-                .selected_text(scale_label)
-                .width(200.0)
-                .show_ui(ui, |ui| {
-                    for (mode, label) in [
-                        (MediaScaleMode::Pixel, "像素匹配"),
-                        (MediaScaleMode::MatchFrame, "匹配画布分辨率"),
-                    ] {
-                        let selected = vm.media_scale == mode;
-                        if ui.selectable_label(selected, label).clicked() {
-                            intents.push(Intent::SetMediaScaleMode { mode });
-                        }
-                    }
-                })
-                .response
-                .on_hover_text(
-                    "像素匹配：源像素对画布像素（1080 进 4K 不铺满）\n匹配画布分辨率：等比铺满节目画幅",
-                );
-
-            ui.add_space(12.0);
-            ui.label(RichText::new("工作区时长").size(12.0).color(MUTED));
-            ui.add_space(4.0);
-            let mut seconds = vm.sequence_duration.unwrap_or(vm.duration).max(1.0);
-            let duration_edit = ui
-                .add(
-                    egui::DragValue::new(&mut seconds)
-                        .speed(1.0)
-                        .range(1.0..=86_400.0)
-                        .suffix(" 秒"),
-                )
-                .on_hover_text("工程工作区时长：决定时间轴上限（类似 PR / AE 合成时长）");
-            let change = duration_edit
-                .changed()
-                .then_some(Intent::SetProjectDuration { seconds });
-            super::controls::edit_response(ui, &duration_edit, change, &mut intents);
-
-            if let Some(status) = vm.status.as_deref() {
-                ui.add_space(12.0);
-                ui.label(RichText::new(status).size(12.0).color(MUTED));
-            }
-
-            ui.add_space(20.0);
-            ui.horizontal(|ui| {
-                if button(ui, "完成", Btn::Primary, true).clicked() {
-                    keep_open = false;
-                }
-            });
+                    });
+                });
         });
-    if response.should_close() {
-        keep_open = false;
+    if !keep_open || response.should_close() {
+        if response.should_close() {
+            intents.push(Intent::CommitEdit);
+            intents.push(Intent::Save);
+        }
+        set_open_ctx(ctx, false);
     }
-    ctx.data_mut(|data| data.insert_temp(egui::Id::new(OPEN_ID), keep_open));
     intents
 }
 
+fn set_open_ctx(ctx: &egui::Context, open: bool) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new(OPEN_ID), open));
+}
+
 #[cfg(test)]
+#[path = "project_settings/tests.rs"]
 mod tests;

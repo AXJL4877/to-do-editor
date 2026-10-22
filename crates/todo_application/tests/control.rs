@@ -935,3 +935,63 @@ fn split_then_transition_and_library_presets_copy_into_the_project() {
     let outcome = ws.control(request(&ws, "bad", batch(vec![bad])));
     assert_eq!(error(&outcome.response).code, "motion_not_found");
 }
+
+#[test]
+fn get_production_context_empty_and_host_commands_are_explicit() {
+    let mut ws = workspace();
+    let outcome = ws.control(request(
+        &ws,
+        "prod-ctx",
+        ControlCommand::GetProductionContext {
+            production_id: None,
+        },
+    ));
+    let ControlResult::ProductionContext { context } = ok(&outcome.response) else {
+        panic!("expected production context");
+    };
+    assert!(context.productions.is_empty());
+
+    let dry = ws.control(request(
+        &ws,
+        "wf-dry",
+        ControlCommand::StartWorkflow {
+            extension_id: "studio.demo".into(),
+            input: None,
+            params: None,
+            dry_run: true,
+        },
+    ));
+    assert_eq!(error(&dry.response).code, "workflow_host_required");
+
+    let list = ws.control(request(&ws, "ext", ControlCommand::ListExtensions));
+    assert_eq!(error(&list.response).code, "workflow_host_required");
+}
+
+#[test]
+fn get_context_accepts_session_zero_bootstrap() {
+    let mut ws = workspace();
+    let live = ws.control_context().unwrap().session_id;
+    assert_ne!(live, 0);
+    let outcome = ws.control(ControlRequest {
+        request_id: "boot".into(),
+        session_id: 0,
+        expected_revision: None,
+        command: ControlCommand::GetContext,
+    });
+    let ControlResult::Context { context } = ok(&outcome.response) else {
+        panic!("expected context, got {:?}", outcome.response);
+    };
+    assert_eq!(context.session_id, live);
+}
+
+#[test]
+fn mutations_still_reject_wrong_session() {
+    let mut ws = workspace();
+    let outcome = ws.control(ControlRequest {
+        request_id: "bad".into(),
+        session_id: 0,
+        expected_revision: None,
+        command: ControlCommand::Undo,
+    });
+    assert_eq!(error(&outcome.response).code, "session_conflict");
+}

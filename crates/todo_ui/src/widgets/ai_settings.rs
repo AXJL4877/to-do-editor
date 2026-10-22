@@ -1,7 +1,10 @@
 use egui::{Color32, RichText, Ui};
 use todo_interaction::{AiSettingsView, AvailableModelView, KeySource, ModelCapability};
 
-use crate::theme::{button, Btn, BORDER, BRAND, DANGER, DIM, MUTED, PANEL, PANEL_2, SUCCESS, TEXT};
+use crate::theme::{
+    button, heading, label_muted, modal_frame, section_card, with_input_radius, Btn, BORDER, BRAND,
+    DANGER, FIELD, MUTED, PANEL_2, RADIUS, SUCCESS,
+};
 
 /// Draws the settings form and reports what the app should do. Persistence,
 /// service restart and the requests themselves remain app effects.
@@ -19,6 +22,8 @@ pub enum AiSettingsAction {
 
 const OPEN_ID: &str = "todo_ui_ai_settings_open";
 const AUTO_TEST_ID: &str = "todo_ui_ai_settings_auto_test_sent";
+const LABEL_W: f32 = 96.0;
+const FIELD_W: f32 = 360.0;
 
 pub fn set_open(ui: &Ui, open: bool) {
     set_open_ctx(ui.ctx(), open);
@@ -39,16 +44,18 @@ pub fn close(ctx: &egui::Context) {
 
 fn field(ui: &mut Ui, label: &str, value: &mut String, hint: Option<&str>) {
     ui.horizontal(|ui| {
-        ui.add_sized(
-            [84.0, 28.0],
-            egui::Label::new(RichText::new(label).size(12.0).color(MUTED)),
-        );
-        let mut edit = egui::TextEdit::singleline(value).desired_width(340.0);
-        if let Some(hint) = hint {
-            edit = edit.hint_text(hint);
-        }
-        ui.add(edit);
+        ui.add_sized([LABEL_W, 30.0], egui::Label::new(label_muted(label)));
+        with_input_radius(ui, |ui| {
+            let mut edit = egui::TextEdit::singleline(value)
+                .desired_width(FIELD_W)
+                .margin(egui::Margin::symmetric(10, 6));
+            if let Some(hint) = hint {
+                edit = edit.hint_text(hint);
+            }
+            ui.add(edit);
+        });
     });
+    ui.add_space(4.0);
 }
 
 fn model_field(
@@ -61,73 +68,62 @@ fn model_field(
     hint: &str,
 ) {
     ui.horizontal(|ui| {
-        ui.add_sized(
-            [84.0, 28.0],
-            egui::Label::new(RichText::new(label).size(12.0).color(MUTED)),
-        );
+        ui.add_sized([LABEL_W, 30.0], egui::Label::new(label_muted(label)));
         let available: Vec<&AvailableModelView> = models
             .iter()
             .filter(|model| model.capabilities.contains(&capability))
             .collect();
         if available.is_empty() {
-            ui.add(
-                egui::TextEdit::singleline(value)
-                    .desired_width(340.0)
-                    .hint_text(hint),
-            );
+            with_input_radius(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(value)
+                        .desired_width(FIELD_W)
+                        .hint_text(hint)
+                        .margin(egui::Margin::symmetric(10, 6)),
+                );
+            });
             return;
         }
-        egui::ComboBox::from_id_salt(("model", id))
-            .selected_text(value.as_str())
-            .width(340.0)
-            .show_ui(ui, |ui| {
-                for model in available {
-                    ui.selectable_value(value, model.id.clone(), &model.id);
-                }
-            });
+        with_input_radius(ui, |ui| {
+            egui::ComboBox::from_id_salt(("model", id))
+                .selected_text(value.as_str())
+                .width(FIELD_W)
+                .show_ui(ui, |ui| {
+                    for model in available {
+                        ui.selectable_value(value, model.id.clone(), &model.id);
+                    }
+                });
+        });
     });
+    ui.add_space(4.0);
 }
 
-/// "连接" row: the explicit test button, the model catalogue state and the
-/// last test result.
 fn connection_row(ui: &mut Ui, view: &AiSettingsView) -> bool {
     let mut test = false;
-    ui.add_space(10.0);
+    ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.add_sized(
-            [84.0, 28.0],
-            egui::Label::new(RichText::new("连接").size(12.0).color(MUTED)),
-        );
+        ui.add_sized([LABEL_W, 30.0], egui::Label::new(label_muted("连接")));
         let label = if view.huniu_testing {
             "测试中…"
         } else {
             "测试连接"
         };
-        test = button(ui, label, Btn::Normal, !view.huniu_testing)
-            .on_hover_text("会发一条很短的对话请求，消耗极少额度")
-            .clicked();
+        test = button(ui, label, Btn::Normal, !view.huniu_testing).clicked();
         if let Some((ok, message)) = &view.huniu_connection {
             ui.label(
                 RichText::new(message)
-                    .size(11.5)
+                    .size(12.0)
                     .color(if *ok { SUCCESS } else { DANGER }),
             );
         }
     });
-    let status = view.huniu_model_status.as_deref();
-    if let Some(status) = status {
-        ui.horizontal(|ui| {
-            ui.add_sized([84.0, 18.0], egui::Label::new(""));
-            ui.label(RichText::new(status).size(11.0).color(MUTED));
-        });
-    }
     test
 }
 
 fn key_color(source: KeySource) -> Color32 {
     match source {
         KeySource::Environment => BRAND,
-        KeySource::Keychain => Color32::from_rgb(0x77, 0xd4, 0xa5),
+        KeySource::Keychain => SUCCESS,
         KeySource::Missing => DANGER,
     }
 }
@@ -139,37 +135,30 @@ fn key_card(
     entry: &mut String,
     clear: &mut bool,
 ) {
-    ui.add_space(8.0);
+    ui.add_space(6.0);
     ui.horizontal(|ui| {
-        ui.add_sized(
-            [84.0, 24.0],
-            egui::Label::new(RichText::new("API Key").size(12.0).color(MUTED)),
-        );
+        ui.add_sized([LABEL_W, 24.0], egui::Label::new(label_muted("密钥")));
         ui.label(
             RichText::new(key.unwrap_or("未设置"))
-                .size(12.0)
+                .size(12.5)
                 .color(key_color(source)),
         );
-        ui.label(
-            RichText::new(match source {
-                KeySource::Environment => "环境变量",
-                KeySource::Keychain => "凭据管理器",
-                KeySource::Missing => "待配置",
-            })
-            .size(10.5)
-            .color(DIM),
-        )
-        .on_hover_text("Key 的来源；环境变量只读");
+        if source == KeySource::Missing {
+            ui.label(RichText::new("未配置").size(12.0).color(DANGER));
+        }
     });
     ui.horizontal(|ui| {
-        ui.add_sized([84.0, 28.0], egui::Label::new(""));
+        ui.add_sized([LABEL_W, 30.0], egui::Label::new(""));
         ui.add_enabled_ui(source != KeySource::Environment, |ui| {
-            ui.add(
-                egui::TextEdit::singleline(entry)
-                    .password(true)
-                    .desired_width(250.0)
-                    .hint_text("输入新的 API Key（留空不修改）"),
-            );
+            with_input_radius(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(entry)
+                        .password(true)
+                        .desired_width(268.0)
+                        .hint_text("输入新密钥")
+                        .margin(egui::Margin::symmetric(10, 6)),
+                );
+            });
             if button(ui, "清除", Btn::Danger, true).clicked() {
                 *clear = true;
             }
@@ -177,120 +166,72 @@ fn key_card(
     });
 }
 
-fn service_card(ui: &mut Ui, title: &str, subtitle: &str, add: impl FnOnce(&mut Ui)) {
-    egui::Frame::NONE
-        .fill(PANEL_2)
-        .stroke(egui::Stroke::new(1.0_f32, BORDER))
-        .inner_margin(14.0)
-        .corner_radius(egui::CornerRadius::same(10))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(title).strong().size(15.0).color(TEXT));
-                ui.label(RichText::new(subtitle).size(11.0).color(MUTED));
-            });
-            ui.add_space(10.0);
-            add(ui);
-        });
-}
-
 fn draw_body(ui: &mut Ui, view: &mut AiSettingsView) -> bool {
     let mut test = false;
     ui.vertical(|ui| {
-        ui.label(RichText::new("AI 设置").strong().size(22.0).color(TEXT));
-        ui.label(
-            RichText::new("AI 成片用到的服务。Key 只保存在本机的 Windows 凭据管理器里。")
-                .size(12.0)
-                .color(MUTED),
-        );
-        ui.add_space(16.0);
+        section_card(ui, "模型", "", |ui| {
+            model_field(
+                ui,
+                "chat",
+                "语言",
+                &mut view.huniu_language_model,
+                &view.huniu_models,
+                ModelCapability::Language,
+                "选择模型",
+            );
+            model_field(
+                ui,
+                "image",
+                "生图",
+                &mut view.huniu_image_model,
+                &view.huniu_models,
+                ModelCapability::Image,
+                "选择模型",
+            );
+            model_field(
+                ui,
+                "video",
+                "视频",
+                &mut view.huniu_video_model,
+                &view.huniu_models,
+                ModelCapability::Video,
+                "选择模型",
+            );
+            model_field(
+                ui,
+                "multimodal",
+                "多模态",
+                &mut view.huniu_multimodal_model,
+                &view.huniu_models,
+                ModelCapability::Multimodal,
+                "选择模型",
+            );
+            field(ui, "音频", &mut view.volc_audio_model, Some("选择模型"));
+        });
 
-        service_card(
-            ui,
-            "模型能力",
-            "模块按能力调用，供应商由后台路由",
-            |ui| {
-                model_field(
-                    ui,
-                    "chat",
-                    "语言模型",
-                    &mut view.huniu_language_model,
-                    &view.huniu_models,
-                    ModelCapability::Language,
-                    "默认：geminiflash3.1",
-                );
-                model_field(
-                    ui,
-                    "image",
-                    "生图模型",
-                    &mut view.huniu_image_model,
-                    &view.huniu_models,
-                    ModelCapability::Image,
-                    "例如 gpt-image-2",
-                );
-                model_field(
-                    ui,
-                    "video",
-                    "视频模型",
-                    &mut view.huniu_video_model,
-                    &view.huniu_models,
-                    ModelCapability::Video,
-                    "例如 sora-2",
-                );
-                model_field(
-                    ui,
-                    "multimodal",
-                    "多模态模型",
-                    &mut view.huniu_multimodal_model,
-                    &view.huniu_models,
-                    ModelCapability::Multimodal,
-                    "例如 gemini-3.8-flash",
-                );
-                field(
-                    ui,
-                    "音频模型",
-                    &mut view.volc_audio_model,
-                    Some("seed-tts-2.0"),
-                );
-            },
-        );
-
-        ui.add_space(10.0);
-        service_card(
-            ui,
-            "服务连接",
-            "地址和密钥只配置一次，能力路由自动复用",
-            |ui| {
-                field(ui, "虎妞地址", &mut view.huniu_base_url, Some("https://…"));
-                field(
-                    ui,
-                    "虎妞渠道",
-                    &mut view.huniu_strategy,
-                    Some("例如 XUE"),
-                );
-                key_card(
-                    ui,
-                    view.huniu_key.as_deref(),
-                    view.huniu_key_source,
-                    &mut view.huniu_key_entry,
-                    &mut view.huniu_clear_key,
-                );
-                field(ui, "火山地址", &mut view.volc_base_url, Some("https://…"));
-                field(
-                    ui,
-                    "默认音色",
-                    &mut view.volc_speaker,
-                    Some("zh_female_mizai_uranus_bigtts"),
-                );
-                key_card(
-                    ui,
-                    view.volc_key.as_deref(),
-                    view.volc_key_source,
-                    &mut view.volc_key_entry,
-                    &mut view.volc_clear_key,
-                );
-                test = connection_row(ui, view);
-            },
-        );
+        ui.add_space(12.0);
+        section_card(ui, "连接", "", |ui| {
+            field(ui, "虎妞地址", &mut view.huniu_base_url, Some("https://"));
+            field(ui, "虎妞渠道", &mut view.huniu_strategy, None);
+            key_card(
+                ui,
+                view.huniu_key.as_deref(),
+                view.huniu_key_source,
+                &mut view.huniu_key_entry,
+                &mut view.huniu_clear_key,
+            );
+            ui.add_space(8.0);
+            field(ui, "火山地址", &mut view.volc_base_url, Some("https://"));
+            field(ui, "默认音色", &mut view.volc_speaker, None);
+            key_card(
+                ui,
+                view.volc_key.as_deref(),
+                view.volc_key_source,
+                &mut view.volc_key_entry,
+                &mut view.volc_clear_key,
+            );
+            test = connection_row(ui, view);
+        });
     });
     test
 }
@@ -310,36 +251,77 @@ pub fn draw_modal(ctx: &egui::Context, view: &mut AiSettingsView) -> AiSettingsA
     }
     let mut action = first_open.then_some(AiSettingsAction::ListModels);
     let response = egui::Modal::new(egui::Id::new("todo_ai_settings_modal"))
-        .frame(
-            egui::Frame::NONE
-                .fill(PANEL)
-                .stroke(egui::Stroke::new(1.0_f32, BORDER))
-                .inner_margin(22.0)
-                .corner_radius(egui::CornerRadius::same(12)),
-        )
+        .frame(modal_frame())
         .show(ctx, |ui| {
-            ui.set_width(520.0);
-            egui::ScrollArea::vertical()
-                .max_height(520.0)
-                .auto_shrink([false, true])
+            ui.set_width(560.0);
+            // Header
+            egui::Frame::NONE
+                .fill(PANEL_2)
+                .inner_margin(egui::Margin::symmetric(20, 14))
                 .show(ui, |ui| {
-                    if draw_body(ui, view) {
-                        action = Some(AiSettingsAction::TestConnection);
-                    }
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(heading("AI 设置"));
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new(RichText::new("×").size(16.0).color(MUTED))
+                                        .fill(Color32::TRANSPARENT)
+                                        .stroke(egui::Stroke::NONE)
+                                        .corner_radius(egui::CornerRadius::same(RADIUS)),
+                                )
+                                .clicked()
+                            {
+                                set_open(ui, false);
+                                action = None;
+                            }
+                        });
+                    });
                 });
-            ui.add_space(10.0);
-            ui.separator();
-            ui.add_space(8.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if button(ui, "保存", Btn::Primary, true).clicked() {
-                    set_open(ui, false);
-                    action = Some(AiSettingsAction::Save);
-                }
-                if button(ui, "取消", Btn::Normal, true).clicked() {
-                    set_open(ui, false);
-                    action = None;
-                }
-            });
+            ui.painter().hline(
+                ui.max_rect().x_range(),
+                ui.cursor().top(),
+                egui::Stroke::new(1.0_f32, BORDER),
+            );
+
+            egui::Frame::NONE
+                .inner_margin(egui::Margin::symmetric(20, 16))
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(480.0)
+                        .auto_shrink([false, true])
+                        .id_salt("ai_settings_scroll")
+                        .show(ui, |ui| {
+                            ui.set_min_width(520.0);
+                            if draw_body(ui, view) {
+                                action = Some(AiSettingsAction::TestConnection);
+                            }
+                        });
+                });
+
+            // Footer
+            ui.painter().hline(
+                ui.max_rect().x_range(),
+                ui.cursor().top(),
+                egui::Stroke::new(1.0_f32, BORDER),
+            );
+            egui::Frame::NONE
+                .fill(FIELD)
+                .inner_margin(egui::Margin::symmetric(20, 12))
+                .show(ui, |ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if button(ui, "保存", Btn::Primary, true).clicked() {
+                            set_open(ui, false);
+                            action = Some(AiSettingsAction::Save);
+                        }
+                        ui.add_space(6.0);
+                        if button(ui, "取消", Btn::Ghost, true).clicked() {
+                            set_open(ui, false);
+                            action = None;
+                        }
+                    });
+                });
         });
     if response.should_close() {
         close(ctx);

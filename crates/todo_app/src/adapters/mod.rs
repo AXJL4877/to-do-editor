@@ -13,4 +13,5 @@ pub mod paths;
 pub mod preview;
 pub mod production;
 pub mod workflow;
+pub mod workflow_console;
 pub mod workers;

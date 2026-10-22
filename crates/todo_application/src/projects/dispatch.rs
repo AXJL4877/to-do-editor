@@ -52,11 +52,22 @@ impl Workspace {
             }
             AppAction::RequestClose => {
                 let mut update = AppUpdate::default();
-                if let Some(editor) = &mut self.editor {
-                    let _ = editor.apply(EditorCommand::CommitEdit);
-                    if editor.playing() {
-                        let paused = editor.apply(EditorCommand::TogglePlay);
-                        update = self.editor_update(paused);
+                if self.editor.is_some() {
+                    if let Some(editor) = self.editor.as_mut() {
+                        let _ = editor.apply(EditorCommand::CommitEdit);
+                    }
+                    let placed = self.advance_productions();
+                    update.effects.extend(placed.effects);
+                    update.new_clips.extend(placed.new_clips);
+                    if self.editor.as_ref().is_some_and(|e| e.playing()) {
+                        let paused = self
+                            .editor
+                            .as_mut()
+                            .map(|e| e.apply(EditorCommand::TogglePlay))
+                            .unwrap_or_default();
+                        let next = self.editor_update(paused);
+                        update.effects.extend(next.effects);
+                        update.new_clips.extend(next.new_clips);
                     }
                 }
                 if self
@@ -89,8 +100,20 @@ impl Workspace {
             }
             AppAction::Editor(command) => match self.editor.as_mut() {
                 Some(editor) => {
+                    // Placement pauses during a gesture; resume as soon as the
+                    // user commits or cancels so emit results do not sit idle.
+                    let resume_placement = matches!(
+                        command,
+                        EditorCommand::CommitEdit | EditorCommand::CancelEdit
+                    );
                     let update = editor.apply(command);
-                    self.editor_update(update)
+                    let mut out = self.editor_update(update);
+                    if resume_placement {
+                        let next = self.advance_productions();
+                        out.effects.extend(next.effects);
+                        out.new_clips.extend(next.new_clips);
+                    }
+                    out
                 }
                 None => AppUpdate::default(),
             },

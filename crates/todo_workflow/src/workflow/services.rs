@@ -4,9 +4,9 @@
 //! the single narration/subtitle timing path shared by all callers.
 use super::protocol::{ChatCall, ImageCall, ServiceCall, SpeechCall, SubtitlesCall};
 use super::HostDefaults;
-use crate::subtitles::timeline_cues;
-use crate::tasks::{AudioRequest, ImageRequest, LanguageRequest, TaskRequest};
-use crate::voice::{speech_timeline, Pcm, Timeline, Word};
+use todo_production::subtitles::timeline_cues;
+use todo_production::tasks::{AudioRequest, ImageRequest, LanguageRequest, TaskRequest};
+use todo_production::voice::{speech_timeline, Pcm, Timeline, Word};
 use serde_json::{json, Value};
 
 pub fn speech_resource_id(speaker: &str, default: &str) -> String {
@@ -54,14 +54,17 @@ pub fn task_for(call: &ServiceCall, host: &HostDefaults) -> Option<TaskRequest> 
             voice,
             sample_rate,
             rate,
-        }) => Some(TaskRequest::Audio(AudioRequest {
+        }) => {
+            let speaker = if voice.trim().is_empty() { host.speaker.trim() } else { voice.trim() };
+            Some(TaskRequest::Audio(AudioRequest {
             model: String::new(),
             text: text.clone(),
-            speaker: voice.clone(),
-            resource_id: speech_resource_id(voice, &host.audio_model),
+            speaker: speaker.to_owned(),
+            resource_id: speech_resource_id(speaker, &host.audio_model),
             sample_rate: sample_rate.unwrap_or(host.sample_rate),
             speech_rate: *rate,
-        })),
+        }))
+        },
         ServiceCall::Subtitles(_) | ServiceCall::Probe(_) | ServiceCall::Encode(_) => None,
     }
 }
@@ -92,15 +95,44 @@ pub fn subtitles_result(call: &SubtitlesCall, timeline: &Timeline, pcm: Pcm<'_>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extension::protocol::{ChatCall, SpeechCall};
-    use crate::tasks::ChatRole;
+    use crate::workflow::protocol::{ChatCall, SpeechCall};
+    use todo_production::tasks::ChatRole;
     use serde_json::json;
     use std::path::Path;
 
     fn host() -> HostDefaults {
         HostDefaults {
             audio_model: "seed-tts-2.0".into(),
+            speaker: "zh_female_mizai_uranus_bigtts".into(),
             sample_rate: 24000,
+        }
+    }
+
+    #[test]
+    fn empty_voice_uses_the_host_speaker() {
+        for voice in ["", "  "] {
+            let task = task_for(&ServiceCall::Speech(SpeechCall {
+                text: "你好".into(), voice: voice.into(), sample_rate: None, rate: None,
+            }), &host()).unwrap();
+            let TaskRequest::Audio(audio) = task else { panic!("expected audio") };
+            assert_eq!(audio.speaker, "zh_female_mizai_uranus_bigtts");
+            assert_eq!(audio.resource_id, "seed-tts-2.0");
+        }
+    }
+
+    #[test]
+    fn default_cloned_voice_gets_the_clone_resource_and_explicit_voice_wins() {
+        let defaults = HostDefaults { speaker: "S_configured".into(), ..host() };
+        for (voice, want, resource) in [
+            ("", "S_configured", "seed-icl-2.0"),
+            ("zh_female_mizai_uranus_bigtts", "zh_female_mizai_uranus_bigtts", "seed-tts-2.0"),
+        ] {
+            let task = task_for(&ServiceCall::Speech(SpeechCall {
+                text: "你好".into(), voice: voice.into(), sample_rate: None, rate: Some(10),
+            }), &defaults).unwrap();
+            let TaskRequest::Audio(audio) = task else { panic!("expected audio") };
+            assert_eq!((audio.speaker.as_str(), audio.resource_id.as_str()), (want, resource));
+            assert_eq!(audio.speech_rate, Some(10));
         }
     }
 
@@ -108,7 +140,7 @@ mod tests {
     fn task_defaults_and_clone_resource_are_host_owned() {
         let chat = task_for(
             &ServiceCall::Chat(ChatCall {
-                messages: vec![crate::tasks::ChatMessage {
+                messages: vec![todo_production::tasks::ChatMessage {
                     role: ChatRole::User,
                     content: "hi".into(),
                 }],

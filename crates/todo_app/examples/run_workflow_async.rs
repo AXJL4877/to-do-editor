@@ -8,8 +8,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use todo_app::adapters::production::bridge::ServiceBridge;
 use todo_ai::{AiConfig, AiRouter, CapabilityBindings, ModelBinding, Secrets, ServiceSettings};
-use todo_production::extension::protocol::ServiceCall;
-use todo_production::extension::HostDefaults;
+use todo_workflow::workflow::protocol::ServiceCall;
+use todo_workflow::workflow::HostDefaults;
 use todo_production::tasks::MultimodalRequest;
 use todo_production::{Capability, Provider, TaskKey, TaskRequest};
 use todo_workflow::pool::PoolOptions;
@@ -48,8 +48,17 @@ fn main() {
         secrets.language().ok().flatten().map(|(key, _)| todo_ai::LanguageEndpoint {
             base_url: base.clone(),
             key,
+            model: config
+                .language_model
+                .clone()
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or_else(|| "deepseek-flash".into()),
         })
     });
+    let language_model = language
+        .as_ref()
+        .map(|endpoint| endpoint.model.clone())
+        .unwrap_or_else(|| config.huniu.language_model.clone());
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
@@ -57,13 +66,10 @@ fn main() {
     let workdir = root.join("cache/workflow-runs").join(format!("{id}-{stamp}"));
     std::fs::create_dir_all(&workdir).unwrap();
     let model = |capability: Capability| match capability {
-        Capability::Language => config
-            .language_model
-            .clone()
-            .unwrap_or_else(|| config.huniu.language_model.clone()),
+        Capability::Language => language_model.clone(),
         Capability::Image => config.huniu.image_model.clone(),
         Capability::Video => config.huniu.video_model.clone(),
-        Capability::Multimodal => "deepseek-flash".to_owned(),
+        Capability::Multimodal => config.huniu.multimodal_model.clone(),
         Capability::Audio => config.volc.audio_model.clone(),
     };
     let settings = ServiceSettings {
@@ -86,7 +92,11 @@ fn main() {
             (Capability::Multimodal, model(Capability::Multimodal)),
             (Capability::Audio, model(Capability::Audio)),
         ]),
-        journal_dir: workdir.join("journal"),
+        // TODO_WORKFLOW_JOURNAL=global 用 App 的那份日志（复现缓存/重试行为）
+        journal_dir: match std::env::var("TODO_WORKFLOW_JOURNAL").as_deref() {
+            Ok("global") => todo_ai::default_paths(&root).0,
+            _ => workdir.join("journal"),
+        },
         artifacts_root: workdir.join("blobs"),
         proxy: config.proxy,
         limits: config.limits.clone(),
@@ -126,7 +136,7 @@ fn main() {
         events,
     );
     let mut bridge = ServiceBridge::new(
-        HostDefaults { audio_model: config.volc.audio_model.clone(), sample_rate: 24_000 },
+        HostDefaults { audio_model: config.volc.audio_model.clone(), speaker: config.volc.speaker.clone(), sample_rate: 24_000 },
         &root,
         pool.handle(),
     );
@@ -148,7 +158,8 @@ fn main() {
     let mut job = WorkflowJob::new(&workflow.graph, &extension.dir, RunInput { script, at: Some(0.0) });
 
     // ---- 与 App 面板一致的驱动：不阻塞，事件回来再继续 ----
-    let mut calls: std::collections::HashMap<String, (bool, Instant)> = Default::default();
+    // call_id → (node_id, via_router, started)
+    let mut calls: std::collections::HashMap<String, (String, bool, Instant)> = Default::default();
     let mut vision: std::collections::HashMap<TaskKey, String> = Default::default();
     let mut results: std::collections::HashMap<String, Result<serde_json::Value, String>> =
         Default::default();
@@ -180,59 +191,77 @@ fn main() {
             }
             bridge.on_ai_event(&ai, &event);
         }
-        let waiting = calls.iter().find_map(|(call_id, (via_router, _))| {
-            if *via_router {
-                results.remove(call_id).map(|r| (call_id.clone(), r))
-            } else {
-                bridge.take_direct(call_id).map(|r| (call_id.clone(), r))
-            }
-        });
-        if let Some((call_id, result)) = waiting {
+        let waiting: Vec<(String, String, Result<serde_json::Value, String>)> = calls
+            .iter()
+            .filter_map(|(call_id, (node, via_router, _))| {
+                let result = if *via_router {
+                    results.remove(call_id)
+                } else {
+                    bridge.take_direct(call_id)
+                }?;
+                Some((call_id.clone(), node.clone(), result))
+            })
+            .collect();
+        for (call_id, node, result) in waiting {
             calls.remove(&call_id);
-            job.resume(result);
+            job.resume(&node, result);
+        }
+        if !waiting.is_empty() {
             continue;
         }
         match job.advance() {
             Step::Waiting => {}
             Step::Finished => break,
-            Step::Call(call) => {
-                seq += 1;
-                let call_id = format!("wf-{run_id}-{seq}");
-                let via_router = match call {
-                    RequestedCall::Chat(c) => {
-                        bridge.call_async(&ai, run_id, call_id.clone(), ServiceCall::Chat(c));
-                        false
-                    }
-                    RequestedCall::Image(c) => {
-                        bridge.call_async(&ai, run_id, call_id.clone(), ServiceCall::Image(c));
-                        false
-                    }
-                    RequestedCall::Speech(c) => {
-                        bridge.call_async(&ai, run_id, call_id.clone(), ServiceCall::Speech(c));
-                        false
-                    }
-                    RequestedCall::Subtitles(c) => {
-                        bridge.call_async(&ai, run_id, call_id.clone(), ServiceCall::Subtitles(c));
-                        false
-                    }
-                    RequestedCall::Vision { prompt, images } => {
-                        let media: Vec<String> = images
-                            .iter()
-                            .map(|p| p.to_string_lossy().into_owned())
-                            .collect();
-                        let request = MultimodalRequest {
-                            model: String::new(),
-                            prompt,
-                            digests: todo_ai::providers::vision::media_digests(&media),
-                            media,
-                            json: false,
-                        };
-                        let key = ai.submit(TaskRequest::Multimodal(request));
-                        vision.insert(key, call_id.clone());
-                        true
-                    }
-                };
-                calls.insert(call_id, (via_router, Instant::now()));
+            Step::Calls(batch) => {
+                for (node, call) in batch {
+                    seq += 1;
+                    let call_id = format!("wf-{run_id}-{node}-{seq}");
+                    let via_router = match call {
+                        RequestedCall::Chat(c) => {
+                            bridge.call_async(&ai, run_id, call_id.clone(), ServiceCall::Chat(c));
+                            false
+                        }
+                        RequestedCall::Image(c) => {
+                            bridge.call_async(&ai, run_id, call_id.clone(), ServiceCall::Image(c));
+                            false
+                        }
+                        RequestedCall::Speech(c) => {
+                            bridge.call_async(
+                                &ai,
+                                run_id,
+                                call_id.clone(),
+                                ServiceCall::Speech(c),
+                            );
+                            false
+                        }
+                        RequestedCall::Subtitles(c) => {
+                            bridge.call_async(
+                                &ai,
+                                run_id,
+                                call_id.clone(),
+                                ServiceCall::Subtitles(c),
+                            );
+                            false
+                        }
+                        RequestedCall::Vision { prompt, images } => {
+                            let media: Vec<String> = images
+                                .iter()
+                                .map(|p| p.to_string_lossy().into_owned())
+                                .collect();
+                            let request = MultimodalRequest {
+                                model: String::new(),
+                                prompt,
+                                digests: todo_ai::providers::vision::media_digests(&media),
+                                media,
+                                json: false,
+                            };
+                            let key = ai.submit(TaskRequest::Multimodal(request));
+                            vision.insert(key, call_id.clone());
+                            true
+                        }
+                    };
+                    calls.insert(call_id, (node, via_router, Instant::now()));
+                }
             }
         }
         tick += 1;
@@ -245,11 +274,17 @@ fn main() {
     let report = job.report();
     for node in &report.nodes {
         println!(
-            "  {:<14} {:<16} {}",
+            "  {:<14} {:<16} {:<6} {:.2}s",
             node.id,
             node.node_type,
-            if node.ok { "ok" } else { "FAILED" }
+            if node.ok { "ok" } else { "FAILED" },
+            node.duration_ms as f64 / 1000.0
         );
+    }
+    for node in &report.nodes {
+        for line in &node.logs {
+            println!("      {line}");
+        }
     }
     println!(
         "{} nodes, {:.1}s (非阻塞)",

@@ -1,6 +1,7 @@
 //! Production domain: what to generate and how results reach the timeline.
 //! Pure data and rules; no I/O, network, threads or UI.
-pub mod extension;
+//! Workflow package standards (manifest / graph / nodes) live in `todo_workflow::workflow`.
+pub mod items;
 pub mod narration;
 pub mod pacing;
 pub mod placement;

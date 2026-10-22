@@ -77,11 +77,6 @@ pub(super) fn draw(
         .id_salt(("production-content", &production.id))
         .default_open(false)
         .show(ui, |ui| {
-            ui.label(
-                RichText::new("改文案会重做这一段的配音和画面；改描述只重画这一张。")
-                    .size(11.0)
-                    .color(DIM),
-            );
             for segment in &production.segments {
                 segment_editor(ui, production, segment, thumbs, &mut action);
             }
@@ -105,16 +100,17 @@ fn segment_editor(
         .show(ui, |ui| {
             let key = ("segment-text", production.id.as_str(), segment.id.as_str());
             let mut text = draft(ui, key, &segment.text);
-            ui.add(
-                egui::TextEdit::multiline(&mut text)
-                    .desired_rows(3)
-                    .desired_width(f32::INFINITY),
-            );
+            crate::theme::with_input_radius(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut text)
+                        .desired_rows(3)
+                        .desired_width(f32::INFINITY),
+                );
+            });
             let changed = text != segment.text;
             keep_draft(ui, key, &text);
             ui.horizontal(|ui| {
                 if button(ui, "保存文案", Btn::Normal, changed)
-                    .on_hover_text("重新配音并重做这一段的画面")
                     .clicked()
                 {
                     *action = ProductionAction::Edit {
@@ -193,7 +189,7 @@ fn element_row(
             egui::StrokeKind::Outside,
         );
     }
-    if row.on_hover_text("点击修改这张画面").clicked() {
+    if row.clicked() {
         open = !open;
         ui.ctx().data_mut(|d| d.insert_temp(open_id, open));
     }
@@ -208,11 +204,13 @@ fn element_row(
             ui.label(RichText::new("画面描述").size(11.5).color(MUTED));
             let key = ("element-draw", production.id.as_str(), element.id.as_str());
             let mut draw = draft(ui, key, &element.draw);
-            ui.add(
-                egui::TextEdit::multiline(&mut draw)
-                    .desired_rows(2)
-                    .desired_width(f32::INFINITY),
-            );
+            crate::theme::with_input_radius(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut draw)
+                        .desired_rows(2)
+                        .desired_width(f32::INFINITY),
+                );
+            });
             let changed = draw != element.draw;
             keep_draft(ui, key, &draw);
             ui.horizontal_wrapped(|ui| {
@@ -230,7 +228,6 @@ fn element_row(
                     forget_draft(ui, key);
                 }
                 if button(ui, "再来一张", Btn::Normal, true)
-                    .on_hover_text("同样的描述再生成一张候选")
                     .clicked()
                 {
                     *action = ProductionAction::Edit {
@@ -249,7 +246,6 @@ fn element_row(
             });
             if element.variants.len() > 1 {
                 ui.add_space(4.0);
-                ui.label(RichText::new("点选要用的一张").size(11.5).color(MUTED));
             }
             ui.horizontal_wrapped(|ui| {
                 for variant in &element.variants {

@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 todo_production = { workspace = true }
 todo_process = { workspace = true }
+todo_motion = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

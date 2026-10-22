@@ -12,7 +12,7 @@ use todo_application::control::{
 use todo_application::director::{Call, Director, Input, PictureSource};
 use todo_application::{AppUpdate, Workspace};
 use todo_interaction::ParamValue;
-use todo_production::extension::protocol::Canvas;
+use todo_workflow::workflow::protocol::Canvas;
 use todo_production::{ImageRequest, LanguageRequest, MultimodalRequest, TaskRequest};
 
 type Frames = Result<Vec<(f64, String)>, String>;

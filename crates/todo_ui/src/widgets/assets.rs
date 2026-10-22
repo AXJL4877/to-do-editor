@@ -119,20 +119,14 @@ pub fn draw_dock(
     (intents, action)
 }
 
-fn toolbar(ui: &mut Ui, title: String, folder: &str, folder_hint: &str, action: &mut AssetsAction) {
+fn toolbar(ui: &mut Ui, title: String, folder: &str, action: &mut AssetsAction) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(title).size(11.0).color(MUTED));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if button(ui, "刷新", Btn::Ghost, true)
-                .on_hover_text("重新读取动效和字体文件夹")
-                .clicked()
-            {
+            if button(ui, "刷新", Btn::Ghost, true).clicked() {
                 *action = AssetsAction::Refresh;
             }
-            if button(ui, "文件夹", Btn::Ghost, !folder.is_empty())
-                .on_hover_text(format!("{folder_hint}\n{folder}"))
-                .clicked()
-            {
+            if button(ui, "文件夹", Btn::Ghost, !folder.is_empty()).clicked() {
                 *action = AssetsAction::OpenFolder(folder.to_owned());
             }
         });
@@ -161,7 +155,6 @@ fn motions(ui: &mut Ui, view: &AssetsView, intents: &mut Vec<Intent>, action: &m
         ui,
         format!("动效库 · {}", view.motions.len()),
         &view.motions_dir,
-        "我的动效文件夹：放进去的 JSON 预设点「刷新」后出现",
         action,
     );
     let filter_id = Id::new(FILTER_ID);
@@ -260,9 +253,9 @@ fn motion_card(
     } else {
         BORDER
     };
-    painter.rect(rect, CornerRadius::same(6), PANEL_2, Stroke::new(1.0_f32, stroke), egui::StrokeKind::Inside);
+    painter.rect(rect, CornerRadius::ZERO, PANEL_2, Stroke::new(1.0_f32, stroke), egui::StrokeKind::Inside);
     let stage = Rect::from_min_size(rect.min + egui::vec2(4.0, 4.0), egui::vec2(width - 8.0, stage_h - 4.0));
-    painter.rect_filled(stage, CornerRadius::same(4), FIELD);
+    painter.rect_filled(stage, CornerRadius::ZERO, FIELD);
     paint_motion(&ui.painter_at(stage), stage, card, time);
     let name: String = card.name.chars().take(10).collect();
     painter.text(
@@ -289,19 +282,11 @@ fn motion_card(
             BRAND,
         );
     }
-    let hint = match (&view.target, &applicable) {
+    let tip = match (&view.target, &applicable) {
         (Some(target), Some(_)) => format!("点击应用到「{}」", target.name),
         (Some(_), None) => "转场需要同一轨道上紧挨着的前一个片段".to_owned(),
         (None, _) => "先在时间线上选中一个片段".to_owned(),
     };
-    let mut tip = format!("{}  `{}`", card.name, card.id);
-    if !card.description.is_empty() {
-        tip.push_str(&format!("\n{}", card.description));
-    }
-    if !card.tags.is_empty() {
-        tip.push_str(&format!("\n标签：{}", card.tags.join("、")));
-    }
-    tip.push_str(&format!("\n{hint}"));
     let response = response.on_hover_text(tip);
     if response.clicked() {
         if let Some(intent) = applicable {
@@ -309,11 +294,7 @@ fn motion_card(
         }
     }
     response.context_menu(|ui| {
-        if ui.button("复制 id").clicked() {
-            ui.ctx().copy_text(card.id.clone());
-            ui.close_menu();
-        }
-        if card.origin != MotionOrigin::User && ui.button("复制到我的动效库（可修改）").clicked() {
+        if card.origin != MotionOrigin::User && ui.button("复制到我的动效库").clicked() {
             *action = AssetsAction::SaveAsMine(card.id.clone());
             ui.close_menu();
         }
@@ -389,7 +370,7 @@ fn paint_box(painter: &egui::Painter, stage: Rect, pose: MotionPose, color: Colo
     let size = egui::vec2(base.x * pose.scale_x.max(0.0), base.y * pose.scale_y.max(0.0));
     let center = stage.center() + egui::vec2(pose.dx * stage.width(), pose.dy * stage.height());
     let rect = Rect::from_center_size(center, size);
-    painter.rect_filled(rect, CornerRadius::same(3), color.gamma_multiply(alpha));
+    painter.rect_filled(rect, CornerRadius::ZERO, color.gamma_multiply(alpha));
     painter.text(
         center,
         Align2::CENTER_CENTER,
@@ -406,7 +387,6 @@ fn fonts(ui: &mut Ui, view: &AssetsView, thumbs: &mut ThumbCache, action: &mut A
         ui,
         format!("字体库 · {} 个字体 · {} 个花字", view.fonts.len(), view.styles.len()),
         &view.fonts_dir,
-        "字体文件夹：放进 .ttf / .otf 后点「刷新」；来源和授权登记在 fonts.json",
         action,
     );
     ui.add_space(4.0);
@@ -441,7 +421,7 @@ fn fonts(ui: &mut Ui, view: &AssetsView, thumbs: &mut ThumbCache, action: &mut A
 }
 
 fn preview(ui: &Ui, thumbs: &mut ThumbCache, key: &str, rect: Rect) {
-    ui.painter().rect_filled(rect, CornerRadius::same(4), FIELD);
+    ui.painter().rect_filled(rect, CornerRadius::ZERO, FIELD);
     if !thumbs.paint(ui, key, rect.shrink(2.0)) {
         ui.painter().text(
             rect.center(),
@@ -456,11 +436,15 @@ fn preview(ui: &Ui, thumbs: &mut ThumbCache, key: &str, rect: Rect) {
 fn font_card(ui: &mut Ui, font: &FontCard, thumbs: &mut ThumbCache) {
     let width = ui.available_width();
     let preview_h = (width * 150.0 / 720.0).clamp(36.0, 80.0);
-    let lines = 3.0 + f32::from(!font.styles.is_empty());
-    let (rect, response) =
+    let show_family = font
+        .family
+        .as_ref()
+        .is_some_and(|family| family != &font.name);
+    let lines = 1.0 + f32::from(show_family) + f32::from(font.license.is_empty());
+    let (rect, _) =
         ui.allocate_exact_size(egui::vec2(width, preview_h + 10.0 + lines * 15.0), Sense::hover());
     ui.painter()
-        .rect(rect, CornerRadius::same(6), PANEL_2, Stroke::new(1.0_f32, BORDER), egui::StrokeKind::Inside);
+        .rect(rect, CornerRadius::ZERO, PANEL_2, Stroke::new(1.0_f32, BORDER), egui::StrokeKind::Inside);
     let stage = Rect::from_min_size(rect.min + egui::vec2(4.0, 4.0), egui::vec2(width - 8.0, preview_h));
     preview(ui, thumbs, &font.preview, stage);
     let painter = ui.painter_at(rect);
@@ -470,32 +454,21 @@ fn font_card(ui: &mut Ui, font: &FontCard, thumbs: &mut ThumbCache) {
         y += 15.0;
     };
     line(font.name.clone(), 12.5, TEXT);
-    line(
-        match &font.family {
-            Some(family) if family != &font.name => format!("{} · {family}", font.file),
-            _ => font.file.clone(),
-        },
-        10.5,
-        MUTED,
-    );
+    if show_family {
+        if let Some(family) = &font.family {
+            line(family.clone(), 10.5, MUTED);
+        }
+    }
     if font.license.is_empty() {
-        line(format!("{} · 授权未登记，商用前请确认", font.source), 10.5, WARN);
-    } else {
-        line(format!("{} · {}", font.source, font.license), 10.5, DIM);
-    }
-    if !font.styles.is_empty() {
-        line(format!("用于：{}", font.styles.join("、")), 10.5, DIM);
-    }
-    if !font.note.is_empty() {
-        response.on_hover_text(&font.note);
+        line("授权未确认".to_owned(), 10.5, WARN);
     }
 }
 
 fn style_card(ui: &mut Ui, style: &StyleCard, width: f32, thumbs: &mut ThumbCache) {
     let preview_h = (width * 0.42).round();
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, preview_h + 40.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, preview_h + 40.0), Sense::hover());
     ui.painter()
-        .rect(rect, CornerRadius::same(6), PANEL_2, Stroke::new(1.0_f32, BORDER), egui::StrokeKind::Inside);
+        .rect(rect, CornerRadius::ZERO, PANEL_2, Stroke::new(1.0_f32, BORDER), egui::StrokeKind::Inside);
     let stage = Rect::from_min_size(rect.min + egui::vec2(4.0, 4.0), egui::vec2(width - 8.0, preview_h));
     preview(ui, thumbs, &style.preview, stage);
     let painter = ui.painter_at(rect);
@@ -507,23 +480,13 @@ fn style_card(ui: &mut Ui, style: &StyleCard, width: f32, thumbs: &mut ThumbCach
         FontId::proportional(12.0),
         TEXT,
     );
-    let (meta, color) = if style.font_missing {
-        ("字体缺失，用回退字体".to_owned(), WARN)
-    } else {
-        (style.font_file.clone(), DIM)
-    };
-    painter.text(
-        egui::pos2(rect.left() + 7.0, stage.bottom() + 21.0),
-        Align2::LEFT_TOP,
-        meta,
-        FontId::proportional(10.0),
-        color,
-    );
-    response.on_hover_text(format!(
-        "{}  `{}`\n字体：{}{}",
-        style.name,
-        style.id,
-        style.font_file,
-        if style.in_project { "\n工程里的样式" } else { "\n内置样式" }
-    ));
+    if style.font_missing {
+        painter.text(
+            egui::pos2(rect.left() + 7.0, stage.bottom() + 21.0),
+            Align2::LEFT_TOP,
+            "字体缺失",
+            FontId::proportional(10.0),
+            WARN,
+        );
+    }
 }

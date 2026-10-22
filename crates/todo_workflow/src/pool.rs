@@ -10,9 +10,9 @@ use std::sync::{mpsc, Arc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use todo_process::{Duplex, Job, Output};
-use todo_production::extension::items::{validate_items, Item};
-use todo_production::extension::manifest::Service;
-use todo_production::extension::protocol::{
+use todo_production::items::{validate_items, Item};
+use crate::workflow::manifest::Service;
+use crate::workflow::protocol::{
     Canvas, HostMessage, RunError, RunErrorClass, ServiceCall, ServiceError, ServiceErrorClass,
     WorkerMessage, WORKER_SPEC,
 };

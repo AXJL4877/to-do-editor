@@ -26,8 +26,7 @@ pub(super) fn draw(ui: &mut Ui, properties: Option<&ClipProperties>) -> Vec<Inte
                             clip::draw(ui, properties)
                         } else {
                             ui.add_space(20.0);
-                            ui.label(RichText::new("选择时间线中的片段").color(MUTED));
-                            ui.label(RichText::new("在此查看和调整片段属性").small().color(MUTED));
+                            ui.label(RichText::new("选择时间线中的片段").size(13.0).color(MUTED));
                             Vec::new()
                         }
                     })

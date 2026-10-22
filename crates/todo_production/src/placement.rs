@@ -11,7 +11,7 @@
 //!   user: it is not placed again until its revision changes;
 //! - a linked item follows the actual position of the clip it links to;
 //! - lanes of one role keep their stacking (lane 0 at the bottom).
-use crate::extension::items::{Item, ItemRole, ItemSource, ItemTransform};
+use crate::items::{Item, ItemRole, ItemSource, ItemTransform};
 use crate::production::Placement;
 use std::collections::{BTreeMap, BTreeSet};
 use todo_core::{

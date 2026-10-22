@@ -9,7 +9,7 @@
 //! without spending on a provider. Nodes that are still design-stage report
 //! themselves as unimplemented.
 use std::path::PathBuf;
-use todo_production::extension::protocol::{ChatCall, ImageCall, SpeechCall, SubtitlesCall};
+use todo_workflow::workflow::protocol::{ChatCall, ImageCall, SpeechCall, SubtitlesCall};
 use todo_workflow::runner::{run, RunInput, Services};
 use todo_workflow::{Origin, Registry};
 

@@ -61,6 +61,76 @@ fn import_pressed_sets_choose_media_effect_for_current_folder() {
 }
 
 #[test]
+fn shift_click_selects_a_contiguous_media_range() {
+    let mut project = create_project(None, None, None, None, None);
+    project.media.push(media("a", None));
+    project.media.push(media("b", None));
+    project.media.push(media("c", None));
+    let mut controller = EditorController::new();
+    let mut workspace = Workspace::with_project(project, "shift-range");
+    let _ = controller.apply(
+        &mut workspace,
+        Intent::LibrarySelect {
+            id: "a".into(),
+            additive: false,
+            range: false,
+        },
+    );
+    let _ = controller.apply(
+        &mut workspace,
+        Intent::LibrarySelect {
+            id: "c".into(),
+            additive: false,
+            range: true,
+        },
+    );
+    let view = controller.view(workspace.editor().unwrap(), &[]);
+    assert_eq!(view.library.selected_ids, vec!["a", "b", "c"]);
+}
+
+#[test]
+fn ctrl_click_toggles_media_in_the_selection() {
+    let mut project = create_project(None, None, None, None, None);
+    project.media.push(media("a", None));
+    project.media.push(media("b", None));
+    let mut controller = EditorController::new();
+    let mut workspace = Workspace::with_project(project, "ctrl-toggle");
+    let _ = controller.apply(
+        &mut workspace,
+        Intent::LibrarySelect {
+            id: "a".into(),
+            additive: false,
+            range: false,
+        },
+    );
+    let _ = controller.apply(
+        &mut workspace,
+        Intent::LibrarySelect {
+            id: "b".into(),
+            additive: true,
+            range: false,
+        },
+    );
+    let view = controller.view(workspace.editor().unwrap(), &[]);
+    assert_eq!(view.library.selected_ids, vec!["a", "b"]);
+    let _ = controller.apply(
+        &mut workspace,
+        Intent::LibrarySelect {
+            id: "a".into(),
+            additive: true,
+            range: false,
+        },
+    );
+    assert_eq!(
+        controller
+            .view(workspace.editor().unwrap(), &[])
+            .library
+            .selected_ids,
+        vec!["b"]
+    );
+}
+
+#[test]
 fn selecting_media_selects_its_folder_as_destination_without_highlighting_two_rows() {
     let mut project = create_project(None, None, None, None, None);
     project = create_folder(project, "bin".into(), "Bin".into(), None).unwrap();
@@ -72,7 +142,7 @@ fn selecting_media_selects_its_folder_as_destination_without_highlighting_two_ro
         &mut workspace,
         Intent::LibrarySelectFolder(Some("bin".into())),
     );
-    let _ = controller.apply(&mut workspace, Intent::LibrarySelect("nested".into()));
+    let _ = controller.apply(&mut workspace, Intent::LibrarySelect { id: "nested".into(), additive: false, range: false });
     let view = controller.view(workspace.editor().unwrap(), &[]);
     assert_eq!(view.library.selected_id.as_deref(), Some("nested"));
     assert_eq!(view.library.selected_folder_id.as_deref(), Some("bin"));
@@ -84,7 +154,7 @@ fn selecting_media_selects_its_folder_as_destination_without_highlighting_two_ro
             ..
         }
     ));
-    let _ = controller.apply(&mut workspace, Intent::LibrarySelect("root".into()));
+    let _ = controller.apply(&mut workspace, Intent::LibrarySelect { id: "root".into(), additive: false, range: false });
     assert_eq!(
         controller
             .view(workspace.editor().unwrap(), &[])
@@ -100,7 +170,7 @@ fn creating_folder_selects_it_instead_of_previously_selected_media() {
     project.media.push(media("root", None));
     let mut controller = EditorController::new();
     let mut workspace = Workspace::with_project(project, "new-folder");
-    let _ = controller.apply(&mut workspace, Intent::LibrarySelect("root".into()));
+    let _ = controller.apply(&mut workspace, Intent::LibrarySelect { id: "root".into(), additive: false, range: false });
     let _ = controller.apply(
         &mut workspace,
         Intent::LibraryCreateFolder { name: "Bin".into() },
@@ -117,7 +187,7 @@ fn library_focus_blocks_a_stale_timeline_delete_intent() {
         clip_id: "c1".into(),
         additive: false,
     });
-    editor.apply(Intent::LibrarySelect("m1".into()));
+    editor.apply(Intent::LibrarySelect { id: "m1".into(), additive: false, range: false });
     let before = editor.project().clone();
     editor.apply(Intent::DeleteSelection { ripple: false });
     assert_eq!(editor.project(), &before);
@@ -148,7 +218,7 @@ fn deleting_folder_promotes_children_and_preserves_source_paths_and_timeline() {
 #[test]
 fn non_cascading_library_delete_preserves_referenced_media_and_timeline() {
     let mut editor = TestEditor::new(with_clip(), "delete-used-media");
-    editor.apply(Intent::LibrarySelect("m1".into()));
+    editor.apply(Intent::LibrarySelect { id: "m1".into(), additive: false, range: false });
     let before = editor.project().clone();
     editor.apply(Intent::RemoveMedia {
         media_id: "m1".into(),
@@ -162,7 +232,7 @@ fn removing_unused_media_clears_the_deleted_row_selection() {
     let mut project = create_project(None, None, None, None, None);
     project.media.push(media("unused", None));
     let mut editor = TestEditor::new(project, "delete-media");
-    editor.apply(Intent::LibrarySelect("unused".into()));
+    editor.apply(Intent::LibrarySelect { id: "unused".into(), additive: false, range: false });
     editor.apply(Intent::RemoveMedia {
         media_id: "unused".into(),
         cascade: false,

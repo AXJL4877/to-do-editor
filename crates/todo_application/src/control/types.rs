@@ -1,5 +1,7 @@
 use crate::{AppUpdate, Project};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use todo_core::{Clip, ClipAudio, DomainError, MotionRef, TextContent, TrackKind, Transform};
 
@@ -43,11 +45,84 @@ pub enum ControlCommand {
     },
     Undo,
     Redo,
+    /// Installed extensions / workflow packs the host can run.
+    ListExtensions,
+    /// Open productions: run state, node progress, recent errors, placement.
+    GetProductionContext {
+        #[serde(default)]
+        production_id: Option<String>,
+    },
+    /// Same validation path as the UI "run workflow" action. `dryRun` checks
+    /// only; a real start requires the desktop production host (Agent Bridge).
+    StartWorkflow {
+        extension_id: String,
+        #[serde(default)]
+        input: Option<Value>,
+        #[serde(default)]
+        params: Option<BTreeMap<String, String>>,
+        #[serde(default)]
+        dry_run: bool,
+    },
+    /// Poll one production / local run.
+    GetWorkflowRun {
+        #[serde(default)]
+        run_id: Option<u64>,
+        #[serde(default)]
+        production_id: Option<String>,
+    },
+    /// Stop a live workflow graph run (host).
+    CancelWorkflow {
+        #[serde(default)]
+        extension_id: Option<String>,
+        #[serde(default)]
+        production_id: Option<String>,
+        #[serde(default)]
+        run_id: Option<u64>,
+    },
+    /// Retry a failed production / workflow. Capability may be limited.
+    RetryWorkflow {
+        #[serde(default)]
+        production_id: Option<String>,
+        #[serde(default)]
+        extension_id: Option<String>,
+        #[serde(default)]
+        run_id: Option<u64>,
+        /// When set, retry that task key only; otherwise whole-run policy.
+        #[serde(default)]
+        task_key: Option<String>,
+    },
+    /// Install a `.todoext` into `extensions/user` (same as `todo_workflow::install`).
+    /// `dryRun` only validates the archive; does not write.
+    ImportExtension {
+        /// Absolute or repo-relative path to a `.todoext` zip.
+        path: PathBuf,
+        #[serde(default)]
+        dry_run: bool,
+    },
 }
 
 impl ControlCommand {
     pub(crate) fn is_mutation(&self) -> bool {
-        !matches!(self, Self::GetContext | Self::GetImportJob { .. })
+        !matches!(
+            self,
+            Self::GetContext
+                | Self::GetImportJob { .. }
+                | Self::ListExtensions
+                | Self::GetProductionContext { .. }
+                | Self::GetWorkflowRun { .. }
+        )
+    }
+
+    /// Commands that need the desktop `ProductionHost` (registry / live runs).
+    pub fn needs_production_host(&self) -> bool {
+        matches!(
+            self,
+            Self::ListExtensions
+                | Self::StartWorkflow { .. }
+                | Self::CancelWorkflow { .. }
+                | Self::RetryWorkflow { .. }
+                | Self::ImportExtension { .. }
+        )
     }
 }
 
@@ -241,6 +316,137 @@ pub enum ControlResult {
     ImportStarted { job: ImportJob },
     ImportJob { job: ImportJob },
     History { changed: bool },
+    Extensions { extensions: Vec<ExtensionSummary> },
+    ProductionContext { context: ProductionContextView },
+    WorkflowValidation { validation: WorkflowValidation },
+    WorkflowStarted { started: WorkflowStarted },
+    WorkflowRun { run: WorkflowRunView },
+    WorkflowCancelled { extension_id: String },
+    WorkflowRetry { production_id: String, tasks: usize },
+    ExtensionImported {
+        extension: ExtensionSummary,
+        dry_run: bool,
+        message: String,
+    },
+}
+
+/// Commercial run-state names (UI / production.json / Bridge share this set).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowRunState {
+    Idle,
+    Validating,
+    Running,
+    WaitingService,
+    PausedError,
+    Completed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionSummary {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub origin: String,
+    pub has_graph: bool,
+    pub description: String,
+    /// Host self-check: ready / checking / failed / runtime_missing / unknown.
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlacementSummary {
+    pub placed: usize,
+    pub tombstones: usize,
+    pub positions: usize,
+    pub pending_adopt: usize,
+    pub deleted_on_timeline: usize,
+    /// ApplyGenerated rejected this production's last edit signature; tick skips until retry.
+    #[serde(default)]
+    pub placement_blocked: bool,
+    /// Paths that failed media adopt and will not re-queue until retry/restore/edit.
+    #[serde(default)]
+    pub unadoptable: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductionNodeProgress {
+    pub key: String,
+    pub label: String,
+    /// Panel enum: queued / running / waiting / attention / done / failed.
+    pub ui_state: String,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductionFailureView {
+    pub key: String,
+    pub class: String,
+    pub message: String,
+    pub possibly_billed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductionSnapshot {
+    pub production_id: String,
+    pub title: String,
+    pub extension_id: String,
+    pub run_state: WorkflowRunState,
+    pub ui_aggregate: String,
+    pub done: usize,
+    pub total: usize,
+    pub local_run_ids: Vec<u64>,
+    pub nodes: Vec<ProductionNodeProgress>,
+    pub recent_errors: Vec<ProductionFailureView>,
+    pub attention: Vec<String>,
+    pub placement: PlacementSummary,
+    pub workflow_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductionContextView {
+    pub productions: Vec<ProductionSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowValidation {
+    pub dry_run: bool,
+    pub extension_id: String,
+    pub ok: bool,
+    pub problems: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowStarted {
+    pub extension_id: String,
+    pub production_id: String,
+    pub run_id: u64,
+    pub workdir: String,
+    pub log_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowRunView {
+    pub production_id: String,
+    pub extension_id: String,
+    pub run_id: Option<u64>,
+    pub run_state: WorkflowRunState,
+    pub phase: Option<String>,
+    pub fraction: Option<f64>,
+    pub error: Option<String>,
+    pub placement: PlacementSummary,
+    pub nodes: Vec<ProductionNodeProgress>,
 }
 
 /// Effect-bearing outcome is deliberately separate from the serializable reply.
@@ -297,7 +503,7 @@ pub struct ControlError {
 }
 
 impl ControlError {
-    pub(crate) fn new(code: &str, message: &str) -> Self {
+    pub fn new(code: &str, message: &str) -> Self {
         Self {
             code: code.into(),
             message: message.into(),

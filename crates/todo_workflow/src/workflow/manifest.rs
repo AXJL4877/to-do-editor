@@ -369,35 +369,7 @@ fn valid_option_value(value: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || "_.:-".contains(c))
 }
 
-/// A package-relative path without `..`, roots, drive letters or reserved names.
-pub fn valid_relative_path(path: &str) -> bool {
-    const RESERVED: &[&str] = &["con", "prn", "aux", "nul"];
-    if path.is_empty()
-        || path.len() > 240
-        || path.starts_with('/')
-        || path.contains('\\')
-        || path.contains(':')
-    {
-        return false;
-    }
-    path.split('/').all(|part| {
-        let stem = part
-            .split('.')
-            .next()
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        !part.is_empty()
-            && part != "."
-            && part != ".."
-            && !part.ends_with('.')
-            && !part.ends_with(' ')
-            && !part.chars().any(|c| c.is_control())
-            && !RESERVED.contains(&stem.as_str())
-            && !(stem.len() == 4
-                && (stem.starts_with("com") || stem.starts_with("lpt"))
-                && stem.as_bytes()[3].is_ascii_digit())
-    })
-}
+pub use todo_production::items::valid_relative_path;
 
 /// `{{ name }}` placeholders of a template, or the first malformed brace.
 pub fn placeholders(template: &str) -> Result<Vec<String>, String> {
@@ -579,7 +551,7 @@ impl Manifest {
                 } else {
                     match read(path) {
                         None => problem("graph", format!("找不到 {path}")),
-                        Some(text) => match crate::extension::graph::Graph::parse(&text, "graph") {
+                        Some(text) => match crate::workflow::graph::Graph::parse(&text, "graph") {
                             Err(p) => problem(&p.path, p.message),
                             Ok(graph) => {
                                 // 画布保存/安装只做草稿校验：必需端口未接也能先建图，
@@ -664,7 +636,7 @@ impl Manifest {
                         problem("narration.assets.roles", format!("缺少 {role}"));
                     }
                 }
-                if !crate::extension::valid_size(&n.assets.size) {
+                if !crate::workflow::valid_size(&n.assets.size) {
                     problem("narration.assets.size", "须为 WxH".into());
                 }
                 if !(20..=1000).contains(&n.segment.target)
@@ -689,7 +661,7 @@ impl Manifest {
                     }
                 }
                 if let Some(pacing) = &n.pacing {
-                    if let Err(e) = crate::extension::pacing_from(pacing) {
+                    if let Err(e) = crate::workflow::pacing_from(pacing) {
                         problem("narration.pacing", e);
                     }
                 }

@@ -92,7 +92,9 @@ impl Workers {
             });
         }
         let importing = matches!(&task, MediaTask::Import { .. });
-        let queue = if importing {
+        // Generated files unblock timeline placement; never queue their probes
+        // behind thumbnail decoding or full-file waveform extraction.
+        let queue = if importing || matches!(&task, MediaTask::Adopt { .. }) {
             &self.imports
         } else {
             &self.assets

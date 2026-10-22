@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use todo_ai::{AiEvent, AiRouter};
-use todo_production::extension::protocol::{ServiceCall, SpeechCall, SubtitlesCall};
+use todo_workflow::workflow::protocol::{ServiceCall, SpeechCall, SubtitlesCall};
 use todo_production::tasks::{MultimodalRequest, TaskRequest};
 use todo_workflow::runner::{run, RunInput, RunReport, Services};
 use todo_workflow::Workflow;
@@ -91,14 +91,14 @@ impl<'a> HostServices<'a> {
 impl Services for HostServices<'_> {
     fn chat(
         &mut self,
-        call: todo_production::extension::protocol::ChatCall,
+        call: todo_workflow::workflow::protocol::ChatCall,
     ) -> Result<serde_json::Value, String> {
         self.call(ServiceCall::Chat(call))
     }
 
     fn image(
         &mut self,
-        call: todo_production::extension::protocol::ImageCall,
+        call: todo_workflow::workflow::protocol::ImageCall,
     ) -> Result<serde_json::Value, String> {
         self.call(ServiceCall::Image(call))
     }

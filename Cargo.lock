@@ -3655,6 +3655,7 @@ dependencies = [
  "serde_json",
  "todo_core",
  "todo_production",
+ "todo_workflow",
 ]
 
 [[package]]
@@ -3724,6 +3725,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "todo_core",
+ "todo_workflow",
 ]
 
 [[package]]
@@ -3756,6 +3758,7 @@ dependencies = [
  "egui",
  "image",
  "ron",
+ "serde_json",
  "todo_application",
  "todo_core",
  "todo_interaction",
@@ -3768,6 +3771,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "todo_motion",
  "todo_process",
  "todo_production",
  "uuid",

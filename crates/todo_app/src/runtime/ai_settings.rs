@@ -217,6 +217,9 @@ impl App {
                     c.huniu.video_model.clone(),
                     c.huniu.multimodal_model.clone(),
                     c.volc.audio_model.clone(),
+                    // Independent chat origin must restart the AI client too.
+                    c.language_base_url.clone(),
+                    c.language_model.clone(),
                 )
             })
         };

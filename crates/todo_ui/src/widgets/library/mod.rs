@@ -17,7 +17,31 @@ const GUIDE: Color32 = Color32::from_rgb(0x3a, 0x3d, 0x44);
 
 #[derive(Debug, Clone)]
 pub(super) struct MediaDrag {
-    pub media_id: String,
+    /// All media moved by this drag (multi-select). First id is the grab row.
+    pub media_ids: Vec<String>,
+}
+
+impl MediaDrag {
+    pub fn primary(&self) -> &str {
+        self.media_ids
+            .first()
+            .map(String::as_str)
+            .unwrap_or("")
+    }
+
+    fn for_row(item_id: &str, selected_ids: &[String], row_selected: bool) -> Self {
+        let media_ids = if row_selected && selected_ids.len() > 1 {
+            let mut ids = selected_ids.to_vec();
+            // Keep the grabbed row first so timeline/hover still keys off it.
+            if let Some(pos) = ids.iter().position(|id| id == item_id) {
+                ids.swap(0, pos);
+            }
+            ids
+        } else {
+            vec![item_id.to_owned()]
+        };
+        Self { media_ids }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +53,34 @@ struct FolderDrag {
 enum DropPreview {
     Media { name: String, kind: MediaKind },
     Folder { name: String },
+}
+
+#[derive(Clone, Default)]
+struct RenameDraft {
+    id: String,
+    name: String,
+}
+
+fn rename_key() -> egui::Id {
+    egui::Id::new("todo_ui_library_rename_folder")
+}
+
+fn click_modifiers(ui: &Ui) -> (bool, bool) {
+    ui.input(|i| {
+        let cmd = i.modifiers.ctrl || i.modifiers.command;
+        let shift = i.modifiers.shift;
+        // Windows Explorer: Shift = range, Ctrl = toggle; Ctrl+Shift still ranges.
+        (cmd && !shift, shift)
+    })
+}
+
+fn select_media(id: String, ui: &Ui) -> Intent {
+    let (additive, range) = click_modifiers(ui);
+    Intent::LibrarySelect {
+        id,
+        additive,
+        range,
+    }
 }
 
 pub(super) fn draw(ui: &mut Ui, vm: &EditorViewModel, thumbs: &mut ThumbCache) -> Vec<Intent> {
@@ -58,7 +110,7 @@ fn draw_contents(ui: &mut Ui, vm: &EditorViewModel, thumbs: &mut ThumbCache) -> 
                 Btn::Ghost,
                 !vm.importing,
             )
-            .on_hover_text("导入到当前料箱 (Ctrl+I)")
+            .on_hover_text("导入到当前料箱")
             .clicked()
             {
                 intents.push(Intent::Focus(EditorFocus::Library));
@@ -77,13 +129,15 @@ fn draw_contents(ui: &mut Ui, vm: &EditorViewModel, thumbs: &mut ThumbCache) -> 
     });
 
     let mut query = vm.library.query.clone();
-    let search = ui.add(
-        egui::TextEdit::singleline(&mut query)
-            .hint_text("搜索…")
-            .margin(egui::Margin::symmetric(6, 4))
-            .background_color(FIELD)
-            .desired_width(f32::INFINITY),
-    );
+    let search = crate::theme::with_input_radius(ui, |ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut query)
+                .hint_text("搜索…")
+                .margin(egui::Margin::symmetric(6, 4))
+                .background_color(FIELD)
+                .desired_width(f32::INFINITY),
+        )
+    });
     if search.gained_focus() {
         intents.push(Intent::Focus(EditorFocus::Library));
     }
@@ -114,8 +168,30 @@ fn draw_contents(ui: &mut Ui, vm: &EditorViewModel, thumbs: &mut ThumbCache) -> 
         });
 
     if background.clicked() {
+        ui.ctx().data_mut(|d| d.remove::<RenameDraft>(rename_key()));
         intents.push(Intent::Focus(EditorFocus::Library));
         intents.push(Intent::LibrarySelectFolder(None));
+    }
+
+    // F2 renames the selected media bin (same as Explorer).
+    if vm.focus == EditorFocus::Library
+        && !ui.ctx().wants_keyboard_input()
+        && ui.input(|i| i.key_pressed(egui::Key::F2))
+    {
+        if let Some(id) = vm.library.selected_folder_id.clone() {
+            if let Some(name) = folder_name(vm, &id) {
+                ui.ctx().data_mut(|d| {
+                    d.insert_temp(
+                        rename_key(),
+                        RenameDraft {
+                            id: id.clone(),
+                            name,
+                        },
+                    );
+                });
+                intents.push(Intent::Focus(EditorFocus::Library));
+            }
+        }
     }
     intents
 }
@@ -133,14 +209,37 @@ fn draw_root(ui: &mut Ui, vm: &EditorViewModel) -> Vec<Intent> {
     if response.clicked() {
         intents.push(Intent::LibrarySelectFolder(None));
     }
-    if let Some(intent) = drop_on_folder(ui, &response, None) {
-        intents.push(intent);
-    }
+    intents.extend(drop_on_folder(ui, &response, None));
     if let Some(preview) = drop_preview(vm, &response, None) {
         draw_drop_preview(ui, preview, 0, &[]);
     }
-    response.on_hover_text("导入到根目录 · 拖入素材或料箱可移回根目录");
+    response.on_hover_text("导入到根目录");
     intents
+}
+
+fn folder_name(vm: &EditorViewModel, id: &str) -> Option<String> {
+    fn find(nodes: &[ExplorerNode], id: &str) -> Option<String> {
+        for node in nodes {
+            match node {
+                ExplorerNode::Folder {
+                    id: fid,
+                    name,
+                    children,
+                    ..
+                } => {
+                    if fid == id {
+                        return Some(name.clone());
+                    }
+                    if let Some(found) = find(children, id) {
+                        return Some(found);
+                    }
+                }
+                ExplorerNode::Media { .. } => {}
+            }
+        }
+        None
+    }
+    find(&vm.library.explorer, id)
 }
 
 fn next_folder_name(vm: &EditorViewModel) -> String {
@@ -203,18 +302,63 @@ fn draw_node(
                 MUTED,
             );
             icons::folder(ui.painter(), icon_rect(rect, x0 + 14.0), *expanded);
-            paint_name(ui, rect, x0 + 34.0, name, TEXT, rect.right() - 6.0);
+
+            let renaming = ui
+                .ctx()
+                .data(|d| d.get_temp::<RenameDraft>(rename_key()))
+                .filter(|draft| draft.id == *id);
+            let is_renaming = renaming.is_some();
+            if let Some(mut draft) = renaming {
+                let edit_rect = egui::Rect::from_min_max(
+                    egui::pos2(x0 + 34.0, rect.top() + 1.0),
+                    egui::pos2(rect.right() - 4.0, rect.bottom() - 1.0),
+                );
+                let mut child = ui.new_child(
+                    egui::UiBuilder::new()
+                        .id_salt(("rename_folder", id))
+                        .max_rect(edit_rect),
+                );
+                child.set_clip_rect(edit_rect);
+                let edit = crate::theme::with_input_radius(&mut child, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut draft.name)
+                            .desired_width(edit_rect.width())
+                            .margin(egui::Margin::symmetric(4, 1))
+                            .font(egui::FontId::proportional(12.0)),
+                    )
+                });
+                edit.request_focus();
+                let commit = edit.lost_focus()
+                    && !ui.input(|i| i.key_pressed(egui::Key::Escape));
+                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                if enter || commit {
+                    let trimmed = draft.name.trim();
+                    if !trimmed.is_empty() && trimmed != name {
+                        intents.push(Intent::LibraryRenameFolder {
+                            id: id.clone(),
+                            name: trimmed.to_owned(),
+                        });
+                    }
+                    ui.ctx().data_mut(|d| d.remove::<RenameDraft>(rename_key()));
+                } else if cancel {
+                    ui.ctx().data_mut(|d| d.remove::<RenameDraft>(rename_key()));
+                } else {
+                    ui.ctx().data_mut(|d| d.insert_temp(rename_key(), draft));
+                }
+            } else {
+                paint_name(ui, rect, x0 + 34.0, name, TEXT, rect.right() - 6.0);
+            }
 
             response.dnd_set_drag_payload(FolderDrag {
                 folder_id: id.clone(),
             });
-            if let Some(intent) = drop_on_folder(ui, &response, Some(id.as_str())) {
-                intents.push(intent);
-            }
+            intents.extend(drop_on_folder(ui, &response, Some(id.as_str())));
 
             let preview = drop_preview(vm, &response, Some(id.as_str()));
 
-            if response.clicked() {
+            if !is_renaming && response.clicked() {
+                ui.ctx().data_mut(|d| d.remove::<RenameDraft>(rename_key()));
                 intents.push(Intent::Focus(EditorFocus::Library));
                 intents.push(Intent::LibrarySelectFolder(Some(id.clone())));
                 let on_chevron = response
@@ -224,31 +368,29 @@ fn draw_node(
                     intents.push(Intent::LibraryToggleFolder(id.clone()));
                 }
             }
-            if response.secondary_clicked() || response.drag_started() {
+            if !is_renaming && (response.secondary_clicked() || response.drag_started()) {
                 intents.push(Intent::Focus(EditorFocus::Library));
                 intents.push(Intent::LibrarySelectFolder(Some(id.clone())));
             }
 
             response.context_menu(|ui| {
-                let mut rename = name.clone();
-                ui.add(
-                    egui::TextEdit::singleline(&mut rename)
-                        .desired_width(130.0)
-                        .hint_text("名称"),
-                );
-                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    let trimmed = rename.trim();
-                    if !trimmed.is_empty() && trimmed != name {
-                        intents.push(Intent::LibraryRenameFolder {
-                            id: id.clone(),
-                            name: trimmed.to_owned(),
-                        });
-                    }
+                if ui.button("重命名 (F2)").clicked() {
+                    ui.ctx().data_mut(|d| {
+                        d.insert_temp(
+                            rename_key(),
+                            RenameDraft {
+                                id: id.clone(),
+                                name: name.clone(),
+                            },
+                        );
+                    });
+                    intents.push(Intent::Focus(EditorFocus::Library));
+                    intents.push(Intent::LibrarySelectFolder(Some(id.clone())));
                     ui.close_menu();
                 }
                 if ui
                     .button("删除料箱 (Del)")
-                    .on_hover_text("只删除料箱；其子料箱和素材移到上一级，源文件与时间线保持不变")
+                    .on_hover_text("删除料箱，素材移到上一级")
                     .clicked()
                 {
                     intents.push(Intent::LibraryDeleteFolder { id: id.clone() });
@@ -364,12 +506,24 @@ fn draw_media_leaf(
     // Tiny hover thumb preview only — keep row compact.
     let _ = thumbs;
 
-    response.dnd_set_drag_payload(MediaDrag {
-        media_id: item.id.clone(),
-    });
-    if response.clicked() || response.drag_started() {
+    response.dnd_set_drag_payload(MediaDrag::for_row(
+        &item.id,
+        &vm.library.selected_ids,
+        entry.selected,
+    ));
+    if response.clicked() {
         intents.push(Intent::Focus(EditorFocus::Library));
-        intents.push(Intent::LibrarySelect(item.id.clone()));
+        intents.push(select_media(item.id.clone(), ui));
+    } else if response.drag_started() {
+        // Keep a multi-selection when dragging an already-selected row.
+        intents.push(Intent::Focus(EditorFocus::Library));
+        if !entry.selected {
+            intents.push(Intent::LibrarySelect {
+                id: item.id.clone(),
+                additive: false,
+                range: false,
+            });
+        }
     }
     if response.double_clicked() {
         intents.push(Intent::OpenSourceMonitor {
@@ -377,13 +531,21 @@ fn draw_media_leaf(
         });
     }
     if response.secondary_clicked() {
+        // Right-click keeps multi-selection if the row is already selected.
         intents.push(Intent::Focus(EditorFocus::Library));
-        intents.push(Intent::LibrarySelect(item.id.clone()));
+        if !entry.selected {
+            intents.push(Intent::LibrarySelect {
+                id: item.id.clone(),
+                additive: false,
+                range: false,
+            });
+        }
     }
-    response.clone().on_hover_text(format!(
-        "{}\n拖到时间线 · 双击源监视器",
-        item.path.as_deref().unwrap_or("源文件不可用")
-    ));
+    response.clone().on_hover_text(if item.path.is_some() {
+        "拖到时间线 · 双击打开"
+    } else {
+        "源文件不可用"
+    });
     response.context_menu(|ui| {
         if ui.button("追加到序列").clicked() {
             intents.push(Intent::PlaceMedia {
@@ -429,11 +591,11 @@ fn draw_media_leaf(
     intents
 }
 
-fn drop_on_folder(ui: &Ui, response: &egui::Response, folder_id: Option<&str>) -> Option<Intent> {
+fn drop_on_folder(ui: &Ui, response: &egui::Response, folder_id: Option<&str>) -> Vec<Intent> {
     let media_drag = response.dnd_hover_payload::<MediaDrag>();
     let folder_drag = response.dnd_hover_payload::<FolderDrag>();
     if media_drag.is_none() && folder_drag.is_none() {
-        return None;
+        return Vec::new();
     }
     // `Response::hovered()` is deliberately false while another widget is
     // being dragged. `contains_pointer()` is egui's drag-and-drop hit test.
@@ -442,6 +604,10 @@ fn drop_on_folder(ui: &Ui, response: &egui::Response, folder_id: Option<&str>) -
             .as_ref()
             .is_none_or(|folder| folder_id != Some(folder.folder_id.as_str()));
         let accent = if valid { BRAND } else { crate::theme::DANGER };
+        let count = media_drag
+            .as_ref()
+            .map(|m| m.media_ids.len().max(1))
+            .unwrap_or(1);
         // The tree is sorted by name, so dropping on a row means moving into
         // that bin rather than silently changing an invisible sibling order.
         // Keep the target visible even when the row is already selected.
@@ -456,34 +622,48 @@ fn drop_on_folder(ui: &Ui, response: &egui::Response, folder_id: Option<&str>) -
             egui::Stroke::new(1.5_f32, accent),
             egui::StrokeKind::Inside,
         );
+        let label = if !valid {
+            "不可".to_owned()
+        } else if count > 1 {
+            format!("放入×{count}")
+        } else {
+            "放入".into()
+        };
+        let label_w = if count > 1 { 52.0 } else { 38.0 };
         let label_rect = egui::Rect::from_min_size(
-            egui::pos2(response.rect.right() - 42.0, response.rect.top() + 3.0),
-            egui::vec2(38.0, response.rect.height() - 6.0),
+            egui::pos2(response.rect.right() - label_w - 4.0, response.rect.top() + 3.0),
+            egui::vec2(label_w, response.rect.height() - 6.0),
         );
-        ui.painter().rect_filled(label_rect, 3.0, PANEL_2);
+        ui.painter().rect_filled(label_rect, 0.0, PANEL_2);
         ui.painter().text(
             label_rect.center(),
             egui::Align2::CENTER_CENTER,
-            if valid { "放入" } else { "不可" },
+            label,
             egui::FontId::proportional(10.0),
             accent,
         );
     }
     if let Some(media) = response.dnd_release_payload::<MediaDrag>() {
-        return Some(Intent::LibraryMoveMedia {
-            media_id: media.media_id.clone(),
-            folder_id: folder_id.map(str::to_owned),
-        });
+        let dest = folder_id.map(str::to_owned);
+        return media
+            .media_ids
+            .iter()
+            .filter(|id| !id.is_empty())
+            .map(|media_id| Intent::LibraryMoveMedia {
+                media_id: media_id.clone(),
+                folder_id: dest.clone(),
+            })
+            .collect();
     }
     if let Some(folder) = response.dnd_release_payload::<FolderDrag>() {
         if folder_id != Some(folder.folder_id.as_str()) {
-            return Some(Intent::LibraryMoveFolder {
+            return vec![Intent::LibraryMoveFolder {
                 id: folder.folder_id.clone(),
                 parent_id: folder_id.map(str::to_owned),
-            });
+            }];
         }
     }
-    None
+    Vec::new()
 }
 
 fn drop_preview(
@@ -498,13 +678,19 @@ fn drop_preview(
         return None;
     }
     if let Some(media) = response.dnd_hover_payload::<MediaDrag>() {
+        let primary = media.primary();
         let item = vm
             .library
             .items
             .iter()
-            .find(|entry| entry.item.id == media.media_id)?;
+            .find(|entry| entry.item.id == primary)?;
+        let name = if media.media_ids.len() > 1 {
+            format!("{} 等 {} 项", item.item.name, media.media_ids.len())
+        } else {
+            item.item.name.clone()
+        };
         return Some(DropPreview::Media {
-            name: item.item.name.clone(),
+            name,
             kind: item.item.kind,
         });
     }

@@ -8,7 +8,10 @@ use todo_core::{MediaFolder, Project};
 
 #[derive(Default)]
 pub(crate) struct LibraryState {
-    pub selected: Option<String>,
+    /// Selected media ids (Windows-style multi-select). Last entry is the focus.
+    pub selected: Vec<String>,
+    /// Anchor for Shift+click range selection.
+    pub select_anchor: Option<String>,
     /// `None` = library root.
     pub selected_folder: Option<String>,
     pub query: String,
@@ -42,12 +45,14 @@ impl LibraryState {
         } else {
             flatten_explorer_media(&explorer)
         };
+        let selected_ids = self.selected.clone();
         LibraryViewModel {
             explorer,
             tree,
             entries,
             items,
-            selected_id: self.selected.clone(),
+            selected_id: selected_ids.last().cloned(),
+            selected_ids,
             selected_folder_id: selected_folder,
             query: self.query.clone(),
             searching,
@@ -96,7 +101,7 @@ impl LibraryState {
                 name: folder.name.clone(),
                 depth,
                 expanded,
-                selected: self.selected.is_none()
+                selected: self.selected.is_empty()
                     && self.selected_folder.as_deref() == Some(folder.id.as_str()),
                 children,
             });
@@ -109,7 +114,7 @@ impl LibraryState {
         media.sort_by_key(|item| item.name.to_lowercase());
         nodes.extend(media.into_iter().map(|item| ExplorerNode::Media {
             depth,
-            item: media_item_view(project, item, self.selected.as_deref()),
+            item: media_item_view(project, item, &self.selected),
         }));
         nodes
     }
@@ -153,7 +158,7 @@ impl LibraryState {
                 depth,
                 expanded,
                 has_children,
-                selected: self.selected.is_none()
+                selected: self.selected.is_empty()
                     && self.selected_folder.as_deref() == Some(folder.id.as_str()),
                 children: Vec::new(),
             };
@@ -184,7 +189,7 @@ impl LibraryState {
             .collect();
         media.sort_by_key(|item| item.name.to_lowercase());
         entries.extend(media.into_iter().map(|item| {
-            LibraryEntryView::Media(media_item_view(project, item, self.selected.as_deref()))
+            LibraryEntryView::Media(media_item_view(project, item, &self.selected))
         }));
         entries
     }
@@ -207,11 +212,39 @@ impl LibraryState {
         media
             .into_iter()
             .map(|item| {
-                let mut view = media_item_view(project, item, self.selected.as_deref());
+                let mut view = media_item_view(project, item, &self.selected);
                 view.folder_path = folder_path(project, item.folder_id.as_deref());
                 LibraryEntryView::Media(view)
             })
             .collect()
+    }
+}
+
+/// Visible media row order (depth-first) for Shift+click ranges.
+pub fn visible_media_ids(nodes: &[ExplorerNode]) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_visible_media_ids(nodes, &mut out);
+    out
+}
+
+fn collect_visible_media_ids(nodes: &[ExplorerNode], out: &mut Vec<String>) {
+    for node in nodes {
+        match node {
+            ExplorerNode::Folder { children, .. } => collect_visible_media_ids(children, out),
+            ExplorerNode::Media { item, .. } => out.push(item.item.id.clone()),
+        }
+    }
+}
+
+pub(crate) fn range_select(order: &[String], anchor: &str, end: &str) -> Vec<String> {
+    let a = order.iter().position(|id| id == anchor);
+    let b = order.iter().position(|id| id == end);
+    match (a, b) {
+        (Some(i), Some(j)) => {
+            let (lo, hi) = if i <= j { (i, j) } else { (j, i) };
+            order[lo..=hi].to_vec()
+        }
+        _ => vec![end.to_owned()],
     }
 }
 
@@ -247,7 +280,7 @@ fn folder_view(project: &Project, folder: &MediaFolder) -> LibraryFolderView {
 fn media_item_view(
     project: &Project,
     item: &todo_core::MediaItem,
-    selected: Option<&str>,
+    selected: &[String],
 ) -> LibraryItemView {
     let uses = project
         .tracks
@@ -269,7 +302,7 @@ fn media_item_view(
             place_duration: todo_core::place_duration(item),
         },
         uses,
-        selected: selected == Some(item.id.as_str()),
+        selected: selected.iter().any(|id| id == &item.id),
         locked_references: project.tracks.iter().any(|t| {
             t.locked
                 && t.clips

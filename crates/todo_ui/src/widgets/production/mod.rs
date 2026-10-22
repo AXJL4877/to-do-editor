@@ -11,7 +11,7 @@ mod flow;
 mod form;
 mod workflow;
 
-use crate::theme::{BORDER, BRAND, DANGER, MUTED, PANEL_2, TEXT, WARN};
+use crate::theme::{button, Btn, BORDER, BRAND, DANGER, MUTED, PANEL_2, TEXT, WARN};
 use crate::ThumbCache;
 use egui::{Color32, Id, Rect, RichText, Ui};
 use std::collections::BTreeMap;
@@ -53,13 +53,27 @@ pub enum ProductionAction {
     Thumbnail {
         path: String,
     },
+    /// Open a local file with the OS default app (e.g. system video player).
+    OpenExternal {
+        path: String,
+    },
     /// 运行整条工作流（空 script 用图里的文案）。
+    /// `edits` 是检查器里还没保存的临时改动，运行按它生效。
     WorkflowRun {
         extension: String,
         script: String,
+        edits: BTreeMap<String, BTreeMap<String, String>>,
+    },
+    /// 停止正在跑的工作流（取消在途请求，保留已完成的节点）。
+    WorkflowStop {
+        extension: String,
     },
     /// Scaffold a blank user workflow package.
     WorkflowCreate,
+    /// Delete a user workflow package from disk.
+    WorkflowDelete {
+        extension: String,
+    },
     /// Write the open graph (positions + inspector edits) to disk.
     WorkflowSave {
         extension: String,
@@ -78,11 +92,34 @@ pub enum ProductionAction {
         extension: String,
         node_id: String,
     },
+    /// Canvas/toolbar import: pick files, then create media_bin or append to target.
+    WorkflowImportMediaPick {
+        extension: String,
+        x: f32,
+        y: f32,
+        /// Drop onto this media_bin/relay when set; otherwise create a new media_bin.
+        target_node: Option<String>,
+        positions: BTreeMap<String, (f32, f32)>,
+    },
+    /// OS drop / already-picked paths onto the canvas.
+    WorkflowImportMedia {
+        extension: String,
+        paths: Vec<std::path::PathBuf>,
+        x: f32,
+        y: f32,
+        target_node: Option<String>,
+        positions: BTreeMap<String, (f32, f32)>,
+    },
     /// Drop one file entry from a media_bin node.
     WorkflowRemoveMedia {
         extension: String,
         node_id: String,
         path: String,
+    },
+    /// Clear disk cache for image_gen (etc.) so the next run regenerates.
+    WorkflowClearNodeCache {
+        extension: String,
+        node_id: String,
     },
     /// Insert a catalog node onto the canvas.
     WorkflowAddNode {
@@ -132,6 +169,10 @@ pub enum ProductionAction {
         out: Option<String>,
         input: Option<String>,
         positions: BTreeMap<String, (f32, f32)>,
+    },
+    /// Jump the editor playhead (subtitle preview on the program canvas).
+    SeekPlayhead {
+        time: f64,
     },
 }
 
@@ -242,8 +283,9 @@ pub fn set_selected_workflow(ctx: &egui::Context, id: Option<String>) {
 pub fn draw_dock(
     ui: &mut Ui,
     view: &ProductionPanelView,
-    _thumbs: &mut ThumbCache,
+    thumbs: &mut ThumbCache,
 ) -> ProductionAction {
+    let _ = thumbs;
     let ctx = ui.ctx().clone();
     let badge = if view
         .productions
@@ -270,14 +312,7 @@ pub fn draw_dock(
         ui.label(RichText::new("工作流").strong().size(13.0).color(TEXT));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(10.0);
-            if ui
-                .add(
-                    egui::Button::new(RichText::new("AI 设置").size(12.0).color(MUTED))
-                        .frame(false),
-                )
-                .on_hover_text("服务地址、Key 与模型")
-                .clicked()
-            {
+            if button(ui, "AI 设置", Btn::Ghost, true).clicked() {
                 action = ProductionAction::OpenSettings;
             }
         });
@@ -310,27 +345,23 @@ pub fn draw_dock(
                     }
                     if ui
                         .add_sized(
-                            [ui.available_width(), 32.0],
-                            egui::Button::new(RichText::new("新建工作流").size(13.0)),
+                            [ui.available_width(), 34.0],
+                            egui::Button::new(
+                                RichText::new("新建工作流")
+                                    .size(13.0)
+                                    .color(egui::Color32::from_rgb(0x08, 0x14, 0x1c)),
+                            )
+                            .fill(BRAND)
+                            .stroke(egui::Stroke::new(1.0_f32, BRAND))
+                            .corner_radius(egui::CornerRadius::ZERO),
                         )
                         .clicked()
                     {
                         action = ProductionAction::WorkflowCreate;
                     }
-                    ui.add_space(10.0);
-                    ui.label(
-                        RichText::new("~ 全屏 · 右键加节点 · Ctrl+C/V")
-                            .size(11.0)
-                            .color(MUTED),
-                    );
-                    ui.add_space(8.0);
+                    ui.add_space(12.0);
                     if view.workflows.is_empty() {
-                        ui.label(RichText::new("还没有工作流").size(12.5).color(MUTED));
-                        ui.label(
-                            RichText::new("点上方「新建工作流」开始，或安装带 graph 的扩展包。")
-                                .size(11.5)
-                                .color(MUTED),
-                        );
+                        ui.label(RichText::new("还没有工作流").size(13.0).color(MUTED));
                     } else {
                         let selected = selected_workflow(&ctx);
                         for entry in &view.workflows {
@@ -346,43 +377,50 @@ pub fn draw_dock(
 }
 
 fn draw_entry(ui: &mut Ui, entry: &WorkflowEntryView, selected: bool) -> ProductionAction {
-    let frame = egui::Frame::NONE
-        .fill(if selected {
-            egui::Color32::from_rgb(0x1d, 0x30, 0x3d)
+    let mut action = ProductionAction::None;
+    let tag = if entry.origin_user { "我的" } else { "内置" };
+    let fill = if selected {
+        egui::Color32::from_rgb(0x1d, 0x30, 0x3d)
+    } else {
+        PANEL_2
+    };
+    let stroke = if selected { BRAND } else { BORDER };
+    let row_w = ui.available_width();
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        let open_w = if entry.origin_user {
+            (row_w - 58.0).max(80.0)
         } else {
-            PANEL_2
-        })
-        .stroke(egui::Stroke::new(
-            1.0_f32,
-            if selected { BRAND } else { BORDER },
-        ))
-        .inner_margin(egui::Margin::symmetric(10, 8))
-        .corner_radius(egui::CornerRadius::same(6));
-    let inner = frame.show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(&entry.name).strong().size(13.5).color(TEXT));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let tag = if entry.origin_user { "我的" } else { "内置" };
-                ui.label(RichText::new(tag).size(11.0).color(MUTED));
-                ui.colored_label(entry_status_color(entry.status), "●");
-            });
-        });
-        if !entry.summary.is_empty() {
-            ui.label(RichText::new(&entry.summary).size(11.5).color(MUTED));
+            row_w
+        };
+        let response = ui.add_sized(
+            [open_w, 40.0],
+            egui::Button::new(
+                RichText::new(format!("{}  ·  {}", entry.name, tag))
+                    .size(13.5)
+                    .color(TEXT),
+            )
+            .fill(fill)
+            .stroke(egui::Stroke::new(1.0_f32, stroke))
+            .corner_radius(egui::CornerRadius::ZERO),
+        );
+        let status = entry_status_color(entry.status);
+        let dot = egui::pos2(response.rect.right() - 14.0, response.rect.center().y);
+        ui.painter().circle_filled(dot, 3.5, status);
+        if response.clicked() {
+            set_selected_workflow(ui.ctx(), Some(entry.extension_id.clone()));
+            workflow::open(ui.ctx(), entry.extension_id.clone());
+        }
+        if entry.origin_user
+            && button(ui, "删除", Btn::Danger, true).clicked()
+        {
+            action = ProductionAction::WorkflowDelete {
+                extension: entry.extension_id.clone(),
+            };
         }
     });
-    let response = ui.interact(
-        inner.response.rect,
-        Id::new(("workflow_entry", &entry.extension_id)),
-        egui::Sense::click(),
-    );
-    if response.clicked() {
-        set_selected_workflow(ui.ctx(), Some(entry.extension_id.clone()));
-        workflow::open(ui.ctx(), entry.extension_id.clone());
-    }
     ui.add_space(6.0);
-    ProductionAction::None
+    action
 }
 
 /// Draw fullscreen canvas + handle `~` / Esc. Call every editor frame.
@@ -391,20 +429,21 @@ pub fn draw_workflow_overlay(
     panel: &ProductionPanelView,
     graph: Option<&todo_interaction::WorkflowPanelView>,
     title: &str,
+    thumbs: &mut ThumbCache,
 ) -> ProductionAction {
     workflow::handle_hotkeys(ctx, panel);
     let Some(extension_id) = workflow::open_id(ctx) else {
         return ProductionAction::None;
     };
-    let Some(graph) = graph else {
-        return ProductionAction::None;
-    };
-    workflow::draw_fullscreen(ctx, &extension_id, title, graph)
+    match graph {
+        Some(graph) => workflow::draw_fullscreen(ctx, &extension_id, title, graph, thumbs),
+        None => workflow::draw_unavailable(ctx, &extension_id, title),
+    }
 }
 
 pub use workflow::{
-    is_blocking_input, is_open as workflow_fullscreen_open, open as open_workflow,
-    open_id as workflow_open_id,
+    close as close_workflow, is_blocking_input, is_open as workflow_fullscreen_open,
+    open as open_workflow, open_id as workflow_open_id, terminal_hole as workflow_terminal_hole,
 };
 
 #[cfg(test)]

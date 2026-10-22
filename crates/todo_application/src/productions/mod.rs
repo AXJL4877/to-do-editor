@@ -19,8 +19,8 @@ pub use session::{
 };
 
 use serde_json::Value;
-use todo_production::extension::items::Item;
-use todo_production::extension::protocol::Canvas;
+use todo_production::items::Item;
+use todo_workflow::workflow::protocol::Canvas;
 use todo_production::work::ProductionSpec;
 use todo_production::{Production, TaskKey, TaskSpec};
 

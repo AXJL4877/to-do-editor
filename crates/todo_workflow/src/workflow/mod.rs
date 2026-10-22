@@ -1,14 +1,16 @@
-//! The extension standard: manifest (`todo-extension/1`), worker protocol
-//! (`todo-worker/1`), timeline items (`todo-items/1`) and optional workflow
-//! graph IR (`todo-graph/1`). Normative text: `docs/architecture/extension-spec.md`.
+//! Workflow package standard: manifest (`todo-extension/1`), worker protocol
+//! (`todo-worker/1`), and graph IR (`todo-graph/1`). Timeline items live in
+//! `todo_production::items`. Normative text: `docs/architecture/extension-spec.md`.
 pub mod graph;
-pub mod items;
 pub mod manifest;
 pub mod nodes;
 pub mod protocol;
 pub mod services;
 
-use crate::pacing::Pacing;
+/// Timeline items stay in the production domain (shared with narration).
+pub use todo_production::items;
+
+use todo_production::pacing::Pacing;
 
 /// `WIDTHxHEIGHT`, each side 64..=8192.
 pub fn valid_size(size: &str) -> bool {
@@ -43,10 +45,11 @@ pub fn pacing_from(value: &serde_json::Value) -> Result<Pacing, String> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct HostDefaults {
     pub audio_model: String,
+    pub speaker: String,
     pub sample_rate: u32,
 }
 
-/// Recipe settings of a `narration` extension with resolved `params`:
+/// Recipe settings of a `narration` package with resolved `params`:
 /// declared well-known parameters override the manifest's values.
 pub fn narration_spec(
     manifest: &manifest::Manifest,
@@ -55,13 +58,13 @@ pub fn narration_spec(
     host: &HostDefaults,
 ) -> Result<
     (
-        crate::work::ProductionSpec,
-        crate::production::SplitMode,
-        crate::segment::Limits,
+        todo_production::work::ProductionSpec,
+        todo_production::production::SplitMode,
+        todo_production::segment::Limits,
     ),
     String,
 > {
-    use crate::production::SplitMode;
+    use todo_production::production::SplitMode;
     let n = manifest.narration.as_ref().ok_or("不是口播配方扩展")?;
     let number = |id: &str| params.get(id).and_then(serde_json::Value::as_f64);
     let text = |path: &str| {
@@ -74,7 +77,6 @@ pub fn narration_spec(
         .and_then(|v| v.as_str())
         .ok_or("缺少音色参数 voice")?
         .to_owned();
-    // Cloned voices (S_…) use the voice cloning resource.
     let resource = services::speech_resource_id(&speaker, &host.audio_model);
     let split = match params.get("split").and_then(|v| v.as_str()) {
         Some("paragraph") => SplitMode::Paragraph,
@@ -82,7 +84,7 @@ pub fn narration_spec(
         _ => SplitMode::Semantic,
     };
     let target = number("segmentChars").map_or(n.segment.target, |v| v as usize);
-    let limits = crate::segment::Limits {
+    let limits = todo_production::segment::Limits {
         target,
         max: n.segment.max.max(target),
     };
@@ -102,12 +104,12 @@ pub fn narration_spec(
         .map(pacing_from)
         .transpose()?
         .unwrap_or_default();
-    let spec = crate::work::ProductionSpec {
+    let spec = todo_production::work::ProductionSpec {
         planner_system: text(&n.planner.prompt)?,
         max_elements: n.planner.max_elements,
         board_sec: number("boardSec").unwrap_or(n.board_sec),
         variants: number("variants").map_or(1, |v| v.max(1.0) as usize),
-        asset: crate::work::AssetSpec {
+        asset: todo_production::work::AssetSpec {
             template: text(&n.assets.template)?,
             roles: n.assets.roles.clone(),
             avoid: n.assets.avoid.clone(),
@@ -116,7 +118,7 @@ pub fn narration_spec(
             quality: n.assets.quality.clone(),
             transparent: n.assets.transparent,
         },
-        voice: crate::work::VoiceSpec {
+        voice: todo_production::work::VoiceSpec {
             speaker,
             resource_id: resource,
             sample_rate: host.sample_rate,

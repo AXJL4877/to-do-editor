@@ -51,14 +51,9 @@ impl EditorController {
         if let Some(editor) = workspace.editor() {
             let project = editor.project();
             self.timeline.reconcile(project);
-            if self
-                .library
-                .selected
-                .as_ref()
-                .is_some_and(|id| !project.media.iter().any(|media| &media.id == id))
-            {
-                self.library.selected = None;
-            }
+            self.library.selected.retain(|id| {
+                project.media.iter().any(|media| &media.id == id)
+            });
             if self
                 .library
                 .selected_folder
@@ -136,7 +131,11 @@ impl EditorController {
                 self.focus = focus;
                 AppUpdate::default()
             }
-            Intent::LibrarySelect(id) => {
+            Intent::LibrarySelect {
+                id,
+                additive,
+                range,
+            } => {
                 let folder_id = workspace.editor().and_then(|editor| {
                     editor
                         .project()
@@ -150,9 +149,40 @@ impl EditorController {
                         expand_ancestors(&mut self.library.expanded, editor.project(), folder_id);
                         self.library.expanded.insert(folder_id.clone());
                     }
+                    let order = crate::presentation::visible_media_ids(
+                        &self.library.view(editor.project()).explorer,
+                    );
+                    if range {
+                        let anchor = self
+                            .library
+                            .select_anchor
+                            .clone()
+                            .unwrap_or_else(|| id.clone());
+                        self.library.selected =
+                            crate::presentation::range_select(&order, &anchor, &id);
+                    } else if additive {
+                        if let Some(pos) = self.library.selected.iter().position(|s| s == &id) {
+                            self.library.selected.remove(pos);
+                        } else {
+                            self.library.selected.push(id.clone());
+                        }
+                        self.library.select_anchor = Some(id.clone());
+                    } else {
+                        self.library.selected = vec![id.clone()];
+                        self.library.select_anchor = Some(id.clone());
+                    }
+                } else if additive {
+                    if let Some(pos) = self.library.selected.iter().position(|s| s == &id) {
+                        self.library.selected.remove(pos);
+                    } else {
+                        self.library.selected.push(id.clone());
+                    }
+                    self.library.select_anchor = Some(id);
+                } else {
+                    self.library.selected = vec![id.clone()];
+                    self.library.select_anchor = Some(id);
                 }
                 self.library.selected_folder = folder_id;
-                self.library.selected = Some(id);
                 self.focus = EditorFocus::Library;
                 AppUpdate::default()
             }
@@ -167,7 +197,8 @@ impl EditorController {
                     }
                 }
                 self.library.selected_folder = id;
-                self.library.selected = None;
+                self.library.selected.clear();
+                self.library.select_anchor = None;
                 self.focus = EditorFocus::Library;
                 AppUpdate::default()
             }
@@ -185,7 +216,8 @@ impl EditorController {
                     self.library.expanded.insert(parent.clone());
                 }
                 let id = format!("f{}", uuid::Uuid::new_v4().as_simple());
-                self.library.selected = None;
+                self.library.selected.clear();
+                self.library.select_anchor = None;
                 self.library.selected_folder = Some(id.clone());
                 workspace.dispatch(AppAction::Editor(EditorCommand::Edit(
                     EditCommand::CreateFolder {

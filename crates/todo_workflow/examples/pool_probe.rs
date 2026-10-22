@@ -2,7 +2,7 @@
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use todo_workflow::{load, Budget, Origin, PoolOptions, RunRequest, RuntimePaths, WorkerPool};
-use todo_production::extension::protocol::Canvas;
+use todo_workflow::workflow::protocol::Canvas;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

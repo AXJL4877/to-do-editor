@@ -170,7 +170,11 @@ impl App {
         for request in requests {
             match request {
                 AgentRequest::Control { request, reply } => {
-                    let outcome = self.workspace.control(request);
+                    let outcome = if request.command.needs_production_host() {
+                        self.control_workflow(request)
+                    } else {
+                        self.workspace.control(request)
+                    };
                     let response =
                         serde_json::to_value(&outcome.response).unwrap_or_else(|error| {
                             serde_json::json!({
@@ -193,6 +197,54 @@ impl App {
                 } => self.start_agent_render(request_id, session_id, times, reply),
             }
         }
+    }
+
+    /// Workflow commands share ProductionHost with the UI (no JSON bypass).
+    fn control_workflow(
+        &mut self,
+        request: todo_application::control::ControlRequest,
+    ) -> todo_application::control::ControlOutcome {
+        use todo_application::control::{ControlError, ControlOutcome, ControlResponse, ControlStatus, CONTROL_API_VERSION};
+        let Some(canvas) = self.canvas().map(|(_, c)| c) else {
+            return ControlOutcome {
+                update: todo_application::AppUpdate::default(),
+                response: ControlResponse {
+                    api_version: CONTROL_API_VERSION,
+                    request_id: request.request_id.clone(),
+                    session_id: request.session_id,
+                    revision: None,
+                    outcome: ControlStatus::Error {
+                        error: ControlError::new(
+                            "no_project",
+                            "请先打开一个工程再使用工作流命令",
+                        ),
+                    },
+                },
+            };
+        };
+        let Some(host) = self.production.as_mut() else {
+            return ControlOutcome {
+                update: todo_application::AppUpdate::default(),
+                response: ControlResponse {
+                    api_version: CONTROL_API_VERSION,
+                    request_id: request.request_id.clone(),
+                    session_id: request.session_id,
+                    revision: self.workspace.control_context().map(|c| c.revision),
+                    outcome: ControlStatus::Error {
+                        error: ControlError::new(
+                            "production_host_unavailable",
+                            "AI 成片服务没有启动；无法 list/start/cancel 工作流",
+                        ),
+                    },
+                },
+            };
+        };
+        crate::adapters::production::workflow_control::execute(
+            &mut self.workspace,
+            host,
+            canvas,
+            request,
+        )
     }
 
     fn start_agent_render(

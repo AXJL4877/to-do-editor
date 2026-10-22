@@ -60,7 +60,13 @@ pub enum Intent {
     MoveSelectionToTrack {
         track_id: String,
     },
-    LibrarySelect(String),
+    /// Select library media. Plain click replaces; `additive` (Ctrl) toggles;
+    /// `range` (Shift) selects from the anchor through `id` in visible order.
+    LibrarySelect {
+        id: String,
+        additive: bool,
+        range: bool,
+    },
     LibraryQuery(String),
     /// `None` selects the library root.
     LibrarySelectFolder(Option<String>),

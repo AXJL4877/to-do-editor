@@ -5,7 +5,7 @@ use crate::*;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use todo_core::{create_project, MediaItem, MediaKind, Project};
-use todo_production::extension::protocol::Canvas;
+use todo_workflow::workflow::protocol::Canvas;
 use todo_production::pacing::Pacing;
 use todo_production::production::{Edit, PackRef};
 use todo_production::segment::Limits;
@@ -13,6 +13,30 @@ use todo_production::work::{AssetSpec, ProductionSpec, VoiceSpec};
 use todo_production::{Production, SplitMode, TaskKey, TaskRequest};
 
 const WORK: &str = "data/p/productions/x/work";
+
+#[test]
+fn workflow_bad_file_does_not_block_ready_sibling() {
+    let mut ws = workspace();
+    let run = ws.bind_canvas_workflow("test.workflow", "1.0.0", "", WORK.into(), setup().canvas).unwrap();
+    let items = serde_json::from_value(json!([
+        {"key":"bad", "rev":"1", "role":"visual", "lane":0, "start":0, "duration":1,
+         "source":{"type":"file", "file":"a-bad.png"}},
+        {"key":"good", "rev":"1", "role":"visual", "lane":0, "start":2, "duration":1,
+         "source":{"type":"file", "file":"b-good.png"}}
+    ])).unwrap();
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunItems { run, items }));
+    let mut fake = Fake { fail_adopts: 1, ..Fake::default() };
+    fake.pump(&mut ws, update);
+    let placed = clips(ws.editor().unwrap().project());
+    assert!(placed.iter().any(|(key, _)| key == "good"), "healthy sibling was blocked: {placed:?}");
+    assert!(!placed.iter().any(|(key, _)| key == "bad"));
+    let id = ws.production_ids().pop().unwrap();
+    let update = ws.retry_production(&id, None);
+    fake.pump(&mut ws, update);
+    let placed = clips(ws.editor().unwrap().project());
+    assert_eq!(placed.iter().filter(|(key, _)| key == "good").count(), 1);
+    assert_eq!(placed.iter().filter(|(key, _)| key == "bad").count(), 1);
+}
 
 fn spec() -> ProductionSpec {
     ProductionSpec {
@@ -133,6 +157,8 @@ struct Fake {
     last_saved: Option<Project>,
     /// Pending answers, delivered one per pump step.
     queue: Vec<AppEvent>,
+    /// Next adopt tickets fail this many times (then succeed).
+    fail_adopts: usize,
 }
 
 impl Fake {
@@ -214,6 +240,14 @@ impl Fake {
                 ticket,
                 task: MediaTask::Adopt { files, .. },
             } => {
+                if self.fail_adopts > 0 {
+                    self.fail_adopts -= 1;
+                    self.queue.push(AppEvent::Media {
+                        ticket,
+                        result: Err("file missing".into()),
+                    });
+                    return;
+                }
                 let media = files
                     .iter()
                     .map(|f| {
@@ -515,4 +549,200 @@ fn failed_requests_wait_for_the_user_and_retry_once() {
         .effects
         .iter()
         .any(|e| matches!(e, Effect::Production(ProductionTask::Retry(k)) if k == &key)));
+}
+
+#[test]
+fn commit_edit_resumes_placement_paused_during_gesture() {
+    let mut ws = workspace();
+    let mut fake = Fake::default();
+    let _ = ws.dispatch(AppAction::Editor(EditorCommand::BeginEdit));
+    assert!(ws.editor().unwrap().transaction_active());
+    let update = ws.add_production(doc(), setup());
+    fake.pump(&mut ws, update);
+    assert!(
+        clips(ws.editor().unwrap().project()).is_empty(),
+        "placement must wait out an open gesture"
+    );
+    let update = ws.dispatch(AppAction::Editor(EditorCommand::CommitEdit));
+    fake.pump(&mut ws, update);
+    let placed = clips(ws.editor().unwrap().project());
+    assert!(
+        !placed.is_empty(),
+        "CommitEdit must resume placement: {placed:?}"
+    );
+}
+
+#[test]
+fn failed_adopt_can_retry_and_still_reach_timeline() {
+    let mut ws = workspace();
+    let mut fake = Fake {
+        // Fail the first wave of adopts; later waves succeed after retry.
+        fail_adopts: 1,
+        ..Fake::default()
+    };
+    let update = ws.add_production(doc(), setup());
+    fake.pump(&mut ws, update);
+    let after_fail = ws
+        .production_status()
+        .into_iter()
+        .find(|s| s.id == "x")
+        .unwrap();
+    assert!(
+        after_fail
+            .attention
+            .iter()
+            .any(|a| a.starts_with("入轨未成功")),
+        "adopt failure must be readable on the session: {:?}",
+        after_fail.attention
+    );
+    assert!(
+        after_fail
+            .stages
+            .iter()
+            .any(|s| s.kind == crate::productions::StageKind::Timeline
+                && s.state == StatusState::Failed),
+        "timeline must not stay Running after adopt fail: {:?}",
+        after_fail.stages
+    );
+    // First adopt failed → nothing file-based on the timeline yet (or only
+    // text if any). Retry clears unadoptable and re-queues registration.
+    let update = ws.retry_production("x", None);
+    fake.pump(&mut ws, update);
+    let placed = clips(ws.editor().unwrap().project());
+    assert!(
+        placed.iter().any(|(k, _)| k == "plate"),
+        "retry after adopt failure must place: {placed:?}"
+    );
+}
+
+/// Offline main path: canvas workflow emit → adopt → Place on timeline.
+#[test]
+fn workflow_emit_places_on_timeline_offline() {
+    let mut ws = workspace();
+    let run = ws
+        .bind_canvas_workflow("test.workflow", "1.0.0", "hello", WORK.into(), setup().canvas)
+        .unwrap();
+    let items = serde_json::from_value(json!([
+        {"key":"visual/s1", "rev":"v1", "role":"visual", "lane":0, "start":0, "duration":2,
+         "source":{"type":"file", "file":"out/s1.png"}}
+    ]))
+    .unwrap();
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunItems { run, items }));
+    let mut fake = Fake::default();
+    fake.pump(&mut ws, update);
+    let placed = clips(ws.editor().unwrap().project());
+    assert!(
+        placed.iter().any(|(k, _)| k == "visual/s1"),
+        "emit must place on timeline: {placed:?}"
+    );
+    let status = &ws.production_status()[0];
+    assert!(
+        status.attention.iter().all(|a| !a.starts_with("入轨未成功")),
+        "clean place must not leave placement attention: {:?}",
+        status.attention
+    );
+}
+
+/// B7: ApplyGenerated rejection is observable via attention; retry clears it.
+#[test]
+fn placement_reject_surfaces_attention_and_clears_on_retry() {
+    use crate::control::{ControlCommand, ControlRequest, ControlResult, ControlStatus};
+    use todo_core::EditCommand;
+
+    let mut ws = workspace();
+    let mut fake = Fake::default();
+    let run = ws
+        .bind_canvas_workflow("test.workflow", "1.0.0", "", WORK.into(), setup().canvas)
+        .unwrap();
+    let pid = ws.production_ids().pop().unwrap();
+    let items = serde_json::from_value(json!([
+        {"key":"visual/s1", "rev":"v1", "role":"visual", "lane":0, "start":0, "duration":2,
+         "source":{"type":"file", "file":"out/s1.png"}}
+    ]))
+    .unwrap();
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunItems { run, items }));
+    fake.pump(&mut ws, update);
+    assert!(
+        clips(ws.editor().unwrap().project())
+            .iter()
+            .any(|(k, _)| k == "visual/s1")
+    );
+    // Lock every track so same-key Update fails ApplyGenerated.
+    let track_ids: Vec<String> = ws
+        .editor()
+        .unwrap()
+        .project()
+        .tracks
+        .iter()
+        .map(|t| t.id.clone())
+        .collect();
+    for track_id in &track_ids {
+        let update = ws.dispatch(AppAction::Editor(EditorCommand::Edit(
+            EditCommand::ToggleLock {
+                track_id: track_id.clone(),
+            },
+        )));
+        fake.pump(&mut ws, update);
+    }
+    // Same canvas run id from bind (do not poke private Workspace.productions).
+    let items = serde_json::from_value(json!([
+        {"key":"visual/s1", "rev":"v2", "role":"visual", "lane":0, "start":0, "duration":2,
+         "source":{"type":"file", "file":"out/s1b.png"}}
+    ]))
+    .unwrap();
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunItems { run, items }));
+    fake.pump(&mut ws, update);
+    let status = ws
+        .production_status()
+        .into_iter()
+        .find(|s| s.id == pid)
+        .unwrap();
+    assert!(
+        status
+            .attention
+            .iter()
+            .any(|a| a.starts_with("入轨未成功")),
+        "rejected placement must surface attention: {:?}",
+        status.attention
+    );
+    let session_id = ws.control_context().unwrap().session_id;
+    let outcome = ws.control(ControlRequest {
+        request_id: "b7".into(),
+        session_id,
+        expected_revision: None,
+        command: ControlCommand::GetProductionContext {
+            production_id: Some(pid.clone()),
+        },
+    });
+    let blocked = match outcome.response.outcome {
+        ControlStatus::Ok {
+            result: ControlResult::ProductionContext { context },
+        } => context.productions.iter().any(|p| {
+            p.placement.placement_blocked
+                || p.attention.iter().any(|a| a.starts_with("入轨未成功"))
+        }),
+        other => panic!("unexpected {other:?}"),
+    };
+    assert!(blocked, "AI get_production_context must see placement pause");
+    for track_id in track_ids {
+        let update = ws.dispatch(AppAction::Editor(EditorCommand::Edit(
+            EditCommand::ToggleLock { track_id },
+        )));
+        fake.pump(&mut ws, update);
+    }
+    let update = ws.retry_production(&pid, None);
+    fake.pump(&mut ws, update);
+    let after = ws
+        .production_status()
+        .into_iter()
+        .find(|s| s.id == pid)
+        .unwrap();
+    assert!(
+        after
+            .attention
+            .iter()
+            .all(|a| !a.starts_with("入轨未成功")),
+        "retry must clear placement attention: {:?}",
+        after.attention
+    );
 }

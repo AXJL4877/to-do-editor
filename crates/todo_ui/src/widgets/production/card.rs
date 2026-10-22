@@ -21,12 +21,7 @@ pub(super) fn draw_all(
     if view.productions.is_empty() {
         ui.add_space(24.0);
         ui.vertical_centered(|ui| {
-            ui.label(RichText::new("还没有成片任务").color(MUTED));
-            ui.label(
-                RichText::new("在「新建成片」里选风格、贴文案，点开始生成。")
-                    .size(12.0)
-                    .color(DIM),
-            );
+            ui.label(RichText::new("还没有成片任务").size(13.0).color(MUTED));
         });
         return action;
     }
@@ -115,21 +110,14 @@ fn problem_row(
         .inner_margin(egui::Margin::symmetric(8, 6))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            let title = ui.label(
+            ui.label(
                 RichText::new(format!("{}没有完成", problem.title))
                     .size(12.5)
                     .color(TEXT),
             );
-            if let Some(detail) = &problem.detail {
-                title.on_hover_text(format!("服务返回：{detail}"));
-            }
-            ui.label(RichText::new(&problem.reason).size(11.5).color(MUTED));
+            ui.label(RichText::new(&problem.reason).size(12.0).color(MUTED));
             if confirming {
-                ui.label(
-                    RichText::new("这次请求可能已经扣费，再试一次会重新计费。确定重试？")
-                        .size(11.5)
-                        .color(WARN),
-                );
+                ui.label(RichText::new("确定重试？").size(12.0).color(WARN));
                 ui.horizontal(|ui| {
                     if button(ui, "确定重试", Btn::Danger, true).clicked() {
                         *action = ProductionAction::Retry {
@@ -216,7 +204,6 @@ fn draw_card(
                         };
                         if ui
                             .button(RichText::new(remove).color(DANGER))
-                            .on_hover_text("已经放进时间轴的片段会保留")
                             .clicked()
                         {
                             action = ProductionAction::Remove {
@@ -230,7 +217,6 @@ fn draw_card(
                             egui::Button::new(RichText::new("流程").size(12.0).color(MUTED))
                                 .frame(false),
                         )
-                        .on_hover_text("打开流程树")
                         .clicked()
                     {
                         flow::open(ui.ctx(), production.id.clone());

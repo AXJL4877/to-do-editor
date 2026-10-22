@@ -5,9 +5,9 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use todo_production::extension::graph::{Graph, GraphEdge, GraphNode, GRAPH_SPEC};
-use todo_production::extension::manifest::Problem;
-use todo_production::extension::nodes::{self, DataKind, NodeSpec};
+use crate::workflow::graph::{Graph, GraphEdge, GraphNode, GRAPH_SPEC};
+use crate::workflow::manifest::Problem;
+use crate::workflow::nodes::{self, DataKind, NodeSpec};
 
 use crate::registry::Extension;
 
@@ -141,8 +141,8 @@ impl Extension {
             .iter_mut()
             .find(|n| n.id == node_id)
             .ok_or_else(|| format!("没有节点 {node_id}"))?;
-        if node.node_type != "media_bin" {
-            return Err("只能向素材容器添加文件".into());
+        if !matches!(node.node_type.as_str(), "media_bin" | "relay") {
+            return Err("只能向素材容器或中转节点添加文件".into());
         }
         let inbox = self.dir.join("assets/inbox");
         std::fs::create_dir_all(&inbox).map_err(|e| e.to_string())?;
@@ -385,13 +385,17 @@ pub fn copy_package(src: &Path, dst: &Path) -> Result<(), String> {
 }
 
 fn media_kind(path: &Path) -> Option<&'static str> {
-    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-    match ext.as_str() {
-        "txt" | "md" => Some("text"),
+    // Always accept; unknown extensions become `other` (auto-detect).
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return Some("other");
+    };
+    match ext.to_ascii_lowercase().as_str() {
+        "txt" | "md" | "csv" | "srt" | "ass" => Some("text"),
+        "json" => Some("json"),
         "mp3" | "wav" | "m4a" | "ogg" | "flac" | "aac" => Some("audio"),
         "mp4" | "mov" | "webm" | "mkv" | "avi" => Some("video"),
-        "png" | "jpg" | "jpeg" | "webp" | "bmp" => Some("image"),
-        _ => None,
+        "png" | "jpg" | "jpeg" | "webp" | "bmp" | "gif" => Some("image"),
+        _ => Some("other"),
     }
 }
 
@@ -520,7 +524,7 @@ fn layered_ranks(graph: &Graph) -> std::collections::BTreeMap<String, (usize, us
     out
 }
 
-fn ports(list: &[todo_production::extension::nodes::Port]) -> Vec<WorkflowPortCard> {
+fn ports(list: &[crate::workflow::nodes::Port]) -> Vec<WorkflowPortCard> {
     list.iter()
         .map(|p| WorkflowPortCard {
             name: p.name.to_owned(),

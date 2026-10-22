@@ -253,13 +253,21 @@ impl AiConfig {
             )));
         }
         let (language_base_url, language_model) = match file.language.as_ref() {
-            Some(language) => (
-                match language.base_url.as_deref() {
+            Some(language) => {
+                let base = match language.base_url.as_deref() {
                     Some(raw) => Some(normalize_base_url(raw)?),
                     None => None,
-                },
-                language.model.clone(),
-            ),
+                };
+                // When a separate chat origin is set, its model must be named
+                // for that origin — never fall through to huniu.languageModel.
+                let model = language
+                    .model
+                    .as_ref()
+                    .map(|m| m.trim().to_owned())
+                    .filter(|m| !m.is_empty())
+                    .or_else(|| base.as_ref().map(|_| "deepseek-flash".to_owned()));
+                (base, model)
+            }
             None => (None, None),
         };
         Ok(Self {
@@ -323,6 +331,21 @@ mod tests {
         assert_eq!(config.volc.speaker, "S_abc");
         assert_eq!(config.limits.image_inflight, 64);
         assert_eq!(config.proxy, ProxyMode::Auto);
+    }
+
+    #[test]
+    fn language_endpoint_model_does_not_inherit_huniu() {
+        let file: ConfigFile = serde_json::from_str(
+            r#"{
+                "huniu": {"languageModel": "claude-fable-5"},
+                "language": {"baseUrl": "https://api.deepseek.com"}
+            }"#,
+        )
+        .unwrap();
+        let config = AiConfig::resolve(file).unwrap();
+        assert_eq!(config.huniu.language_model, "claude-fable-5");
+        assert_eq!(config.language_base_url.as_deref(), Some("https://api.deepseek.com"));
+        assert_eq!(config.language_model.as_deref(), Some("deepseek-flash"));
     }
 
     #[test]

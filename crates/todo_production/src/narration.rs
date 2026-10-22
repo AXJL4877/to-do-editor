@@ -6,8 +6,7 @@
 //! Keys use document ids, so editing one segment never renames another
 //! segment's clips: `<segment>/voice`, `<segment>/sub/<n>`, `plate`,
 //! `<board>/<element>` (and extra baked layers below it).
-use crate::extension::items::{Intro, Item, ItemFade, ItemRole, ItemSource, ItemTransform};
-use crate::extension::protocol::Canvas;
+use crate::items::{Canvas, Intro, Item, ItemFade, ItemRole, ItemSource, ItemTransform};
 use crate::pacing::{schedule, TimedBoard};
 use crate::production::{Production, Segment};
 use crate::storyboard::{BoardPlan, PlannedBoard, PlannedElement};

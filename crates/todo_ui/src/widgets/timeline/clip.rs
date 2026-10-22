@@ -161,31 +161,25 @@ pub(super) fn draw(
         }
     }
     response.clone().on_hover_text(format!(
-        "{}\n{} | {:.2}s @ {:.2}s\n拖动两端裁切 · Alt+拖动两端变速\nCtrl/Shift+点击可加选{}",
+        "{} · {:.1}s{}",
         clip.name,
-        if clip.audio { "音频" } else { "视频" },
         clip.duration,
-        clip.start,
-        if track.locked {
-            "\n轨道已锁定"
-        } else {
-            ""
-        }
+        if track.locked { " · 已锁定" } else { "" }
     ));
     response.context_menu(|ui| {
-        if ui.button("复制所选片段 (Ctrl+C)").clicked() {
+        if ui.button("复制").clicked() {
             intents.push(Intent::Copy);
             ui.close_menu();
         }
         if ui
-            .add_enabled(vm.can_delete, egui::Button::new("删除所选片段 (Delete)"))
+            .add_enabled(vm.can_delete, egui::Button::new("删除"))
             .clicked()
         {
             intents.push(Intent::DeleteSelection { ripple: false });
             ui.close_menu();
         }
         if ui
-            .add_enabled(vm.can_delete, egui::Button::new("波纹删除 (Shift+Delete)"))
+            .add_enabled(vm.can_delete, egui::Button::new("波纹删除"))
             .clicked()
         {
             intents.push(Intent::DeleteSelection { ripple: true });
@@ -258,11 +252,19 @@ fn paint_waveform(ui: &mut Ui, rect: Rect, clip: &ClipView, strip: &PeakStrip) {
     let painter = ui.painter().with_clip_rect(rect);
     let cols = wave_width.ceil().max(1.0) as i32;
     let n = strip.peaks.len() as f64;
+    // Neural TTS often peaks well below full scale; normalize to the strip
+    // so the clip still reads as a waveform (playback gain is unchanged).
+    let peak_max = strip
+        .peaks
+        .iter()
+        .copied()
+        .fold(0.0_f64, f64::max)
+        .max(1e-3);
     for col in 0..cols {
         let local_x = wave_left + (col as f64 + 0.5) * wave_width / cols as f64;
         let media_t = clip.offset + (local_x / clip.width) * clip.duration * clip.rate;
         let idx = ((media_t / strip.duration) * n).floor().clamp(0.0, n - 1.0) as usize;
-        let amp = strip.peaks[idx].clamp(0.0, 1.0) as f32;
+        let amp = (strip.peaks[idx] / peak_max).clamp(0.0, 1.0) as f32;
         let h = amp * half;
         if h < 0.5 {
             continue;

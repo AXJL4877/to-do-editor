@@ -162,7 +162,7 @@ pub fn draw(ui: &mut Ui, vm: &EditorViewModel) -> (Vec<Intent>, Option<MonitorHo
         }
         if rect.width() > 320.0 {
             ui.label(format!("{:.0}%", zoom * 100.0))
-                .on_hover_text("滚轮缩放 · 中键平移；100% 为适应窗口");
+                .on_hover_text("滚轮缩放 · 中键平移");
         }
         if ui
             .add_enabled(zoom < PREVIEW_ZOOM_MAX, egui::Button::new("+").small())

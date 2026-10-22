@@ -41,7 +41,7 @@ pub fn draw_window(ctx: &egui::Context, productions: &[ProductionView]) {
                 .fill(PANEL)
                 .stroke(Stroke::new(1.0_f32, BORDER))
                 .inner_margin(14.0)
-                .corner_radius(CornerRadius::same(10)),
+                .corner_radius(CornerRadius::ZERO),
         )
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -53,13 +53,6 @@ pub fn draw_window(ctx: &egui::Context, productions: &[ProductionView]) {
                         .color(status_color(production.status)),
                 );
             });
-            ui.label(
-                RichText::new(
-                    "工作流节点树（来自 graph.json）；颜色：排队 / 进行 / 完成 / 失败。",
-                )
-                .size(11.0)
-                .color(DIM),
-            );
             ui.add_space(8.0);
             ui.painter().line_segment(
                 [
@@ -119,7 +112,7 @@ fn map(ui: &mut Ui, node: &FlowNodeView, depth: usize, is_last: bool) {
     };
     painter.rect(
         card,
-        CornerRadius::same(6),
+        CornerRadius::ZERO,
         fill,
         Stroke::new(1.0_f32, color.gamma_multiply(0.55)),
         egui::StrokeKind::Inside,

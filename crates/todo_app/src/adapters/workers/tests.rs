@@ -8,6 +8,27 @@ use std::{
 };
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+#[test]
+fn generated_adoption_does_not_wait_in_preview_queue() {
+    let (projects, _project_rx) = mpsc::channel();
+    let (imports, import_rx) = mpsc::channel();
+    let (assets, asset_rx) = mpsc::channel();
+    let (text, _text_rx) = mpsc::channel();
+    let (_events_tx, events) = mpsc::channel();
+    let (export, _export_rx) = mpsc::channel();
+    let workers = Workers {
+        projects, imports, assets, text, events, export,
+        export_cancel: Arc::new(AtomicBool::new(false)),
+    };
+    let ticket = Ticket { id: 1, session: 1 };
+    workers.media(ticket, MediaTask::Adopt {
+        project: "p".into(), files: vec!["generated.png".into()],
+    }).unwrap();
+    assert!(asset_rx.try_recv().is_err(), "adoption queued behind previews");
+    assert!(matches!(import_rx.try_recv().unwrap().1, MediaTask::Adopt { .. }));
+}
+
 struct TestDirectory {
     path: PathBuf,
     boundary: PathBuf,

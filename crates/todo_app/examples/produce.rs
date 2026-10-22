@@ -16,7 +16,7 @@ use todo_application::{
     AppEvent, AppUpdate, Effect, MediaOutput, MediaTask, ProjectOutput, ProjectTask, Workspace,
 };
 use todo_interaction::ParamValue;
-use todo_production::extension::protocol::Canvas;
+use todo_workflow::workflow::protocol::Canvas;
 use todo_storage::ProjectStore;
 
 struct Headless {

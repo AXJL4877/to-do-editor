@@ -127,6 +127,9 @@ impl EditorSession {
             EditorCommand::RegisterMedia(media) => {
                 return self.import_media(media, false);
             }
+            EditorCommand::AdoptMedia(media) => {
+                return self.adopt_media(media);
+            }
             EditorCommand::ImportFinished => {
                 self.importing = false;
                 Vec::new()

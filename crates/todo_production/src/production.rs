@@ -184,6 +184,10 @@ pub struct Placement {
     /// (`x y scale scaleX scaleY opacity`); a different one is the user's.
     #[serde(default)]
     pub transforms: BTreeMap<String, [f64; 6]>,
+    /// Last adopt / ApplyGenerated failure; survives restart so Bridge does
+    /// not report a fake `completed` after the in-memory unadoptable set is gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -192,7 +196,7 @@ pub struct WorkflowRecord {
     /// Extension, input and parameters the run was made from.
     pub fingerprint: String,
     #[serde(default)]
-    pub items: Vec<crate::extension::items::Item>,
+    pub items: Vec<crate::items::Item>,
     /// The worker's `done.result`, once finished.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<serde_json::Value>,

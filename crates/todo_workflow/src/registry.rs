@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use todo_production::extension::manifest::{Manifest, Problem};
+use crate::workflow::manifest::{Manifest, Problem};
 
 pub const MANIFEST_FILE: &str = "extension.json";
 
@@ -25,7 +25,7 @@ pub struct Extension {
 impl Extension {
     /// Package text file by relative path (prompts, templates).
     pub fn read(&self, relative: &str) -> Option<String> {
-        if !todo_production::extension::manifest::valid_relative_path(relative) {
+        if !crate::workflow::manifest::valid_relative_path(relative) {
             return None;
         }
         std::fs::read_to_string(self.dir.join(relative)).ok()

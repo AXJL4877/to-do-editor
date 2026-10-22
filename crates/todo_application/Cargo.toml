@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 todo_core = { workspace = true }
 todo_production = { workspace = true }
+todo_workflow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

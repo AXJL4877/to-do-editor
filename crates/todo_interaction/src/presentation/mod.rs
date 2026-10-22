@@ -7,7 +7,7 @@ pub mod assets;
 mod library;
 mod messages;
 pub mod production;
-pub(crate) use library::LibraryState;
+pub(crate) use library::{range_select, visible_media_ids, LibraryState};
 pub use messages::status_text;
 use todo_core::{ClipTransform, MediaKind};
 
@@ -224,7 +224,10 @@ pub struct LibraryViewModel {
     pub entries: Vec<LibraryEntryView>,
     /// Media rows only (current folder or search). Kept for drag/list helpers.
     pub items: Vec<LibraryItemView>,
+    /// Focused / last-selected media id (for single-item actions).
     pub selected_id: Option<String>,
+    /// All selected media ids (Windows-style multi-select).
+    pub selected_ids: Vec<String>,
     pub selected_folder_id: Option<String>,
     pub query: String,
     pub searching: bool,

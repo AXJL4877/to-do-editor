@@ -580,7 +580,7 @@ pub fn intro_at(intro: &Intro, t: f64) -> IntroSample { opacity: f64, dx: f64, d
   - `Stamp`：前 70% 时 scale × (1.3 − 0.3 × easeInCubic(u/0.7))；后 30% 时 scale × (1 − 0.03 × sin(π × (u−0.7)/0.3))；opacity × min(1, 4u)
   - `Grow`：scale × max(0.01, e)
 - 音频场景：`ResolvedAudioClip` 带 gain 和 fade，下发给原生混音器（M4）。
-- `todo_production::extension::items::IntroKind` 改为直接复用 core 的 `IntroKind`，不再各定义一份。规范文档 §8 列出全部取值。
+- `todo_production::items::IntroKind` 改为直接复用 core 的 `IntroKind`，不再各定义一份。规范文档 §8 列出全部取值。
 - 条目新增音频字段 `fade: { in, out }`（秒，仅音频角色），在 `validate_items` 里校验。
 
 规范 v1 尚未发布，以上属于「增量补充」，`extension-spec.md` 同步写清楚。
@@ -1096,7 +1096,7 @@ key 约定：
 
 - 编排：`todo_production::work::{plan_work, refresh, apply_outline, apply_voice, apply_storyboard, apply_image}`；`pacing::schedule`；`extension::narration_spec`。
 - AI：`todo_ai::{AiConfig, Secrets, AiService, default_paths}`；示例 `ai_check`（免费）。
-- 扩展：`todo_workflow::{Registry, load, install, uninstall, pack}`；`todo_production::extension::{manifest::Manifest, protocol::{HostMessage, WorkerMessage, ServiceCall}, items::{Item, validate_items}}`。
+- 扩展：`todo_workflow::{Registry, load, install, uninstall, pack}`；`todo_workflow::workflow::{manifest::Manifest, protocol::{HostMessage, WorkerMessage, ServiceCall}, items::{Item, validate_items}}`。
 - 子进程：`todo_process::{supervise, capture, Duplex, Output, hide_window}`。
 
 ### 7.2 常用命令

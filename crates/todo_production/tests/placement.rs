@@ -1,5 +1,5 @@
 use todo_core::*;
-use todo_production::extension::items::{Item, ItemFade, ItemRole, ItemSource, ItemTransform};
+use todo_production::items::{Item, ItemFade, ItemRole, ItemSource, ItemTransform};
 use todo_production::placement::{plan, record, PlacementInput, PlacementPlan};
 use todo_production::production::Placement;
 

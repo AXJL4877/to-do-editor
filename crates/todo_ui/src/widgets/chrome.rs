@@ -16,7 +16,7 @@ pub fn draw_strip(ui: &mut Ui) {
         egui::Stroke::new(1.0_f32, BORDER),
     );
 
-    wire_drag(ui, rect, "todo_chrome_drag");
+    wire_drag(ui, rect, Id::new("todo_chrome_drag"));
 
     let mut bar = ui.new_child(UiBuilder::new().id_salt("todo_chrome_bar").max_rect(rect));
     bar.set_clip_rect(rect.intersect(ui.clip_rect()));
@@ -33,7 +33,9 @@ pub fn draw_strip(ui: &mut Ui) {
 
 /// Wire drag onto an existing toolbar rect (draw window buttons after this so they win hits).
 pub fn wire_toolbar(ui: &mut Ui, toolbar_rect: egui::Rect) {
-    wire_drag(ui, toolbar_rect, "todo_toolbar_drag");
+    // Salt with the current Ui id so Background toolbar and Foreground
+    // overlays (workflow fullscreen) never share a widget id in one frame.
+    wire_drag(ui, toolbar_rect, ui.id().with("todo_toolbar_drag"));
 }
 
 pub fn window_buttons(ui: &mut Ui) {
@@ -60,8 +62,8 @@ pub fn window_buttons(ui: &mut Ui) {
     }
 }
 
-fn wire_drag(ui: &mut Ui, rect: egui::Rect, id: &str) {
-    let drag = ui.interact(rect, Id::new(id), Sense::click_and_drag());
+fn wire_drag(ui: &mut Ui, rect: egui::Rect, id: Id) {
+    let drag = ui.interact(rect, id, Sense::click_and_drag());
     if drag.drag_started_by(PointerButton::Primary) {
         ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
     }

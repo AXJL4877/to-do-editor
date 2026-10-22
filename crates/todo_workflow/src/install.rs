@@ -6,7 +6,7 @@ use crate::registry::{load, Extension, Origin, MANIFEST_FILE};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use todo_production::extension::manifest::{valid_relative_path, Manifest, Problem};
+use crate::workflow::manifest::{valid_relative_path, Manifest, Problem};
 
 pub const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
@@ -81,8 +81,8 @@ fn read_archive(bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, InstallError>
     Ok(files)
 }
 
-/// Install a `.todoext` into `user_dir/<id>`, replacing an older version.
-pub fn install(archive: &[u8], user_dir: &Path) -> Result<Extension, InstallError> {
+/// Validate a `.todoext` in memory without writing (Agent dry-run).
+pub fn validate_package(archive: &[u8]) -> Result<Manifest, InstallError> {
     let files = read_archive(archive)?;
     let manifest_bytes = files
         .get(MANIFEST_FILE)
@@ -110,6 +110,13 @@ pub fn install(archive: &[u8], user_dir: &Path) -> Result<Extension, InstallErro
     if !problems.is_empty() {
         return Err(InstallError::Invalid(problems));
     }
+    Ok(manifest)
+}
+
+/// Install a `.todoext` into `user_dir/<id>`, replacing an older version.
+pub fn install(archive: &[u8], user_dir: &Path) -> Result<Extension, InstallError> {
+    let files = read_archive(archive)?;
+    let manifest = validate_package(archive)?;
     std::fs::create_dir_all(user_dir).map_err(|e| io(user_dir, e))?;
     let staging = user_dir.join(format!(".install-{}", uuid::Uuid::new_v4()));
     let write = || -> Result<(), InstallError> {
@@ -143,7 +150,7 @@ pub fn install(archive: &[u8], user_dir: &Path) -> Result<Extension, InstallErro
 
 /// Remove a user extension (built-in ones cannot be removed).
 pub fn uninstall(user_dir: &Path, id: &str) -> Result<bool, InstallError> {
-    if !todo_production::extension::manifest::valid_id(id) {
+    if !crate::workflow::manifest::valid_id(id) {
         return Ok(false);
     }
     let target = user_dir.join(id);

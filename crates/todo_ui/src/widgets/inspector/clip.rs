@@ -29,7 +29,7 @@ pub(super) fn draw(ui: &mut Ui, properties: &ClipProperties) -> Vec<Intent> {
                                 .range(0.0..=86_400.0)
                                 .suffix(" 秒"),
                         )
-                        .on_hover_text("拖动或点击输入片段时长；源素材和相邻片段决定可用范围");
+                        .on_hover_text("片段时长");
                     let change = response.changed().then(|| Intent::SetClipDuration {
                         clip_id: properties.clip_id.clone(),
                         seconds: duration,

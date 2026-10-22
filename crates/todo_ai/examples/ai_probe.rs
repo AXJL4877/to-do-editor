@@ -32,9 +32,18 @@ fn main() {
             .map(|(key, _)| todo_ai::LanguageEndpoint {
                 base_url: base.clone(),
                 key,
+                model: config
+                    .language_model
+                    .clone()
+                    .filter(|m| !m.trim().is_empty())
+                    .unwrap_or_else(|| "deepseek-flash".into()),
             }),
         None => None,
     };
+    let chat_model = language
+        .as_ref()
+        .map(|endpoint| endpoint.model.clone())
+        .unwrap_or_else(|| config.huniu.language_model.clone());
     let settings = ServiceSettings {
         language,
         huniu_base_url: config.huniu.base_url.clone(),
@@ -48,7 +57,7 @@ fn main() {
             (Capability::Multimodal, Provider::Huniu),
             (Capability::Audio, Provider::Volc),
         ]),
-        models: HashMap::new(),
+        models: HashMap::from([(Capability::Language, chat_model.clone())]),
         journal_dir: probe.join("tasks"),
         artifacts_root: probe.join("blobs"),
         proxy: config.proxy,
@@ -72,7 +81,7 @@ fn main() {
         },
         "chat" | "chat-json" => TaskSpec {
                         request: TaskRequest::Language(LanguageRequest {
-                model: config.huniu.language_model.clone(),
+                model: chat_model,
                 messages: vec![ChatMessage {
                     role: ChatRole::User,
                     content: "只回复一个 JSON 对象：{\"ok\": true, \"word\": \"<任意一个中文词>\"}".into(),
@@ -98,7 +107,7 @@ fn main() {
             assert!(!media.is_empty(), "vision needs at least one picture path");
             TaskSpec {
                 request: TaskRequest::Multimodal(MultimodalRequest {
-                    model: if config.language_base_url.is_some() { "deepseek-flash".to_string() } else { config.huniu.multimodal_model.clone() },
+                    model: config.huniu.multimodal_model.clone(),
                     prompt: r#"你在审一支短视频的节目帧。用 JSON 回答：{"frames":[{"index":0,"layout":"一句话描述版式","subtitle":"画面底部字幕原文或空","problems":[]}]}"#.into(),
                     digests: todo_ai::providers::vision::media_digests(&media),
                     media,

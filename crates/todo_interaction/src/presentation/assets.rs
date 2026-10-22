@@ -40,7 +40,7 @@ impl MotionOrigin {
         match self {
             Self::Builtin => "内置".into(),
             Self::User => "我的".into(),
-            Self::Extension(id) => format!("扩展 · {}", id.rsplit('.').next().unwrap_or(id)),
+            Self::Extension(_) => "扩展".into(),
         }
     }
 }

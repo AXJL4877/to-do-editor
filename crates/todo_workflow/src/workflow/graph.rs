@@ -338,7 +338,7 @@ mod tests {
                 GraphEdge {
                     from: "tts".into(),
                     to: "done".into(),
-                    out: Some("audio".into()),
+                    out: Some("clips".into()),
                     input: Some("result".into()),
                 },
             ],

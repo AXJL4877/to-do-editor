@@ -126,7 +126,10 @@ mod tests {
 
     #[test]
     fn body_carries_scaled_jpeg_pictures() {
-        let dir = std::env::temp_dir().join(format!("todo-vision-{}", std::process::id()));
+        // 沙箱里 %TEMP% 不可写，放到仓库 target/ 下
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/ai-vision-tests")
+            .join(format!("case-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("frame.png");
         image::RgbImage::from_pixel(2560, 1440, image::Rgb([10, 200, 30]))

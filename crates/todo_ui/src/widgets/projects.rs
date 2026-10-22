@@ -1,7 +1,10 @@
-use egui::{Align, Color32, Layout, RichText, Sense, Ui, Vec2};
+use egui::{Align, Layout, RichText, Sense, Ui, Vec2};
 
 use super::chrome;
-use crate::theme::{button, Btn, BORDER, BRAND, DANGER, FIELD, MUTED, PANEL, PANEL_2, TEXT};
+use crate::theme::{
+    button, heading, modal_frame, Btn, BORDER, BRAND, DANGER, FIELD, MUTED, PANEL, PANEL_2,
+    RADIUS_LG, TEXT,
+};
 use todo_interaction::{CloseChoice, Intent};
 
 pub fn draw_projects(
@@ -20,12 +23,6 @@ pub fn draw_projects(
         ui.label(RichText::new("TO DO").size(13.0).color(BRAND).strong());
         ui.add_space(6.0);
         ui.label(RichText::new("工程").size(28.0).color(TEXT).strong());
-        ui.add_space(6.0);
-        ui.label(
-            RichText::new("新建、打开或导入工程。数据保存在仓库 data/ 下。")
-                .size(13.0)
-                .color(MUTED),
-        );
 
         ui.add_space(28.0);
 
@@ -33,19 +30,21 @@ pub fn draw_projects(
             .fill(PANEL)
             .stroke(egui::Stroke::new(1.0_f32, BORDER))
             .inner_margin(egui::Margin::same(20))
-            .corner_radius(egui::CornerRadius::ZERO)
+            .corner_radius(egui::CornerRadius::same(RADIUS_LG))
             .show(ui, |ui| {
                 ui.set_width(max_w);
                 ui.with_layout(Layout::top_down(Align::LEFT), |ui| {
                     ui.label(RichText::new("工程名").size(12.0).color(MUTED));
                     ui.add_space(6.0);
-                    let edit = egui::TextEdit::singleline(draft)
-                        .desired_width(max_w - 40.0)
-                        .margin(egui::Margin::symmetric(10, 8))
-                        .text_color(TEXT)
-                        .background_color(FIELD)
-                        .frame(true);
-                    ui.add(edit);
+                    crate::theme::with_input_radius(ui, |ui| {
+                        let edit = egui::TextEdit::singleline(draft)
+                            .desired_width(max_w - 40.0)
+                            .margin(egui::Margin::symmetric(10, 8))
+                            .text_color(TEXT)
+                            .background_color(FIELD)
+                            .frame(true);
+                        ui.add(edit);
+                    });
 
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
@@ -58,7 +57,7 @@ pub fn draw_projects(
                         if button(ui, "刷新", Btn::Normal, true).clicked() {
                             actions.push(Intent::RefreshProjects);
                         }
-                        if button(ui, "打开 JSON", Btn::Ghost, true).clicked() {
+                        if button(ui, "导入", Btn::Ghost, true).clicked() {
                             actions.push(Intent::ChooseProjectFile);
                         }
                     });
@@ -74,7 +73,7 @@ pub fn draw_projects(
 
         ui.with_layout(Layout::top_down(Align::LEFT), |ui| {
             ui.set_width(max_w);
-            ui.label(RichText::new("data 中的工程").size(12.0).color(MUTED));
+            ui.label(RichText::new("工程列表").size(12.0).color(MUTED));
             ui.add_space(10.0);
 
             if names.is_empty() {
@@ -82,16 +81,11 @@ pub fn draw_projects(
                     .fill(PANEL_2)
                     .stroke(egui::Stroke::new(1.0_f32, BORDER))
                     .inner_margin(egui::Margin::symmetric(16, 20))
-                    .corner_radius(egui::CornerRadius::ZERO)
+                    .corner_radius(egui::CornerRadius::same(RADIUS_LG))
                     .show(ui, |ui| {
                         ui.set_width(max_w - 2.0);
                         ui.vertical_centered(|ui| {
                             ui.label(RichText::new("暂无工程").size(13.0).color(MUTED));
-                            ui.label(
-                                RichText::new("输入名称后点击「新建工程」")
-                                    .size(12.0)
-                                    .color(Color32::from_rgb(0x55, 0x55, 0x55)),
-                            );
                         });
                     });
             } else {
@@ -100,7 +94,7 @@ pub fn draw_projects(
                         .fill(PANEL)
                         .stroke(egui::Stroke::new(1.0_f32, BORDER))
                         .inner_margin(egui::Margin::symmetric(12, 10))
-                        .corner_radius(egui::CornerRadius::ZERO)
+                        .corner_radius(egui::CornerRadius::same(RADIUS_LG))
                         .show(ui, |ui| {
                             ui.set_width(max_w - 2.0);
                             ui.horizontal(|ui| {
@@ -145,41 +139,45 @@ pub fn draw_close_prompt(ctx: &egui::Context, open: bool, saving: bool) -> Vec<I
     }
     let mut intents = Vec::new();
     let response = egui::Modal::new(egui::Id::new("todo_close_prompt"))
-        .frame(
-            egui::Frame::NONE
-                .fill(PANEL)
-                .stroke(egui::Stroke::new(1.0_f32, BORDER))
-                .inner_margin(20)
-                .corner_radius(egui::CornerRadius::ZERO),
-        )
+        .frame(modal_frame())
         .show(ctx, |ui| {
-            ui.set_width(390.0);
-            ui.label(
-                RichText::new("保存工程更改？")
-                    .strong()
-                    .size(18.0)
-                    .color(TEXT),
-            );
-            ui.add_space(8.0);
-            ui.label(RichText::new("当前工程还有未保存的更改。").color(MUTED));
-            if saving {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label("正在保存，请稍候…");
-                });
-            }
-            ui.add_space(16.0);
-            ui.horizontal(|ui| {
-                for (label, choice, kind) in [
-                    ("保存并关闭", CloseChoice::Save, Btn::Primary),
-                    ("放弃更改", CloseChoice::Discard, Btn::Danger),
-                    ("取消", CloseChoice::Cancel, Btn::Ghost),
-                ] {
-                    if button(ui, label, kind, !saving).clicked() {
-                        intents.push(Intent::ConfirmClose(choice));
+            ui.set_width(400.0);
+            egui::Frame::NONE
+                .fill(PANEL_2)
+                .inner_margin(egui::Margin::symmetric(20, 16))
+                .show(ui, |ui| {
+                    ui.label(heading("保存更改？"));
+                    if saving {
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(RichText::new("正在保存…").size(12.0).color(MUTED));
+                        });
                     }
-                }
-            });
+                });
+            ui.painter().hline(
+                ui.max_rect().x_range(),
+                ui.cursor().top(),
+                egui::Stroke::new(1.0_f32, BORDER),
+            );
+            egui::Frame::NONE
+                .fill(FIELD)
+                .inner_margin(egui::Margin::symmetric(20, 12))
+                .show(ui, |ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if button(ui, "取消", Btn::Ghost, !saving).clicked() {
+                            intents.push(Intent::ConfirmClose(CloseChoice::Cancel));
+                        }
+                        ui.add_space(6.0);
+                        if button(ui, "放弃更改", Btn::Danger, !saving).clicked() {
+                            intents.push(Intent::ConfirmClose(CloseChoice::Discard));
+                        }
+                        ui.add_space(6.0);
+                        if button(ui, "保存并关闭", Btn::Primary, !saving).clicked() {
+                            intents.push(Intent::ConfirmClose(CloseChoice::Save));
+                        }
+                    });
+                });
         });
     if !saving && intents.is_empty() && response.should_close() {
         intents.push(Intent::ConfirmClose(CloseChoice::Cancel));

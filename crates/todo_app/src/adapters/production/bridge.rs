@@ -12,9 +12,9 @@ use std::time::Duration;
 use todo_ai::{AiEvent, AiRouter};
 use todo_workflow::{PoolHandle, RunId};
 use todo_media::{AlphaPacking, EncodeQuality, MediaService, MediaTools};
-use todo_production::extension::protocol::{ServiceCall, ServiceError, ServiceErrorClass};
-use todo_production::extension::services::{speech_result, subtitles_result, task_for};
-use todo_production::extension::HostDefaults;
+use todo_workflow::workflow::protocol::{ServiceCall, ServiceError, ServiceErrorClass};
+use todo_workflow::workflow::services::{speech_result, subtitles_result, task_for};
+use todo_workflow::workflow::HostDefaults;
 use todo_production::tasks::fingerprint;
 use todo_production::voice::{read_wav, Pcm, Timeline};
 use todo_production::TaskKey;
@@ -158,7 +158,7 @@ impl ServiceBridge {
                     let mut resolved = Vec::with_capacity(image.references.len());
                     for reference in &image.references {
                         let path = workdir.join(reference);
-                        if !todo_production::extension::manifest::valid_relative_path(reference)
+                        if !todo_workflow::workflow::manifest::valid_relative_path(reference)
                             || !path.is_file()
                         {
                             self.pool.reply(
@@ -210,6 +210,41 @@ impl ServiceBridge {
         self.direct
             .remove(call_id)
             .map(|result| result.map_err(|error| error.message))
+    }
+
+    /// Abort a waiting async call (host give-up / stop). Clears pending so a
+    /// late `Failed`/`Cancelled` from the AI thread cannot double-complete it.
+    pub fn fail_direct(&mut self, call_id: &str, message: String) {
+        if self.direct_calls.remove(call_id) {
+            self.direct.insert(
+                call_id.to_owned(),
+                Err(ServiceError {
+                    class: ServiceErrorClass::Unavailable,
+                    message,
+                }),
+            );
+        }
+        self.pending.retain(|_, calls| {
+            calls.retain(|call| call.call != call_id);
+            !calls.is_empty()
+        });
+    }
+
+    /// Call id waiting on `key`, if any (used to log AI lifecycle events).
+    pub fn call_id_for(&self, key: &todo_production::TaskKey) -> Option<String> {
+        self.pending
+            .get(key)
+            .and_then(|calls| calls.first())
+            .map(|call| call.call.clone())
+    }
+
+    /// Task keys whose calls belong to one run (by call-id prefix).
+    pub fn keys_for_calls(&self, prefix: &str) -> Vec<todo_production::TaskKey> {
+        self.pending
+            .iter()
+            .filter(|(_, calls)| calls.iter().any(|call| call.call.starts_with(prefix)))
+            .map(|(key, _)| key.clone())
+            .collect()
     }
 
     /// Run one service call synchronously (workflow runner). Events for other
@@ -359,7 +394,7 @@ fn local_service(
     workdir: &Path,
     tools: MediaTools,
 ) -> Result<serde_json::Value, ServiceError> {
-    let inside = |path: &str| todo_production::extension::manifest::valid_relative_path(path);
+    let inside = |path: &str| todo_workflow::workflow::manifest::valid_relative_path(path);
     let media = MediaService::with_tools(workdir, tools);
     match service {
         ServiceCall::Probe(call) => {
@@ -394,10 +429,10 @@ fn local_service(
             let relative = format!("services/encode-{}.mp4", &id[..32]);
             let output = workdir.join(&relative);
             let quality = match call.quality {
-                todo_production::extension::protocol::EncodeQuality::Standard => {
+                todo_workflow::workflow::protocol::EncodeQuality::Standard => {
                     EncodeQuality::Standard
                 }
-                todo_production::extension::protocol::EncodeQuality::High => EncodeQuality::High,
+                todo_workflow::workflow::protocol::EncodeQuality::High => EncodeQuality::High,
             };
             let info = media
                 .encode_frames(
@@ -463,7 +498,7 @@ mod tests {
         ArtifactStore, CapabilityBindings, ModelBinding, ProxyMode, Secret, ServiceSettings,
     };
     use todo_workflow::{PoolOptions, RuntimePaths, WorkerEvent, WorkerPool};
-    use todo_production::extension::protocol::{ChatCall, ImageCall};
+    use todo_workflow::workflow::protocol::{ChatCall, ImageCall};
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -596,6 +631,7 @@ mod tests {
         let bridge = ServiceBridge::new(
             HostDefaults {
                 audio_model: "voice-test".into(),
+                speaker: "test-speaker".into(),
                 sample_rate: 24_000,
             },
             &root,

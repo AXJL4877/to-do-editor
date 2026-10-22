@@ -4,10 +4,10 @@ use super::*;
 use std::collections::BTreeMap;
 use std::path::Path;
 use todo_interaction::{production_view_with_document, ParamValue, ProductionPanelView};
-use todo_production::extension::protocol::Canvas;
+use todo_workflow::workflow::protocol::Canvas;
 
 impl App {
-    fn canvas(&self) -> Option<(String, Canvas)> {
+    pub(super) fn canvas(&self) -> Option<(String, Canvas)> {
         let editor = self.workspace.editor()?;
         let project = editor.project();
         let (width, height) = project.output_size();
@@ -44,11 +44,15 @@ impl App {
                 .production_status()
                 .iter()
                 .map(|status| {
+                    let canvas = self.workspace.editor().map(|e| {
+                        let p = e.project();
+                        (p.width, p.height, p.fps)
+                    });
                     let mut view = production_view_with_document(
                         status,
                         host.extension_name(&status.extension).as_deref(),
                         self.workspace.production(&status.id),
-                        host.workflow_panel(&status.extension),
+                        host.workflow_panel(&status.extension, canvas),
                     );
                     // The document stores files relative to its production
                     // workdir. The UI needs an absolute key for the media

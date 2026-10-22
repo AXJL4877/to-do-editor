@@ -21,10 +21,15 @@ use tokio::sync::{Notify, Semaphore};
 use tokio::time::Instant;
 
 /// A dedicated endpoint for the language capability (e.g. DeepSeek direct).
+///
+/// When present, chat **must** use [`Self::model`] on this origin — never the
+/// huniu language model name (those families do not mix).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LanguageEndpoint {
     pub base_url: String,
     pub key: Secret,
+    /// Model id accepted by `base_url` (e.g. `deepseek-flash`).
+    pub model: String,
 }
 
 #[derive(Debug, Clone)]
@@ -303,7 +308,17 @@ async fn run_loop(
                     let mut journal = shared.journal.lock().unwrap();
                     // Another process may have answered it since we started.
                     journal.refresh(&key);
-                    journal.ensure(&spec, unix_millis()).map(|_| ())
+                    let created = journal.ensure(&spec, unix_millis()).map(|_| ());
+                    // 上次失败（未扣费）的记录：这次提交真的重试一次；
+                    // 绝不在 run_task 里原地重投，否则会绕过退避与放弃逻辑。
+                    if created.is_ok()
+                        && journal
+                            .get(&key)
+                            .is_some_and(|record| record.state == crate::journal::TaskState::Failed)
+                    {
+                        let _ = journal.retry(&key, unix_millis());
+                    }
+                    created
                 };
                 if let Err(error) = created {
                     let _ = shared.events.send(AiEvent::Failed {
@@ -586,16 +601,16 @@ async fn run_task(shared: Arc<Shared>, key: TaskKey) {
                 });
                 return;
             }
-            // A plain failure was not billed, so a re-run retries it instead of
-            // replaying the old error (the model or key may have changed since).
-            // An ambiguous one may have been billed: only an explicit retry.
+            // 终态失败只上报一次；重试发生在"新的提交"那一侧（见 Submit 分支）。
+            // 在这里原地重投会绕过退避与放弃逻辑，变成无限快速重发。
             TaskState::Failed => {
-                shared.update(&key, |r| {
-                    r.state = TaskState::Pending;
-                    r.error_class = None;
-                    r.error = None;
+                shared.emit(AiEvent::Failed {
+                    key,
+                    class: record.error_class.unwrap_or_default(),
+                    message: record.error.unwrap_or_default(),
+                    possibly_billed: false,
                 });
-                continue;
+                return;
             }
             TaskState::Ambiguous => {
                 shared.emit(AiEvent::Failed {
@@ -694,6 +709,19 @@ async fn run_task(shared: Arc<Shared>, key: TaskKey) {
         }
 
         let capability = record.spec.capability();
+        // Free (chat/speech) sends can storm when a gateway flaps; hard-stop
+        // before another billed-looking round-trip. Images keep their own hedge.
+        if !capability.is_paid_per_attempt() && record.submits >= 12 {
+            shared.update(&key, |r| {
+                r.state = TaskState::Failed;
+                r.error_class = Some("transient".into());
+                r.error = Some(format!(
+                    "同一请求已发送 {} 次仍未成功，已停止（请检查模型名与端点是否匹配）",
+                    r.submits
+                ));
+            });
+            continue;
+        }
         let _slot = shared.slots[&capability]
             .acquire()
             .await
@@ -860,6 +888,7 @@ async fn attempt(
             begin_send(shared, key);
             match &settings.language {
                 Some(language) => {
+                    // Bound model was forced in bind_model; hit this origin only.
                     huniu::chat(&shared.http, &language.base_url, &language.key, request).await
                 }
                 None => {
@@ -884,26 +913,16 @@ async fn attempt(
             "视频能力已接入路由，但当前没有配置视频适配器",
         )),
         (TaskRequest::Multimodal(request), _, Provider::Huniu) => {
+            // Vision stays on huniu — never the dedicated language endpoint
+            // (DeepSeek chat origin ≠ multimodal catalog).
             begin_send(shared, key);
-            match &settings.language {
-                // deepseek-flash reads images too; one key serves text and vision.
-                Some(language) => {
-                    crate::providers::vision::vision(
-                        &shared.http,
-                        &language.base_url,
-                        &language.key,
-                        request,
-                    )
-                    .await
-                }
-                None => crate::providers::vision::vision(
-                    &shared.http,
-                    &settings.huniu_base_url,
-                    secret,
-                    request,
-                )
-                .await,
-            }
+            crate::providers::vision::vision(
+                &shared.http,
+                &settings.huniu_base_url,
+                secret,
+                request,
+            )
+            .await
         }
         (_, _, _) => Err(AttemptError::new(
             ErrorClass::Invalid,
@@ -985,7 +1004,11 @@ fn bind_model(shared: &Shared, request: &TaskRequest) -> TaskRequest {
     match request {
         TaskRequest::Language(value) => {
             let mut value = value.clone();
-            if value.model.is_empty() {
+            if let Some(language) = &shared.settings.language {
+                // Dedicated chat origin owns the model id. Overwrite any
+                // empty / huniu / node leftover so the wire never mixes families.
+                value.model = language.model.clone();
+            } else if value.model.is_empty() {
                 value.model = model(&value.model);
             }
             TaskRequest::Language(value)
@@ -1006,6 +1029,7 @@ fn bind_model(shared: &Shared, request: &TaskRequest) -> TaskRequest {
         }
         TaskRequest::Multimodal(value) => {
             let mut value = value.clone();
+            // Always the multimodal binding (huniu), never language.endpoint.model.
             if value.model.is_empty() {
                 value.model = model(&value.model);
             }

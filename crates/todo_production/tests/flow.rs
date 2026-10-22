@@ -1,7 +1,7 @@
 //! A whole production without network: fake model answers, synthetic audio.
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
-use todo_production::extension::items::Item;
+use todo_production::items::Item;
 use todo_production::pacing::{schedule, Pacing};
 use todo_production::production::*;
 use todo_production::segment::Limits;
@@ -445,7 +445,7 @@ fn narration_boards_crossfade_and_never_share_a_lane() {
         assert_eq!(a.fade_out, b.fade_in);
         assert!(b.fade_in > 0.0, "no hard cuts, also across segments");
     }
-    let canvas = todo_production::extension::protocol::Canvas {
+    let canvas = todo_workflow::workflow::protocol::Canvas {
         width: 1920,
         height: 1080,
         fps: 30.0,
@@ -480,7 +480,7 @@ fn editing_one_segment_keeps_every_other_key_and_bake() {
     let spec = spec();
     let mut doc = ready_doc(&spec);
     let layout = NarrationLayout::default();
-    let canvas = todo_production::extension::protocol::Canvas {
+    let canvas = todo_workflow::workflow::protocol::Canvas {
         width: 1920,
         height: 1080,
         fps: 30.0,

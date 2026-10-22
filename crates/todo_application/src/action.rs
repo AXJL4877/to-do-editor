@@ -44,6 +44,9 @@ pub enum EditorCommand {
     Imported(MediaItem),
     /// Register a probed item in the library without placing it on the timeline.
     RegisterMedia(MediaItem),
+    /// Production adopt path: register media without a separate undo step so
+    /// the following ApplyGenerated stays one user-visible undo entry.
+    AdoptMedia(MediaItem),
     ImportFinished,
     Saved(Project),
 }

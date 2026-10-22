@@ -230,14 +230,22 @@ pub struct WorkflowNodeView {
     pub y: f32,
     /// Declared + resolved params for the inspector.
     pub fields: Vec<WorkflowParamFieldView>,
-    /// Files attached to a media_bin (from params.files).
+    /// Files attached to a media_bin / relay (from params.files).
     pub files: Vec<WorkflowMediaFileView>,
+    /// Text blocks stored on a relay (from params.blocks or last run segments).
+    pub text_blocks: Vec<WorkflowTextBlockView>,
     /// Raw params JSON object (for copy/paste).
     pub params_json: String,
     /// Image this node produced in the last run (path, for the preview).
     pub image: Option<String>,
     /// First output payload of the last run (pretty JSON, truncated).
     pub output: Option<String>,
+    /// 该输出里的正文字数（"共 5200 字"）。
+    pub output_chars: Option<usize>,
+    /// 该节点最近一次运行的日志（命令窗）。
+    pub logs: Vec<String>,
+    /// image_gen 等节点是否有可复用的磁盘缓存。
+    pub has_cache: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -245,6 +253,16 @@ pub struct WorkflowMediaFileView {
     pub path: String,
     pub kind: String,
     pub name: String,
+    /// Absolute path for inspector thumbnails (image file or video source).
+    pub preview: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkflowTextBlockView {
+    pub id: String,
+    pub index: usize,
+    pub text: String,
+    pub chars: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -260,6 +278,10 @@ pub struct WorkflowEdgeView {
 pub struct WorkflowTypeChoice {
     pub type_name: String,
     pub label: String,
+    /// Menu section title（基础 / 大模型 / …）.
+    pub group: String,
+    /// Stable sort key for menu sections (smaller first).
+    pub group_order: u8,
 }
 
 /// Graph projection for the workflow panel / flow window.
@@ -271,6 +293,8 @@ pub struct WorkflowPanelView {
     pub palette: Vec<WorkflowTypeChoice>,
     /// 正在运行时的进度文字（"3/12 · 等待 tts"）。
     pub running: Option<String>,
+    /// 本次运行的原始终端内容（run.log 尾部，直接显示）。
+    pub log_tail: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -421,6 +445,15 @@ fn branch(
 
 /// Tint workflow nodes from `progress` phase (worker reports node id).
 pub fn paint_workflow_panel(panel: &mut WorkflowPanelView, status: &ProductionStatus) {
+    // Host already stamped per-node status from the runner report. Do not
+    // flatten everything to「完成」when the generate stage is Done — that hid
+    // real 入轨/节点失败 while the header said the workflow had ended.
+    let has_runner_status = panel.nodes.iter().any(|n| {
+        !matches!(n.status, ProductionNodeStatus::Queued)
+    });
+    if has_runner_status {
+        return;
+    }
     let generate = status.stages.iter().find(|s| s.kind == StageKind::Generate);
     let overall = generate.map(|s| s.state).unwrap_or(StatusState::Queued);
     let phase = generate.and_then(|s| s.phase.as_ref());
@@ -608,7 +641,7 @@ fn narration_flow(
                 kids.push(leaf(
                     "narr.place",
                     "对账入轨",
-                    "Adopt → ApplyGenerated",
+                    "登记素材后放入时间轴",
                     stage.state.into(),
                 ));
             }
@@ -753,9 +786,29 @@ fn title_of(status: &ProductionStatus) -> String {
     out
 }
 
-fn headline(stages: &[StageStatus], problems: usize, deleted: usize) -> String {
+fn headline(
+    stages: &[StageStatus],
+    problems: usize,
+    deleted: usize,
+    attention: &[String],
+) -> String {
+    if attention.iter().any(|line| line.starts_with("入轨未成功")) {
+        return "入轨卡住了：点「重试」，或检查轨道是否锁定".into();
+    }
+    let finished = !stages.is_empty() && stages.iter().all(|s| s.state == StatusState::Done);
+    // Deletion count must stay visible even when workdir notes become problem cards.
+    if finished && deleted > 0 {
+        let workdir = attention.iter().any(|line| line.contains("工作目录已切换"));
+        return if workdir {
+            format!("已完成 · 时间轴已清空（删了 {deleted}）· 续跑工作目录已切换")
+        } else if problems > 0 {
+            format!("已完成 · 时间轴已清空（删了 {deleted}）· 另有需处理项")
+        } else {
+            format!("已完成 · 时间轴已清空（删了 {deleted}），从媒体库拖回或重跑")
+        };
+    }
     if problems > 0 {
-        return format!("有 {problems} 项需要处理，其余部分会继续生成");
+        return format!("有 {problems} 项需要处理 · 看下方原因与下一步（缺 Key → 打开 AI 设置）");
     }
     let pending = stages.iter().find(|s| s.state != StatusState::Done);
     match pending {
@@ -775,7 +828,9 @@ fn headline(stages: &[StageStatus], problems: usize, deleted: usize) -> String {
             )
         }
         Some(stage) => stage_doing(stage.kind).into(),
-        None if deleted > 0 => format!("已完成 · 你从时间轴删掉了 {deleted} 个片段"),
+        None if attention.iter().any(|line| line.contains("工作目录已切换")) => {
+            "续跑注意：工作目录已切换，见下方说明".into()
+        }
         None => "已完成，全部内容已放入时间轴".into(),
     }
 }
@@ -855,6 +910,28 @@ pub fn production_view_with_document(
             action: ProblemAction::Retry,
         });
     }
+    // Placement / workdir attention → actionable problem cards (30s scan).
+    for note in &status.attention {
+        if note.starts_with("入轨未成功：") {
+            problems.push(ProblemView {
+                key: None,
+                title: "入轨暂停".into(),
+                reason: "生成内容未能写入时间轴（轨道可能锁定或重叠）".into(),
+                detail: Some(format!("{note} 下一步：解锁轨道或点「重试」。")),
+                action: ProblemAction::Retry,
+            });
+        } else if note.contains("工作目录已切换") {
+            problems.push(ProblemView {
+                key: None,
+                title: "续跑工作目录".into(),
+                reason: "工作目录已换，已入轨相对路径可能失效".into(),
+                detail: Some(format!(
+                    "{note} 下一步：复用原 production workdir 续跑，或重跑并重新入轨。"
+                )),
+                action: ProblemAction::Retry,
+            });
+        }
+    }
     let mut states = BTreeMap::new();
     node_states(&status.nodes, &mut states);
     let state_of = |id: &str| {
@@ -910,7 +987,12 @@ pub fn production_view_with_document(
         })
         .unwrap_or_default();
     let overall_status = overall(&status.stages, problems.len());
-    let headline_text = headline(&status.stages, problems.len(), status.deleted);
+    let headline_text = headline(
+        &status.stages,
+        problems.len(),
+        status.deleted,
+        &status.attention,
+    );
     let mut workflow = workflow;
     if let Some(panel) = workflow.as_mut() {
         paint_workflow_panel(panel, status);
@@ -931,7 +1013,15 @@ pub fn production_view_with_document(
         headline: headline_text,
         progress: progress(&status.stages),
         stages: status.stages.iter().map(stage_view).collect(),
-        notes: status.attention.clone(),
+        // Notes already promoted to problem cards are omitted to avoid double text.
+        notes: status
+            .attention
+            .iter()
+            .filter(|note| {
+                !note.starts_with("入轨未成功：") && !note.contains("工作目录已切换")
+            })
+            .cloned()
+            .collect(),
         deleted: status.deleted,
         problems,
         segments,
@@ -992,9 +1082,13 @@ mod tests {
                     y: 40.0,
                     fields: vec![],
                     files: vec![],
+                    text_blocks: vec![],
                     params_json: "{}".into(),
             image: None,
             output: None,
+            output_chars: None,
+            logs: Vec::new(),
+                    has_cache: false,
                 },
                 WorkflowNodeView {
                     id: "speech".into(),
@@ -1005,14 +1099,18 @@ mod tests {
                     status: ProductionNodeStatus::Queued,
                     detail: None,
                     inputs: vec!["text:script_text".into()],
-                    outputs: vec!["audio:speech_clip".into()],
+                    outputs: vec!["clips:speech_clips".into()],
                     x: 300.0,
                     y: 40.0,
                     fields: vec![],
                     files: vec![],
+                    text_blocks: vec![],
                     params_json: "{}".into(),
             image: None,
             output: None,
+            output_chars: None,
+            logs: Vec::new(),
+                    has_cache: false,
                 },
                 WorkflowNodeView {
                     id: "split_shots".into(),
@@ -1028,14 +1126,19 @@ mod tests {
                     y: 40.0,
                     fields: vec![],
                     files: vec![],
+                    text_blocks: vec![],
                     params_json: "{}".into(),
             image: None,
             output: None,
+            output_chars: None,
+            logs: Vec::new(),
+                    has_cache: false,
                 },
             ],
             edges: vec![],
             palette: vec![],
             running: None,
+            log_tail: None,
         };
         let view = production_view_with_document(
             &status(vec![
@@ -1053,6 +1156,72 @@ mod tests {
         assert_eq!(wf.nodes[1].status, ProductionNodeStatus::Complete);
         assert_eq!(wf.nodes[2].status, ProductionNodeStatus::Running);
         assert_eq!(view.flow.children[2].label, "一句一镜");
+    }
+
+    #[test]
+    fn paint_does_not_hide_failed_emit_when_run_done() {
+        let mut panel = WorkflowPanelView {
+            nodes: vec![
+                WorkflowNodeView {
+                    id: "tts".into(),
+                    node_type: "tts".into(),
+                    label: "口播转 TTS".into(),
+                    summary: "".into(),
+                    docs: "".into(),
+                    status: ProductionNodeStatus::Complete,
+                    detail: None,
+                    inputs: vec![],
+                    outputs: vec![],
+                    x: 0.0,
+                    y: 0.0,
+                    fields: vec![],
+                    files: vec![],
+                    text_blocks: vec![],
+                    params_json: "{}".into(),
+                    image: None,
+                    output: None,
+                    output_chars: None,
+                    logs: Vec::new(),
+                    has_cache: false,
+                },
+                WorkflowNodeView {
+                    id: "emit".into(),
+                    node_type: "emit_sequence".into(),
+                    label: "顺序入轨".into(),
+                    summary: "".into(),
+                    docs: "".into(),
+                    status: ProductionNodeStatus::Failed,
+                    detail: Some("入轨失败".into()),
+                    inputs: vec![],
+                    outputs: vec![],
+                    x: 0.0,
+                    y: 0.0,
+                    fields: vec![],
+                    files: vec![],
+                    text_blocks: vec![],
+                    params_json: "{}".into(),
+                    image: None,
+                    output: None,
+                    output_chars: None,
+                    logs: Vec::new(),
+                    has_cache: false,
+                },
+            ],
+            edges: vec![],
+            palette: vec![],
+            running: None,
+            log_tail: None,
+        };
+        let mut generate = st(StageKind::Generate, 1, 1, StatusState::Done);
+        generate.phase = Some(("emit".into(), 1.0));
+        paint_workflow_panel(&mut panel, &status(vec![generate]));
+        assert_eq!(panel.nodes[0].status, ProductionNodeStatus::Complete);
+        assert_eq!(
+            panel.nodes[1].status,
+            ProductionNodeStatus::Failed,
+            "入轨失败节点不得被刷成完成"
+        );
+        assert_eq!(panel.nodes[1].detail.as_deref(), Some("入轨失败"));
     }
 
     #[test]
@@ -1090,8 +1259,13 @@ mod tests {
         assert_eq!(view.stages[1].count.as_deref(), Some("2/3"));
         assert_eq!(view.stages[0].count, None);
         assert_eq!(view.status, ProductionNodeStatus::Running);
-        let text = format!("{view:?}");
+        // User-facing fields must not leak package ids (extension_id is internal).
+        let text = format!(
+            "{}{}{:?}{:?}",
+            view.headline, view.title, view.stages, view.flow
+        );
         assert!(!text.contains("builtin."), "{text}");
+        assert!(!text.contains("ApplyGenerated"), "{text}");
     }
 
     #[test]
@@ -1141,7 +1315,20 @@ mod tests {
         let view = production_view(&s, None);
         assert_eq!(view.status, ProductionNodeStatus::Complete);
         assert!((view.progress - 1.0).abs() < 1e-6);
-        assert!(view.headline.contains("删掉了 2 个"));
+        assert!(
+            view.headline.contains("时间轴已清空") && view.headline.contains("删了 2"),
+            "headline={}",
+            view.headline
+        );
+        // Workdir problem cards must not bury the deletion count.
+        s.attention
+            .push("工作目录已切换（a → b）。已入轨相对路径可能失效。".into());
+        let view = production_view(&s, None);
+        assert!(
+            view.headline.contains("删了 2") && view.headline.contains("工作目录"),
+            "headline={}",
+            view.headline
+        );
     }
 
     #[test]

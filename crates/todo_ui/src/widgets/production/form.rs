@@ -2,7 +2,9 @@
 //! start. Everything the manifest offers beyond the quick settings sits in a
 //! collapsed "更多设置", grouped as the manifest groups it.
 use super::{caption, ProductionAction};
-use crate::theme::{button, Btn, BORDER, BORDER_STRONG, BRAND, DIM, MUTED, PANEL_2, TEXT, WARN};
+use crate::theme::{
+    button, with_input_radius, Btn, BORDER, BORDER_STRONG, BRAND, DIM, MUTED, PANEL_2, TEXT, WARN,
+};
 use egui::{Id, RichText, Ui};
 use std::collections::BTreeMap;
 use todo_interaction::{
@@ -141,20 +143,18 @@ fn param_field(ui: &mut Ui, param: &ParamView, value: &mut ParamValue, custom: &
                                 }
                             }
                             ui.separator();
-                            if ui
-                                .selectable_label(*custom, "自定义音色…")
-                                .on_hover_text("填写声音复刻得到的 S_ 开头音色 ID")
-                                .clicked()
-                            {
+                            if ui.selectable_label(*custom, "自定义音色…").clicked() {
                                 *custom = true;
                             }
                         });
                     if *custom {
-                        ui.add(
-                            egui::TextEdit::singleline(current)
-                                .desired_width(width)
-                                .hint_text("音色 ID，例如 S_xxxxxx"),
-                        );
+                        with_input_radius(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(current)
+                                    .desired_width(width)
+                                    .hint_text("输入音色名称"),
+                            );
+                        });
                     }
                 });
             }
@@ -180,13 +180,15 @@ fn param_field(ui: &mut Ui, param: &ParamView, value: &mut ParamValue, custom: &
                 },
                 ParamValue::Text(text),
             ) => {
-                let mut edit = egui::TextEdit::singleline(text)
-                    .char_limit(*max_length)
-                    .desired_width(width);
-                if let Some(p) = placeholder {
-                    edit = edit.hint_text(p);
-                }
-                ui.add(edit);
+                with_input_radius(ui, |ui| {
+                    let mut edit = egui::TextEdit::singleline(text)
+                        .char_limit(*max_length)
+                        .desired_width(width);
+                    if let Some(p) = placeholder {
+                        edit = edit.hint_text(p);
+                    }
+                    ui.add(edit);
+                });
             }
             (ParamInput::Bool, ParamValue::Bool(b)) => {
                 ui.checkbox(b, "");
@@ -282,7 +284,7 @@ pub(super) fn draw(ui: &mut Ui, view: &ProductionPanelView) -> ProductionAction 
         let reason = view
             .service_problem
             .as_deref()
-            .unwrap_or("扩展包缺失，请重新安装软件。");
+            .unwrap_or("安装不完整，请重新安装软件。");
         ui.label(RichText::new(reason).size(12.0).color(DIM));
         return action;
     }
@@ -328,7 +330,7 @@ pub(super) fn draw(ui: &mut Ui, view: &ProductionPanelView) -> ProductionAction 
         notice(ui, blocker, WARN);
         if card.status == ExtensionStatus::MissingKey {
             ui.add_space(4.0);
-            if button(ui, "去填写 Key", Btn::Normal, true).clicked() {
+            if button(ui, "去填写密钥", Btn::Normal, true).clicked() {
                 action = ProductionAction::OpenSettings;
             }
         }
@@ -337,27 +339,22 @@ pub(super) fn draw(ui: &mut Ui, view: &ProductionPanelView) -> ProductionAction 
     if let Some(script) = &card.script {
         ui.add_space(10.0);
         caption(ui, Some(2), &script.label);
-        ui.add(
-            egui::TextEdit::multiline(&mut form.script)
-                .hint_text(&script.placeholder)
-                .char_limit(script.max_length)
-                .desired_rows(9)
-                .desired_width(f32::INFINITY),
-        );
-        let count = form.script.chars().filter(|c| !c.is_whitespace()).count();
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("空一行表示这里必须换段")
-                    .size(11.0)
-                    .color(DIM),
+        with_input_radius(ui, |ui| {
+            ui.add(
+                egui::TextEdit::multiline(&mut form.script)
+                    .hint_text(&script.placeholder)
+                    .char_limit(script.max_length)
+                    .desired_rows(9)
+                    .desired_width(f32::INFINITY),
             );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    RichText::new(format!("{count} / {} 字", script.max_length))
-                        .size(11.0)
-                        .color(MUTED),
-                );
-            });
+        });
+        let count = form.script.chars().filter(|c| !c.is_whitespace()).count();
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                RichText::new(format!("{count} / {} 字", script.max_length))
+                    .size(11.0)
+                    .color(MUTED),
+            );
         });
     }
 
@@ -397,13 +394,7 @@ pub(super) fn draw(ui: &mut Ui, view: &ProductionPanelView) -> ProductionAction 
         .min_size(egui::vec2(ui.available_width(), 36.0)),
     );
     if let Some(reason) = reason {
-        ui.label(RichText::new(reason).size(11.5).color(MUTED));
-    } else {
-        ui.label(
-            RichText::new("生成时可以继续编辑。配音、字幕和画面会按顺序自动放进时间轴。")
-                .size(11.5)
-                .color(DIM),
-        );
+        ui.label(RichText::new(reason).size(12.0).color(MUTED));
     }
     if start.clicked() {
         action = ProductionAction::Start {
