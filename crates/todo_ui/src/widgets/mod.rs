@@ -17,8 +17,9 @@ mod timeline;
 mod toolbar;
 
 pub use agent::{
-    close as close_agent, draw_modal as draw_agent, is_open as agent_open,
-    set_open as set_agent_open,
+    close as close_agent, draw_dock as draw_agent_dock, draw_modal as draw_agent,
+    is_open as agent_open, request_copy_token as request_copy_agent_token,
+    set_open as set_agent_open, take_copy_token as take_copy_agent_token,
 };
 pub use agent::{AgentAction, AgentApproval, AgentMessage, AgentRole, AgentView};
 pub use ai_settings::AiSettingsAction;

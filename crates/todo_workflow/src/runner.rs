@@ -32,6 +32,12 @@ pub trait Services {
             RequestedCall::Vision { prompt, images } => self.vision(prompt, images),
             RequestedCall::Speech(call) => self.speech(call),
             RequestedCall::Subtitles(call) => self.subtitles(call),
+            RequestedCall::TimelineStrip { .. } => {
+                Err("timeline_strip 须由桌面宿主按当前工程时间轴渲染".into())
+            }
+            RequestedCall::WaitPlacement => {
+                Err("placement_ready 须由桌面宿主等待入轨落地".into())
+            }
         }
     }
 }
@@ -266,6 +272,17 @@ pub enum RequestedCall {
     Vision { prompt: String, images: Vec<PathBuf> },
     Speech(SpeechCall),
     Subtitles(SubtitlesCall),
+    /// Host renders the open project's program monitor on an absolute frame
+    /// clock and stitches a contact sheet (no network).
+    TimelineStrip {
+        every_frames: u32,
+        max_frames: u32,
+        thumb_height: u32,
+        /// `"content"` | `"workspace"`
+        range: String,
+    },
+    /// Host parks until queued emits are applied and adopt/Place is idle.
+    WaitPlacement,
 }
 
 /// What a driver should do next.
@@ -1366,6 +1383,36 @@ fn finish_call(
                 .to_owned();
             out.insert("reply".into(), json!({ "text": text }));
         }
+        "timeline_strip" => {
+            let path = reply
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "timeline_strip 缺 path".to_string())?
+                .to_owned();
+            let image = json!({
+                "path": path,
+                "mime": reply.get("mime").and_then(Value::as_str).unwrap_or("image/png"),
+            });
+            nodes::validate_payload(DataKind::ImageAsset, &image)
+                .map_err(|e| format!("截帧拼图不合格：{e}"))?;
+            out.insert("image".into(), image);
+            if let Some(frames) = reply.get("frames") {
+                let images = json!({ "images": frames });
+                nodes::validate_payload(DataKind::ImageAssets, &images)
+                    .map_err(|e| format!("截帧列表不合格：{e}"))?;
+                out.insert("frames".into(), images);
+            }
+        }
+        "placement_ready" => {
+            let ready = if reply.get("trigger").and_then(Value::as_bool) == Some(true) {
+                reply.clone()
+            } else {
+                json!({ "trigger": true })
+            };
+            nodes::validate_payload(DataKind::Trigger, &ready)
+                .map_err(|e| format!("入轨就绪脉冲不合格：{e}"))?;
+            out.insert("ready".into(), ready);
+        }
         "tts" => {
             let clip = normalize_tts_clip(reply, "0", "")?;
             for (port, value) in tts_outputs(vec![clip], false)? {
@@ -1923,6 +1970,49 @@ fn step_node(
             }
             return Ok(NodeOutcome::Call {
                 call: RequestedCall::Vision { prompt, images },
+                resume: Resume::Plain,
+            });
+        }
+        "timeline_strip" => {
+            let every_frames = param_num(node, "everyFrames", 30.0)
+                .round()
+                .clamp(1.0, 300.0) as u32;
+            let max_frames = param_num(node, "maxFrames", 24.0)
+                .round()
+                .clamp(1.0, 64.0) as u32;
+            let thumb_height = param_num(node, "thumbHeight", 160.0)
+                .round()
+                .clamp(64.0, 480.0) as u32;
+            let range = {
+                let raw = param_str(node, "range");
+                if raw == "workspace" {
+                    "workspace".into()
+                } else {
+                    "content".into()
+                }
+            };
+            logs.push(format!(
+                "→ 时间轴截帧：每 {every_frames} 帧一张，最多 {max_frames} 张（{range}）"
+            ));
+            return Ok(NodeOutcome::Call {
+                call: RequestedCall::TimelineStrip {
+                    every_frames,
+                    max_frames,
+                    thumb_height,
+                    range,
+                },
+                resume: Resume::Plain,
+            });
+        }
+        "placement_ready" => {
+            let wired = inputs.len();
+            logs.push(if wired == 0 {
+                "→ 入轨就绪：无上游连线，仅等宿主入轨空闲".into()
+            } else {
+                format!("→ 入轨就绪：已汇合 {wired} 路上游，等待入轨落地")
+            });
+            return Ok(NodeOutcome::Call {
+                call: RequestedCall::WaitPlacement,
                 resume: Resume::Plain,
             });
         }
@@ -4175,6 +4265,115 @@ mod tests {
         fn subtitles(&mut self, _call: SubtitlesCall) -> Result<Value, String> {
             Ok(json!({ "cues": [{ "text": "你好", "start": 0.0, "end": 1.0 }] }))
         }
+    }
+
+    #[test]
+    fn placement_ready_waits_for_all_wired_upstreams_then_host() {
+        let nodes = vec![
+            node("go", "trigger", &[]),
+            node("a", "relay", &[]),
+            node("b", "relay", &[]),
+            node("gate", "placement_ready", &[]),
+            node(
+                "strip",
+                "timeline_strip",
+                &[("everyFrames", json!(30)), ("maxFrames", json!(4))],
+            ),
+        ];
+        let edges = vec![
+            edge("go", "start", "a", "in"),
+            edge("go", "start", "b", "in"),
+            edge("a", "files", "gate", "in1"),
+            edge("b", "files", "gate", "in2"),
+            edge("gate", "ready", "strip", "start"),
+        ];
+        let g = graph(nodes, edges);
+        let mut job = WorkflowJob::new(&g, Path::new("."), RunInput::default());
+        // Relays are local; gate should only Call once both are done.
+        loop {
+            match job.advance() {
+                Step::Calls(batch) => {
+                    assert_eq!(batch.len(), 1);
+                    assert_eq!(batch[0].0, "gate");
+                    assert!(matches!(batch[0].1, RequestedCall::WaitPlacement));
+                    job.resume("gate", Ok(json!({ "trigger": true })));
+                    break;
+                }
+                Step::Waiting => panic!("should not wait before host gate"),
+                Step::Finished => panic!("finished before placement_ready"),
+            }
+        }
+        match job.advance() {
+            Step::Calls(batch) => {
+                assert_eq!(batch[0].0, "strip");
+                assert!(matches!(batch[0].1, RequestedCall::TimelineStrip { .. }));
+            }
+            other => panic!("expected strip after gate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn timeline_strip_requests_host_capture() {
+        let nodes = vec![
+            node("go", "trigger", &[]),
+            node(
+                "strip",
+                "timeline_strip",
+                &[("everyFrames", json!(30)), ("maxFrames", json!(8))],
+            ),
+            node("hub", "relay", &[]),
+        ];
+        let edges = vec![
+            edge("go", "start", "strip", "start"),
+            edge("strip", "image", "hub", "in"),
+        ];
+        let g = graph(nodes, edges);
+        assert!(
+            nodes::lookup("timeline_strip").is_some(),
+            "timeline_strip must be in the catalog"
+        );
+        let mut job = WorkflowJob::new(&g, Path::new("."), RunInput::default());
+        match job.advance() {
+            Step::Calls(batch) => {
+                assert_eq!(batch.len(), 1);
+                assert_eq!(batch[0].0, "strip");
+                match &batch[0].1 {
+                    RequestedCall::TimelineStrip {
+                        every_frames: 30,
+                        max_frames: 8,
+                        ..
+                    } => {}
+                    other => panic!("expected TimelineStrip, got {other:?}"),
+                }
+                job.resume(
+                    "strip",
+                    Ok(json!({
+                        "path": "timeline_strip/demo/strip.png",
+                        "mime": "image/png",
+                        "frames": [
+                            { "path": "timeline_strip/demo/frames/frame-00.png", "mime": "image/png" }
+                        ]
+                    })),
+                );
+            }
+            other => panic!("expected Calls, got {other:?}"),
+        }
+        let report = job.report();
+        let strip = report.nodes.iter().find(|n| n.id == "strip").unwrap();
+        assert!(strip.ok, "{strip:?}");
+        assert!(
+            strip.outputs.iter().any(|p| p == "image"),
+            "expected image port: {strip:?}"
+        );
+        assert!(
+            strip.outputs.iter().any(|p| p == "frames"),
+            "expected frames port: {strip:?}"
+        );
+        let preview = strip.preview.clone().unwrap_or_default();
+        assert!(
+            preview.contains("timeline_strip/demo/strip.png"),
+            "strip path missing from preview: {preview}"
+        );
     }
 
     #[test]

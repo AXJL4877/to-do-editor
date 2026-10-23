@@ -468,6 +468,34 @@ impl EditorController {
             Intent::DeleteProject { name } => workspace.dispatch(AppAction::DeleteProject(name)),
             Intent::ChooseProjectFile => workspace.dispatch(AppAction::ChooseProjectFile),
             Intent::ConfirmClose(choice) => workspace.dispatch(AppAction::ConfirmClose(choice)),
+            Intent::SelectAll if self.focus == EditorFocus::Library => {
+                if let Some(editor) = workspace.editor() {
+                    let project = editor.project();
+                    let ids =
+                        crate::presentation::selectable_media_ids(project, &self.library.query);
+                    for id in &ids {
+                        if let Some(folder_id) = project
+                            .media
+                            .iter()
+                            .find(|media| media.id == *id)
+                            .and_then(|media| media.folder_id.as_ref())
+                        {
+                            expand_ancestors(&mut self.library.expanded, project, folder_id);
+                            self.library.expanded.insert(folder_id.clone());
+                        }
+                    }
+                    self.library.selected = ids;
+                    self.library.select_anchor = self.library.selected.first().cloned();
+                    self.library.selected_folder = None;
+                }
+                AppUpdate::default()
+            }
+            Intent::ClearSelection if self.focus == EditorFocus::Library => {
+                self.library.selected.clear();
+                self.library.select_anchor = None;
+                self.library.selected_folder = None;
+                AppUpdate::default()
+            }
             other @ (Intent::SelectClip { .. }
             | Intent::SelectAll
             | Intent::ClearSelection
@@ -640,7 +668,8 @@ impl EditorController {
                 | Intent::ClipPointerDown { .. }
                 | Intent::SelectClip { .. }
                 | Intent::SelectAll
-        ) {
+        ) && self.focus != EditorFocus::Library
+        {
             self.focus = EditorFocus::Timeline;
         }
         update

@@ -3,13 +3,18 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use todo_application::{
     AppEvent, MediaOutput, MediaTask, ProjectOutput, ProjectTask, TextRaster, Ticket,
 };
 use todo_media::{MediaService, RasterRequest, TextRasterizer};
 use todo_storage::{ProjectLock, ProjectStore};
+
+/// Concurrent Adopt/Import workers. Caps parallel ffprobe so disk/CPU stay bounded.
+const IMPORT_WORKERS: usize = 4;
+
+type SharedJobs = Arc<Mutex<Receiver<(Ticket, MediaTask)>>>;
 
 pub struct Workers {
     projects: Sender<(Ticket, ProjectTask)>,
@@ -46,11 +51,18 @@ impl Workers {
         let tx = events_tx.clone();
         thread::spawn(move || text_worker(rasterizer, text_rx, tx));
         let media = MediaService::new(repo.clone());
-        for rx in [import_rx, asset_rx] {
+        // Adopt/Import: several workers share one queue so probes run in parallel.
+        let import_jobs: SharedJobs = Arc::new(Mutex::new(import_rx));
+        for _ in 0..IMPORT_WORKERS {
             let tx = events_tx.clone();
             let service = media.clone();
-            thread::spawn(move || media_worker(service, rx, tx));
+            let jobs = Arc::clone(&import_jobs);
+            thread::spawn(move || shared_media_worker(service, jobs, tx));
         }
+        // Thumbnails / peaks stay single-threaded (decode-heavy, less latency-critical).
+        let tx = events_tx.clone();
+        let service = media.clone();
+        thread::spawn(move || exclusive_media_worker(service, asset_rx, tx));
         let export_cancel = Arc::new(AtomicBool::new(false));
         let export_cancel_thread = export_cancel.clone();
         let export_root = repo.clone();
@@ -178,124 +190,139 @@ fn hold(store: &ProjectStore, held: &mut Option<ProjectLock>, name: &str) -> Res
     Ok(())
 }
 
-fn media_worker(
+fn take_shared_job(jobs: &SharedJobs) -> Option<(Ticket, MediaTask)> {
+    let Ok(guard) = jobs.lock() else {
+        return None;
+    };
+    guard.recv().ok()
+}
+
+fn shared_media_worker(service: MediaService, jobs: SharedJobs, events: Sender<AppEvent>) {
+    while let Some((ticket, task)) = take_shared_job(&jobs) {
+        if !run_media_job(&service, ticket, task, &events) {
+            return;
+        }
+    }
+}
+
+fn exclusive_media_worker(
     service: MediaService,
     jobs: Receiver<(Ticket, MediaTask)>,
     events: Sender<AppEvent>,
 ) {
     while let Ok((ticket, task)) = jobs.recv() {
-        if let MediaTask::Import { project, paths } = task {
-            for path in paths {
-                let result = service
-                    .import_file(&project, &path)
-                    .map(MediaOutput::Imported)
-                    .map_err(|e| format!("{}：{e}", path.display()));
-                if events.send(AppEvent::Media { ticket, result }).is_err() {
-                    return;
-                }
-            }
-            if events
-                .send(AppEvent::Media {
-                    ticket,
-                    result: Ok(MediaOutput::ImportFinished),
-                })
-                .is_err()
-            {
-                return;
-            }
-            continue;
-        }
-        if let MediaTask::Adopt { files, .. } = &task {
-            let result = service
-                .adopt_files(files)
-                .map(MediaOutput::Adopted)
-                .map_err(|e| e.to_string());
-            if events.send(AppEvent::Media { ticket, result }).is_err() {
-                return;
-            }
-            continue;
-        }
-        if let MediaTask::Export {
-            frames,
-            fps,
-            audio,
-            output,
-            preset,
-        } = &task
-        {
-            let preset = match preset.as_str() {
-                "high" => todo_media::ExportPreset::HighQuality,
-                "vertical" => todo_media::ExportPreset::Vertical1080p,
-                "draft" => todo_media::ExportPreset::Draft,
-                _ => todo_media::ExportPreset::Standard1080p30,
-            };
-            let result = todo_media::export_frames(
-                service.tools(),
-                &todo_media::ExportRequest {
-                    frames: frames.clone(),
-                    fps: *fps,
-                    audio: audio.clone(),
-                    output: output.clone(),
-                    preset,
-                },
-                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            )
-            .map(|result| MediaOutput::Exported {
-                output: result.output,
-                report: result.report_path,
-                frames: result.frames,
-                failed_checks: result
-                    .report
-                    .checks
-                    .iter()
-                    .filter(|check| !check.passed)
-                    .map(|check| format!("{}：{}", check.name, check.message))
-                    .collect(),
-            })
-            .map_err(|error| error.to_string());
-            if events.send(AppEvent::Media { ticket, result }).is_err() {
-                return;
-            }
-            continue;
-        }
-        let result = match task {
-            MediaTask::Peaks { path, bins } => match service.get_peaks(&path, bins) {
-                Ok(todo_media::Waveform {
-                    has_audio: true,
-                    duration,
-                    peaks,
-                }) if !peaks.is_empty() && duration.is_finite() && duration > 0.0 => {
-                    Ok(MediaOutput::Peaks {
-                        path,
-                        duration,
-                        peaks,
-                    })
-                }
-                Ok(_) => Err("音频波形不可用".into()),
-                Err(e) => Err(e.to_string()),
-            },
-            MediaTask::Thumbnail { path, width } => service
-                .get_thumb(&path, width)
-                .map_err(|e| e.to_string())
-                .and_then(|bytes| {
-                    if bytes.is_empty() {
-                        Err("缩略图为空".into())
-                    } else {
-                        Ok(MediaOutput::Thumbnail { path, bytes })
-                    }
-                }),
-            MediaTask::Import { .. }
-            | MediaTask::TextRaster(_)
-            | MediaTask::Adopt { .. }
-            | MediaTask::ExportTimeline { .. }
-            | MediaTask::Export { .. } => {
-                unreachable!()
-            }
-        };
-        if events.send(AppEvent::Media { ticket, result }).is_err() {
+        if !run_media_job(&service, ticket, task, &events) {
             return;
         }
     }
+}
+
+/// Returns false when the event channel is closed (UI gone).
+fn run_media_job(
+    service: &MediaService,
+    ticket: Ticket,
+    task: MediaTask,
+    events: &Sender<AppEvent>,
+) -> bool {
+    if let MediaTask::Import { project, paths } = task {
+        for path in paths {
+            let result = service
+                .import_file(&project, &path)
+                .map(MediaOutput::Imported)
+                .map_err(|e| format!("{}：{e}", path.display()));
+            if events.send(AppEvent::Media { ticket, result }).is_err() {
+                return false;
+            }
+        }
+        return events
+            .send(AppEvent::Media {
+                ticket,
+                result: Ok(MediaOutput::ImportFinished),
+            })
+            .is_ok();
+    }
+    if let MediaTask::Adopt { files, .. } = &task {
+        let result = service
+            .adopt_files(files)
+            .map(MediaOutput::Adopted)
+            .map_err(|e| e.to_string());
+        return events.send(AppEvent::Media { ticket, result }).is_ok();
+    }
+    if let MediaTask::Export {
+        frames,
+        fps,
+        audio,
+        output,
+        preset,
+    } = &task
+    {
+        let preset = match preset.as_str() {
+            "high" => todo_media::ExportPreset::HighQuality,
+            "vertical" => todo_media::ExportPreset::Vertical1080p,
+            "draft" => todo_media::ExportPreset::Draft,
+            _ => todo_media::ExportPreset::Standard1080p30,
+        };
+        let result = todo_media::export_frames(
+            service.tools(),
+            &todo_media::ExportRequest {
+                frames: frames.clone(),
+                fps: *fps,
+                audio: audio.clone(),
+                output: output.clone(),
+                preset,
+            },
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .map(|result| MediaOutput::Exported {
+            output: result.output,
+            report: result.report_path,
+            frames: result.frames,
+            failed_checks: result
+                .report
+                .checks
+                .iter()
+                .filter(|check| !check.passed)
+                .map(|check| format!("{}：{}", check.name, check.message))
+                .collect(),
+        })
+        .map_err(|error| error.to_string());
+        return events.send(AppEvent::Media { ticket, result }).is_ok();
+    }
+    let result = match task {
+        MediaTask::Peaks { path, bins } => match service.get_peaks(&path, bins) {
+            Ok(todo_media::Waveform {
+                has_audio: true,
+                duration,
+                peaks,
+            }) if !peaks.is_empty() && duration.is_finite() && duration > 0.0 => {
+                Ok(MediaOutput::Peaks {
+                    path,
+                    duration,
+                    peaks,
+                })
+            }
+            Ok(_) => Err("音频波形不可用".into()),
+            Err(e) => Err(e.to_string()),
+        },
+        MediaTask::Thumbnail { path, width } => service
+            .get_thumb(&path, width)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| {
+                if bytes.is_empty() {
+                    Err("缩略图为空".into())
+                } else {
+                    Ok(MediaOutput::Thumbnail { path, bytes })
+                }
+            }),
+        MediaTask::Import { .. }
+        | MediaTask::TextRaster(_)
+        | MediaTask::Adopt { .. }
+        | MediaTask::ExportTimeline { .. }
+        | MediaTask::Export { .. } => {
+            unreachable!()
+        }
+    };
+    events.send(AppEvent::Media { ticket, result }).is_ok()
 }
 
 fn export_worker(

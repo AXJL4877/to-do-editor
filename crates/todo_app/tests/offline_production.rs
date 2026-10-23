@@ -238,7 +238,7 @@ impl Run {
                 let update = self.ws.on_event(event);
                 self.answer(update);
             }
-            for report in self.host.poll() {
+            for report in self.host.poll(None, false, None) {
                 match report {
                     HostReport::Output(output) => {
                         if std::env::var("E2E_TRACE").is_ok() {

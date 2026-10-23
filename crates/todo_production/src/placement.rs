@@ -4,11 +4,12 @@
 //! outcome with [`record`].
 //!
 //! Rules (extension spec §8):
-//! - a new key is placed; the same key with the same revision is left alone;
-//! - a new revision replaces the clip in place and keeps the user's transform;
-//!   the producer's timing is used unless the user moved the clip;
-//! - a key that was placed but is gone from the timeline was deleted by the
-//!   user: it is not placed again until its revision changes;
+//! - if the timeline already has the same key at the same timing/source, skip;
+//! - if start/duration/source/rev disagree, update in place (producer timing
+//!   unless the user moved the clip);
+//! - a key that was placed but is gone was deleted by the user: same rev is
+//!   not placed again until an explicit workflow rerun clears the ledger
+//!   (`attach_canvas_run`) or the user restores;
 //! - a linked item follows the actual position of the clip it links to;
 //! - lanes of one role keep their stacking (lane 0 at the bottom).
 use crate::items::{Item, ItemRole, ItemSource, ItemTransform};
@@ -80,6 +81,7 @@ pub struct PlacementPlan {
 impl PlacementPlan {
     pub fn is_empty(&self) -> bool {
         self.edits.is_empty()
+            && self.adopt.is_empty()
             && self.tombstones.is_empty()
             && self.forget.is_empty()
             && self.placed.is_empty()
@@ -107,6 +109,20 @@ fn transform(item: Option<ItemTransform>) -> Transform {
 
 fn pack(t: &Transform) -> [f64; 6] {
     [t.x, t.y, t.scale, t.scale_x, t.scale_y, t.opacity]
+}
+
+fn source_matches(clip: &todo_core::Clip, source: &GeneratedSource) -> bool {
+    match (source, &clip.source) {
+        (
+            GeneratedSource::Media {
+                media_id,
+                offset,
+            },
+            todo_core::ClipSource::Media(media),
+        ) => media.media_id == *media_id && (media.offset - *offset).abs() <= EPSILON,
+        (GeneratedSource::Text(want), todo_core::ClipSource::Text(have)) => want == have,
+        _ => false,
+    }
 }
 
 pub fn media_path(workdir: &str, file: &str) -> String {
@@ -193,6 +209,26 @@ pub fn plan(input: &PlacementInput) -> PlacementPlan {
                         offset: *r#in,
                     },
                     None => {
+                        // A previously placed item whose library media was
+                        // removed is a user deletion. Keep it tombstoned
+                        // instead of re-adopting the generated file on the
+                        // next placement tick. A changed revision remains
+                        // eligible for adoption, since that is a new output.
+                        if placement
+                            .tombstones
+                            .contains(&(item.key.clone(), item.rev.clone()))
+                        {
+                            continue;
+                        }
+                        if placement
+                            .placed
+                            .get(&item.key)
+                            .is_some_and(|placed_rev| placed_rev == &item.rev)
+                        {
+                            out.tombstones.push((item.key.clone(), item.rev.clone()));
+                            out.forget.push(item.key.clone());
+                            continue;
+                        }
                         if !out.adopt.contains(&path) {
                             out.adopt.push(path);
                         }
@@ -228,48 +264,49 @@ pub fn plan(input: &PlacementInput) -> PlacementPlan {
                 desired
             };
             let current = clip.origin.as_ref().map(|o| o.rev.as_str());
-            if current != Some(item.rev.as_str()) {
-                // Keep a transform the user changed; otherwise take the new one.
-                let untouched = placement
-                    .transforms
-                    .get(&item.key)
-                    .is_none_or(|t| *t == pack(&clip.transform));
-                if untouched {
-                    out.transforms.push((item.key.clone(), pack(&produced)));
+            let same_rev = current == Some(item.rev.as_str());
+            let same_timing = (clip.start - start).abs() <= EPSILON
+                && (clip.duration - duration).abs() <= EPSILON;
+            let same_source = source_matches(clip, &source);
+            if same_rev && same_timing && same_source {
+                if placement.placed.get(&item.key) != Some(&item.rev) {
+                    // On the timeline but missing from the record (an older
+                    // save raced the placement): adopt it as placed, as it is.
+                    out.placed.push((item.key.clone(), item.rev.clone()));
+                    out.positions.push((item.key.clone(), clip.start));
+                    out.transforms
+                        .push((item.key.clone(), pack(&clip.transform)));
+                    out.tombstones_cleared
+                        .push((item.key.clone(), item.rev.clone()));
                 }
-                if start == desired {
-                    out.positions.push((item.key.clone(), desired));
-                }
-                out.edits.push(GeneratedEdit::Update {
-                    clip_id: clip.id.clone(),
-                    start,
-                    duration,
-                    source,
-                    transform: untouched.then_some(produced),
-                    intro: item.intro.clone(),
-                    outro,
-                    transition,
-                    audio,
-                    origin: new_origin,
-                });
-                out.placed.push((item.key.clone(), item.rev.clone()));
-            } else if (clip.start - start).abs() > EPSILON {
-                out.edits.push(GeneratedEdit::Move {
-                    clip_id: clip.id.clone(),
-                    start,
-                });
-                out.positions.push((item.key.clone(), start));
-                out.placed.push((item.key.clone(), item.rev.clone()));
-            } else if placement.placed.get(&item.key) != Some(&item.rev) {
-                // On the timeline but missing from the record (an older
-                // save raced the placement): adopt it as placed, as it is.
-                out.placed.push((item.key.clone(), item.rev.clone()));
-                out.positions.push((item.key.clone(), clip.start));
-                out.transforms
-                    .push((item.key.clone(), pack(&clip.transform)));
-                out.tombstones_cleared
-                    .push((item.key.clone(), item.rev.clone()));
+                continue;
             }
+            // Keep a transform the user changed; otherwise take the new one.
+            let untouched = placement
+                .transforms
+                .get(&item.key)
+                .is_none_or(|t| *t == pack(&clip.transform));
+            if untouched {
+                out.transforms.push((item.key.clone(), pack(&produced)));
+            }
+            if (start - desired).abs() <= EPSILON {
+                out.positions.push((item.key.clone(), desired));
+            }
+            // Same key already on the track but timing/source/rev disagree
+            // with the latest workflow item → update in place.
+            out.edits.push(GeneratedEdit::Update {
+                clip_id: clip.id.clone(),
+                start,
+                duration,
+                source,
+                transform: untouched.then_some(produced),
+                intro: item.intro.clone(),
+                outro,
+                transition,
+                audio,
+                origin: new_origin,
+            });
+            out.placed.push((item.key.clone(), item.rev.clone()));
             continue;
         }
         if let Some(placed_rev) = placement.placed.get(&item.key) {

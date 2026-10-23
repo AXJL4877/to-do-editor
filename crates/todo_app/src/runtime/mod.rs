@@ -6,6 +6,7 @@ mod effects;
 mod frame;
 mod productions;
 mod proxies;
+mod tool_agent;
 mod window_state;
 use crate::adapters::agent_bridge::{AgentBridge, AgentRequest};
 use crate::adapters::production::host::ProductionHost;
@@ -48,6 +49,8 @@ pub struct App {
     director: Option<crate::adapters::director::DirectorDriver>,
     /// Director log entries already shown in the panel.
     director_logged: usize,
+    /// Tool-calling Agent session (primary chat path).
+    tool_agent: Option<agent::ToolAgentSession>,
     /// Full motion library (built-in / user / extension) for the assets dock.
     motion_library: MotionLibrary,
     fonts: Vec<FontInput>,
@@ -129,6 +132,7 @@ impl App {
             agent_render_rx: None,
             director: None,
             director_logged: 0,
+            tool_agent: None,
             motion_library: MotionLibrary::builtin(),
             fonts: Vec::new(),
             asset_warnings: Vec::new(),
@@ -155,6 +159,44 @@ impl App {
     }
     fn notice(&mut self, message: String) {
         let _ = self.workspace.dispatch(AppAction::Notice(message));
+    }
+
+    /// Keep the pasted token pointed at the open project (session / revision / path).
+    fn sync_agent_bridge_token(&mut self, ctx: &egui::Context) {
+        if todo_ui::take_copy_agent_token(ctx) {
+            match self.agent_bridge.as_ref() {
+                Some(bridge) => {
+                    let token = bridge.token().to_owned();
+                    ctx.copy_text(bridge.handoff_text());
+                    self.notice(format!("已复制 TO DO 接管指令（{token}）"));
+                }
+                None => self.notice("Agent Bridge 未启动".into()),
+            }
+        }
+        let root = crate::adapters::paths::repo_root();
+        let binding = match self.workspace.control_context() {
+            Some(context) => {
+                let project_path = root
+                    .join("data")
+                    .join(&context.project_name)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                crate::adapters::agent_bridge::BridgeBinding {
+                    session_id: Some(context.session_id),
+                    revision: Some(context.revision),
+                    project_name: Some(context.project_name),
+                    project_path: Some(project_path),
+                }
+            }
+            None => crate::adapters::agent_bridge::BridgeBinding::default(),
+        };
+        let publish_error = self
+            .agent_bridge
+            .as_mut()
+            .and_then(|bridge| bridge.publish_binding(binding).err());
+        if let Some(error) = publish_error {
+            self.notice(format!("Agent 令牌：{error}"));
+        }
     }
 
     fn poll_agent_bridge(&mut self, ctx: &egui::Context) {

@@ -130,7 +130,7 @@ fn main() {
     // Extensions are self-checked in the background; styles appear when ready.
     let started = Instant::now();
     while run.host.styles().is_empty() && started.elapsed() < Duration::from_secs(60) {
-        let _ = run.host.poll();
+        let _ = run.host.poll(None, false, None);
         std::thread::sleep(Duration::from_millis(200));
     }
     println!(
@@ -149,7 +149,7 @@ fn main() {
             let update = run.ws.on_event(event);
             run.answer(update);
         }
-        for report in run.host.poll() {
+        for report in run.host.poll(None, false, None) {
             match report {
                 HostReport::Output(output) => run.pending.push(AppEvent::Production(output)),
                 HostReport::AgentReply { request_id, result } => {

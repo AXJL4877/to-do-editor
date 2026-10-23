@@ -47,22 +47,22 @@ pub fn draw(ui: &mut Ui, vm: &EditorViewModel) -> Vec<Intent> {
         if button(ui, "AI 设置", Btn::Normal, true).clicked() {
             ai_settings::set_open(ui, true);
         }
-        let agent_kind = if agent::is_open(ui.ctx()) {
+        let dock = production::is_open(ui.ctx());
+        let agent_kind = if dock {
             Btn::Tool { active: true }
         } else {
             Btn::Normal
         };
         if button(ui, "Agent", agent_kind, true).clicked() {
-            agent::toggle(ui.ctx());
-        }
-        let dock = production::is_open(ui.ctx());
-        let kind = if dock {
-            Btn::Tool { active: true }
-        } else {
-            Btn::Normal
-        };
-        if button(ui, "工作流", kind, true).clicked() {
+            // Agent lives in the right dock (replaces the old workflow panel).
+            agent::close(ui.ctx());
             production::toggle(ui.ctx());
+        }
+        if button(ui, "令牌", Btn::Normal, true)
+            .on_hover_text("复制「TODO_BRIDGE …」接管指令，粘贴给 Cursor / 外部 Agent")
+            .clicked()
+        {
+            agent::request_copy_token(ui.ctx());
         }
         if button(ui, "导出", Btn::Normal, true).clicked() {
             export::set_open(ui.ctx(), true);

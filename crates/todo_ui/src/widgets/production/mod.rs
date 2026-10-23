@@ -1,6 +1,5 @@
-//! Right-hand dock: workflow package list. Fullscreen canvas opens with `~`
-//! or by clicking a list row. Form/card (成片新建/任务) stay in the crate but
-//! are not drawn here.
+//! Right-hand dock: Agent chat (tool-calling).
+//! Workflow graph UI modules are retained only for Bridge/runtime; they are not drawn.
 #[allow(dead_code)]
 mod card;
 #[allow(dead_code)]
@@ -11,13 +10,13 @@ mod flow;
 mod form;
 mod workflow;
 
-use crate::theme::{button, Btn, BORDER, BRAND, DANGER, MUTED, PANEL_2, TEXT, WARN};
+use crate::theme::{BORDER, BRAND, DANGER, MUTED, TEXT, WARN};
+use crate::widgets::agent::{self, AgentAction, AgentView};
 use crate::ThumbCache;
 use egui::{Color32, Id, Rect, RichText, Ui};
 use std::collections::BTreeMap;
 use todo_interaction::{
-    ExtensionStatus, ParamValue, ProductionEdit, ProductionNodeStatus, ProductionPanelView,
-    WorkflowEntryView,
+    ParamValue, ProductionEdit, ProductionNodeStatus, ProductionPanelView,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -261,15 +260,7 @@ pub(super) fn caption(ui: &mut Ui, step: Option<usize>, text: &str) {
     ui.add_space(2.0);
 }
 
-fn entry_status_color(status: ExtensionStatus) -> Color32 {
-    match status {
-        ExtensionStatus::Ready => crate::theme::SUCCESS,
-        ExtensionStatus::Checking => MUTED,
-        ExtensionStatus::MissingKey => WARN,
-        ExtensionStatus::RuntimeMissing | ExtensionStatus::SelfCheckFailed => DANGER,
-    }
-}
-
+#[allow(dead_code)]
 pub fn selected_workflow(ctx: &egui::Context) -> Option<String> {
     ctx.data(|d| d.get_temp::<Option<String>>(Id::new(SELECTED_WF)))
         .flatten()
@@ -279,14 +270,7 @@ pub fn set_selected_workflow(ctx: &egui::Context, id: Option<String>) {
     ctx.data_mut(|d| d.insert_temp(Id::new(SELECTED_WF), id));
 }
 
-/// Draw the dock into `ui` (its rect is [`dock_rect`]).
-pub fn draw_dock(
-    ui: &mut Ui,
-    view: &ProductionPanelView,
-    thumbs: &mut ThumbCache,
-) -> ProductionAction {
-    let _ = thumbs;
-    let ctx = ui.ctx().clone();
+fn refresh_badge(ctx: &egui::Context, view: &ProductionPanelView) {
     let badge = if view
         .productions
         .iter()
@@ -304,126 +288,21 @@ pub fn draw_dock(
         None
     };
     ctx.data_mut(|data| data.insert_temp(Id::new(BADGE_ID), badge));
-
-    let mut action = ProductionAction::None;
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.add_space(12.0);
-        ui.label(RichText::new("工作流").strong().size(13.0).color(TEXT));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_space(10.0);
-            if button(ui, "AI 设置", Btn::Ghost, true).clicked() {
-                action = ProductionAction::OpenSettings;
-            }
-        });
-    });
-    ui.add_space(4.0);
-    let rect = ui.max_rect();
-    ui.painter().line_segment(
-        [
-            egui::pos2(rect.left(), ui.cursor().top()),
-            egui::pos2(rect.right(), ui.cursor().top()),
-        ],
-        egui::Stroke::new(1.0_f32, BORDER),
-    );
-    egui::ScrollArea::vertical()
-        .id_salt("workflow_dock_list")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            egui::Frame::NONE
-                .inner_margin(egui::Margin {
-                    left: 12,
-                    right: 14,
-                    top: 8,
-                    bottom: 16,
-                })
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    if let Some(problem) = &view.service_problem {
-                        ui.label(RichText::new(problem).size(12.0).color(WARN));
-                        ui.add_space(8.0);
-                    }
-                    if ui
-                        .add_sized(
-                            [ui.available_width(), 34.0],
-                            egui::Button::new(
-                                RichText::new("新建工作流")
-                                    .size(13.0)
-                                    .color(egui::Color32::from_rgb(0x08, 0x14, 0x1c)),
-                            )
-                            .fill(BRAND)
-                            .stroke(egui::Stroke::new(1.0_f32, BRAND))
-                            .corner_radius(egui::CornerRadius::ZERO),
-                        )
-                        .clicked()
-                    {
-                        action = ProductionAction::WorkflowCreate;
-                    }
-                    ui.add_space(12.0);
-                    if view.workflows.is_empty() {
-                        ui.label(RichText::new("还没有工作流").size(13.0).color(MUTED));
-                    } else {
-                        let selected = selected_workflow(&ctx);
-                        for entry in &view.workflows {
-                            let next = draw_entry(ui, entry, selected.as_deref() == Some(&entry.extension_id));
-                            if next != ProductionAction::None {
-                                action = next;
-                            }
-                        }
-                    }
-                });
-        });
-    action
 }
 
-fn draw_entry(ui: &mut Ui, entry: &WorkflowEntryView, selected: bool) -> ProductionAction {
-    let mut action = ProductionAction::None;
-    let tag = if entry.origin_user { "我的" } else { "内置" };
-    let fill = if selected {
-        egui::Color32::from_rgb(0x1d, 0x30, 0x3d)
-    } else {
-        PANEL_2
-    };
-    let stroke = if selected { BRAND } else { BORDER };
-    let row_w = ui.available_width();
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        let open_w = if entry.origin_user {
-            (row_w - 58.0).max(80.0)
-        } else {
-            row_w
-        };
-        let response = ui.add_sized(
-            [open_w, 40.0],
-            egui::Button::new(
-                RichText::new(format!("{}  ·  {}", entry.name, tag))
-                    .size(13.5)
-                    .color(TEXT),
-            )
-            .fill(fill)
-            .stroke(egui::Stroke::new(1.0_f32, stroke))
-            .corner_radius(egui::CornerRadius::ZERO),
-        );
-        let status = entry_status_color(entry.status);
-        let dot = egui::pos2(response.rect.right() - 14.0, response.rect.center().y);
-        ui.painter().circle_filled(dot, 3.5, status);
-        if response.clicked() {
-            set_selected_workflow(ui.ctx(), Some(entry.extension_id.clone()));
-            workflow::open(ui.ctx(), entry.extension_id.clone());
-        }
-        if entry.origin_user
-            && button(ui, "删除", Btn::Danger, true).clicked()
-        {
-            action = ProductionAction::WorkflowDelete {
-                extension: entry.extension_id.clone(),
-            };
-        }
-    });
-    ui.add_space(6.0);
-    action
+/// Draw the Agent chat dock into `ui` (its rect is [`dock_rect`]).
+pub fn draw_dock(
+    ui: &mut Ui,
+    view: &ProductionPanelView,
+    agent: &mut AgentView,
+    thumbs: &mut ThumbCache,
+) -> AgentAction {
+    let _ = thumbs;
+    refresh_badge(ui.ctx(), view);
+    agent::draw_dock(ui, agent)
 }
 
-/// Draw fullscreen canvas + handle `~` / Esc. Call every editor frame.
+/// Workflow fullscreen UI retired — always closed, no `~` graph editor.
 pub fn draw_workflow_overlay(
     ctx: &egui::Context,
     panel: &ProductionPanelView,
@@ -431,14 +310,11 @@ pub fn draw_workflow_overlay(
     title: &str,
     thumbs: &mut ThumbCache,
 ) -> ProductionAction {
-    workflow::handle_hotkeys(ctx, panel);
-    let Some(extension_id) = workflow::open_id(ctx) else {
-        return ProductionAction::None;
-    };
-    match graph {
-        Some(graph) => workflow::draw_fullscreen(ctx, &extension_id, title, graph, thumbs),
-        None => workflow::draw_unavailable(ctx, &extension_id, title),
+    let _ = (panel, graph, title, thumbs);
+    if workflow::is_open(ctx) {
+        workflow::close(ctx);
     }
+    ProductionAction::None
 }
 
 pub use workflow::{

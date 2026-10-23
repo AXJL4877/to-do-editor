@@ -101,7 +101,9 @@ impl Workspace {
             AppAction::Editor(command) => match self.editor.as_mut() {
                 Some(editor) => {
                     // Placement pauses during a gesture; resume as soon as the
-                    // user commits or cancels so emit results do not sit idle.
+                    // user commits or cancels so a live workflow can keep
+                    // placing. Idle sessions are disarmed — this only syncs
+                    // deletion tombstones, never forces adopt/Place.
                     let resume_placement = matches!(
                         command,
                         EditorCommand::CommitEdit | EditorCommand::CancelEdit

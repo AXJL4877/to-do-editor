@@ -13,6 +13,7 @@ use todo_ai::{LanguageEndpoint,
 use todo_application::{
     LocalRunId, Pcm16, ProductionOutput, ProductionSetup, ProductionTask, Recipe, TaskState,
 };
+use todo_core::Project;
 use todo_workflow::{
     copy_package, create_blank_workflow, Budget, Extension, Origin, PoolOptions, Registry, RunId,
     RunRequest, RuntimePaths, WorkerEvent, WorkerPool,
@@ -173,6 +174,11 @@ pub struct ProductionHost {
     /// 多模态任务 key → 调用 id（视觉结果回填）。
     workflow_keys: HashMap<TaskKey, String>,
     workflow_results: HashMap<String, Result<serde_json::Value, String>>,
+    /// Local host calls (timeline strip, …) finish off the UI thread.
+    local_call_tx: mpsc::Sender<(String, Result<serde_json::Value, String>)>,
+    local_call_rx: mpsc::Receiver<(String, Result<serde_json::Value, String>)>,
+    /// `placement_ready` call ids waiting for adopt/Place to go idle.
+    placement_waits: HashMap<String, Instant>,
     /// Items emitted by a graph between UI frames. They are queued so a
     /// synchronous `start_workflow` call cannot lose the first local emit.
     workflow_pending_items: Vec<ProductionOutput>,
@@ -533,6 +539,7 @@ impl ProductionHost {
             })
             .map_err(|e| e.to_string())?;
         let bridge = ServiceBridge::new(defaults.clone(), &root, workers.handle());
+        let (local_call_tx, local_call_rx) = mpsc::channel();
         let built: Result<Self, String> = Ok(Self {
             root,
             ai,
@@ -555,6 +562,9 @@ impl ProductionHost {
             models_error: None,
             workflow_keys: HashMap::new(),
             workflow_results: HashMap::new(),
+            local_call_tx,
+            local_call_rx,
+            placement_waits: HashMap::new(),
             workflow_pending_items: Vec::new(),
             workflow_logs: HashMap::new(),
             workflow_cache: WorkflowCache::default(),
@@ -658,11 +668,19 @@ impl ProductionHost {
         Ok(())
     }
 
-    /// Ask the configured chat model for a structured editing plan. The
-    /// application executes the returned edits through Workspace::control;
-    /// the host only owns the provider call and its retry/journal behavior.
-    /// One request of the built-in director. The director owns prompts and
-    /// parsing; the host only routes the capability call and reports the text.
+    /// Model id bound for language / tool-agent chat.
+    pub fn language_model(&self) -> Option<String> {
+        self.ai
+            .binding(Capability::Language)
+            .map(|binding| binding.model.clone())
+            .filter(|model| !model.trim().is_empty())
+            .or_else(|| {
+                self.ai
+                    .binding(Capability::Language)
+                    .map(|_| "deepseek-flash".into())
+            })
+    }
+
     pub fn agent_task(&mut self, request_id: String, request: TaskRequest) -> Result<(), String> {
         let capability = request.capability();
         let provider = self
@@ -1105,12 +1123,30 @@ impl ProductionHost {
         })
     }
 
-    pub fn poll(&mut self) -> Vec<HostReport> {
+    /// `project` is the open editor project — required for `timeline_strip`.
+    /// `placement_inflight` / `placement_block` come from the workspace after
+    /// the previous frame applied emits (so the gate sees real timeline state).
+    pub fn poll(
+        &mut self,
+        project: Option<&Project>,
+        placement_inflight: bool,
+        placement_block: Option<String>,
+    ) -> Vec<HostReport> {
         let mut reports = Vec::new();
+        // Emits drained this frame are applied only after poll returns — keep
+        // the placement gate closed until the next frame sees real timeline state.
+        let emits_this_frame = !self.workflow_pending_items.is_empty();
         reports.extend(
             self.workflow_pending_items
                 .drain(..)
                 .map(HostReport::Output),
+        );
+        while let Ok((call_id, result)) = self.local_call_rx.try_recv() {
+            self.workflow_results.insert(call_id, result);
+        }
+        self.settle_placement_waits(
+            placement_inflight || emits_this_frame,
+            placement_block.as_deref(),
         );
         if self
             .connection_test_started
@@ -1565,8 +1601,52 @@ impl ProductionHost {
             };
             reports.push(HostReport::Output(output));
         }
-        self.pump_workflows();
+        self.pump_workflows(project);
+        // Emits queued during this pump land next frame; do not release the
+        // gate in the same poll or strip would race empty timeline.
         reports
+    }
+
+    /// Complete parked `placement_ready` calls once the timeline is quiet.
+    fn settle_placement_waits(&mut self, inflight: bool, block: Option<&str>) {
+        if self.placement_waits.is_empty() {
+            return;
+        }
+        if let Some(message) = block {
+            let ids: Vec<String> = self.placement_waits.keys().cloned().collect();
+            for id in ids {
+                self.placement_waits.remove(&id);
+                self.workflow_results
+                    .insert(id, Err(message.to_owned()));
+            }
+            return;
+        }
+        if inflight || !self.workflow_pending_items.is_empty() {
+            // Still adopting / place pending / emits not yet handed to workspace.
+            let timed_out: Vec<String> = self
+                .placement_waits
+                .iter()
+                .filter(|(_, started)| started.elapsed().as_secs() > 600)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in timed_out {
+                self.placement_waits.remove(&id);
+                self.workflow_results.insert(
+                    id,
+                    Err("等待入轨超时（10 分钟）；请检查素材路径或点重试".into()),
+                );
+            }
+            return;
+        }
+        let ids: Vec<String> = self.placement_waits.keys().cloned().collect();
+        for id in ids {
+            self.placement_waits.remove(&id);
+            self.append_workflow_log(&id, "· 入轨已落地，放行");
+            self.workflow_results.insert(
+                id,
+                Ok(serde_json::json!({ "trigger": true })),
+            );
+        }
     }
 
     fn finish_run(&mut self, run: LocalRunId, pool_run: RunId) {
@@ -1660,6 +1740,7 @@ impl ProductionHost {
         edits: &BTreeMap<String, BTreeMap<String, String>>,
         run_id: LocalRunId,
         workdir: PathBuf,
+        project: Option<&Project>,
     ) -> Result<(), String> {
         let extension = self
             .registry
@@ -1715,7 +1796,7 @@ impl ProductionHost {
                 attempts: HashMap::new(),
             },
         );
-        self.pump_workflows();
+        self.pump_workflows(project);
         self.flush_workflow_log(extension_id);
         // 秒结束时把原因抛给 UI（终端里也会有 ✗ 行）。
         if !self.workflow_live.contains_key(extension_id) {
@@ -1840,6 +1921,8 @@ impl ProductionHost {
             self.ai.cancel(key);
         }
         self.workflow_keys.retain(|_, call_id| !call_id.starts_with(&prefix));
+        self.placement_waits
+            .retain(|call_id, _| !call_id.starts_with(&prefix));
         let mut report = run.job.report().clone();
         for waiting in run.job.waiting_nodes() {
             report.nodes.push(todo_workflow::runner::NodeRun {
@@ -1910,7 +1993,7 @@ impl ProductionHost {
         }
     }
 
-    fn pump_workflows(&mut self) {
+    fn pump_workflows(&mut self, project: Option<&Project>) {
         if self.workflow_live.is_empty() {
             return;
         }
@@ -2008,7 +2091,8 @@ impl ProductionHost {
                             self.workflow_seq += 1;
                             let call_id =
                                 format!("wf-{}-{}-{}", run.run_id, node, self.workflow_seq);
-                            let via = self.dispatch_workflow_call(run, call, &call_id);
+                            let via =
+                                self.dispatch_workflow_call(run, call, &call_id, project);
                             run.calls.insert(node, (call_id, via, Instant::now()));
                         }
                         Self::flush_live_log(run);
@@ -2078,12 +2162,14 @@ impl ProductionHost {
         }
     }
 
-    /// `true` when the call went to the AI router (vision), `false` for the bridge.
+    /// `true` when the call settles via `workflow_results` (AI router or local
+    /// thread), `false` for the bridge.
     fn dispatch_workflow_call(
         &mut self,
         run: &WorkflowLive,
         call: todo_workflow::runner::RequestedCall,
         call_id: &str,
+        project: Option<&Project>,
     ) -> bool {
         use todo_workflow::workflow::protocol::ServiceCall;
         use todo_workflow::runner::RequestedCall;
@@ -2180,6 +2266,80 @@ impl ProductionHost {
                     .ai
                     .submit(todo_production::TaskRequest::Multimodal(request));
                 self.workflow_keys.insert(key, call_id.to_owned());
+                true
+            }
+            RequestedCall::WaitPlacement => {
+                self.append_workflow_log(call_id, "· 等待入轨落地…");
+                self.placement_waits
+                    .insert(call_id.to_owned(), Instant::now());
+                true
+            }
+            RequestedCall::TimelineStrip {
+                every_frames,
+                max_frames,
+                thumb_height,
+                range,
+            } => {
+                let Some(project) = project.cloned() else {
+                    self.append_workflow_log(call_id, "· 时间轴截帧失败：没有打开的工程");
+                    let _ = self.local_call_tx.send((
+                        call_id.to_owned(),
+                        Err("时间轴截帧需要先打开工程".into()),
+                    ));
+                    return true;
+                };
+                let range = crate::adapters::frame::StripRange::parse(&range);
+                self.append_workflow_log(
+                    call_id,
+                    &format!(
+                        "· 时间轴截帧：每 {every_frames} 帧 / 最多 {max_frames} 张（{:?}）",
+                        range
+                    ),
+                );
+                let root = self.root.clone();
+                let workdir = run.workdir.clone();
+                let out_dir = workdir.join("timeline_strip").join(call_id);
+                let tx = self.local_call_tx.clone();
+                let call_id = call_id.to_owned();
+                std::thread::spawn(move || {
+                    let rel = |abs: &std::path::Path| -> Result<String, String> {
+                        abs.strip_prefix(&workdir)
+                            .map(|p| p.to_string_lossy().replace('\\', "/"))
+                            .map_err(|_| format!("截帧输出不在工作目录内：{}", abs.display()))
+                    };
+                    let result = crate::adapters::frame::render_timeline_strip(
+                        &root,
+                        &project,
+                        &out_dir,
+                        every_frames,
+                        max_frames,
+                        thumb_height,
+                        range,
+                    )
+                    .and_then(|strip| {
+                        let frames: Result<Vec<serde_json::Value>, String> = strip
+                            .frames
+                            .iter()
+                            .map(|frame| {
+                                Ok(serde_json::json!({
+                                    "path": rel(&frame.png)?,
+                                    "mime": "image/png",
+                                    "time": frame.time,
+                                }))
+                            })
+                            .collect();
+                        Ok(serde_json::json!({
+                            "path": rel(&strip.path)?,
+                            "mime": "image/png",
+                            "width": strip.width,
+                            "height": strip.height,
+                            "fps": strip.fps,
+                            "everyFrames": strip.every_frames,
+                            "frames": frames?,
+                        }))
+                    });
+                    let _ = tx.send((call_id, result));
+                });
                 true
             }
         }

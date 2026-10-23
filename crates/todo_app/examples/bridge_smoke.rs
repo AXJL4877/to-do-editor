@@ -1,11 +1,12 @@
-//! 真机 Agent Bridge 冒烟：读 `cache/agent-bridge.json`，JSONL 发命令并打印回包。
+//! 真机 Agent Bridge 冒烟：用令牌或发现文件连上，JSONL 发命令并打印回包。
 //!
-//! 前置：本机已打开 `todo_app` 且工程已打开。
+//! 前置：本机已打开 `todo_app` 且工程已打开；工具栏点「令牌」可复制 `todo_…`。
 //!
 //! ```text
 //! cargo run -p todo_app --example bridge_smoke
+//! cargo run -p todo_app --example bridge_smoke -- todo_abc123 get_context
+//! cargo run -p todo_app --example bridge_smoke -- current list_extensions
 //! cargo run -p todo_app --example bridge_smoke -- list_extensions
-//! cargo run -p todo_app --example bridge_smoke -- get_production_context
 //! cargo run -p todo_app --example bridge_smoke -- start_dry studio.spongebob-koubo
 //! ```
 use serde_json::{json, Value};
@@ -13,6 +14,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::time::Duration;
+use todo_app::adapters::agent_bridge;
 
 fn connect(host: &str, port: u16) -> TcpStream {
     let mut last = None;
@@ -118,11 +120,19 @@ fn summarize(label: &str, reply: &Value) {
     }
 }
 
-fn main() {
-    let mut args = std::env::args().skip(1);
-    let command = args.next().unwrap_or_else(|| "get_context".into());
-    let extra = args.next();
-
+fn load_discovery(token_hint: Option<&str>) -> Value {
+    if let Some(token) = token_hint {
+        return agent_bridge::resolve_token(token).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(2);
+        });
+    }
+    if let Ok(token) = std::env::var("TODO_AGENT_TOKEN") {
+        return agent_bridge::resolve_token(&token).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(2);
+        });
+    }
     let root = std::env::var_os("TODO_REPO_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
@@ -131,16 +141,40 @@ fn main() {
         Ok(text) => text,
         Err(error) => {
             eprintln!(
-                "读不到 {}：{error}\n请先启动 todo_app 并打开工程，等待 cache/agent-bridge.json 写出。",
+                "读不到 {}：{error}\n请先启动 todo_app 并打开工程；或传入令牌 todo_… / current。",
                 endpoint.display()
             );
             std::process::exit(2);
         }
     };
-    let discovery: Value = serde_json::from_str(&text).unwrap_or_else(|e| {
+    serde_json::from_str(&text).unwrap_or_else(|e| {
         eprintln!("解析 bridge 发现文件失败：{e}\n{text}");
         std::process::exit(1);
-    });
+    })
+}
+
+fn main() {
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let token_hint = args
+        .first()
+        .filter(|a| a.starts_with("todo_") || a.eq_ignore_ascii_case("current"))
+        .cloned();
+    if token_hint.is_some() {
+        args.remove(0);
+    }
+    let discovery = load_discovery(token_hint.as_deref());
+    let command = args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "get_context".into());
+    let extra = args.get(1).cloned();
+
+    if let Some(token) = discovery["token"].as_str() {
+        println!(
+            "# token={token} project={} sessionId={} revision={}",
+            discovery["projectName"], discovery["sessionId"], discovery["revision"]
+        );
+    }
     let host = discovery["host"].as_str().unwrap_or("127.0.0.1").to_owned();
     let port = discovery["port"].as_u64().unwrap_or(0) as u16;
     if port == 0 {

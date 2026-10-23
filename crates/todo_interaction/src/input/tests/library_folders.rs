@@ -240,3 +240,76 @@ fn removing_unused_media_clears_the_deleted_row_selection() {
     assert!(editor.project().media.is_empty());
     assert!(editor.view().library.selected_id.is_none());
 }
+
+#[test]
+fn library_select_all_keeps_library_focus_and_selects_visible_media() {
+    let mut project = create_project(None, None, None, None, None);
+    project.media.push(media("a", None));
+    project.media.push(media("b", None));
+    let mut editor = TestEditor::new(project, "library-select-all");
+    editor.apply(Intent::LibrarySelect {
+        id: "a".into(),
+        additive: false,
+        range: false,
+    });
+    assert_eq!(editor.view().focus, EditorFocus::Library);
+    editor.apply(Intent::SelectAll);
+    let view = editor.view();
+    assert_eq!(view.focus, EditorFocus::Library);
+    assert_eq!(view.library.selected_ids, vec!["a", "b"]);
+}
+
+#[test]
+fn library_select_all_includes_media_inside_collapsed_bins() {
+    let mut project = create_project(None, None, None, None, None);
+    project = create_folder(project, "bin".into(), "Bin".into(), None).unwrap();
+    project.media.push(media("hidden", Some("bin")));
+    project.media.push(media("root", None));
+    let mut editor = TestEditor::new(project, "select-all-collapsed");
+    editor.apply(Intent::LibrarySelect {
+        id: "root".into(),
+        additive: false,
+        range: false,
+    });
+    editor.apply(Intent::SelectAll);
+    let view = editor.view();
+    assert_eq!(view.focus, EditorFocus::Library);
+    assert_eq!(view.library.selected_ids, vec!["hidden", "root"]);
+}
+
+#[test]
+fn library_clear_selection_only_clears_media_rows() {
+    let mut project = create_project(None, None, None, None, None);
+    project.media.push(media("a", None));
+    let mut editor = TestEditor::new(project, "library-clear");
+    editor.apply(Intent::LibrarySelect {
+        id: "a".into(),
+        additive: false,
+        range: false,
+    });
+    editor.apply(Intent::ClearSelection);
+    let view = editor.view();
+    assert_eq!(view.focus, EditorFocus::Library);
+    assert!(view.library.selected_ids.is_empty());
+    assert!(view.library.selected_id.is_none());
+}
+
+#[test]
+fn cascading_multi_delete_removes_referenced_media() {
+    let mut editor = TestEditor::new(with_clip(), "cascade-multi");
+    editor.apply(Intent::LibrarySelect {
+        id: "m1".into(),
+        additive: false,
+        range: false,
+    });
+    editor.apply(Intent::RemoveMedia {
+        media_id: "m1".into(),
+        cascade: true,
+    });
+    assert!(editor.project().media.is_empty());
+    assert!(editor
+        .project()
+        .tracks
+        .iter()
+        .all(|track| track.clips.is_empty()));
+}

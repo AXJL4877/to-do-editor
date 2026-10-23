@@ -143,6 +143,9 @@ pub fn draw_editor(
     );
     assets::header(ui, left_header);
     let left_body = Rect::from_min_max(egui::pos2(library_rect.left(), left_header.bottom()), library_rect.max);
+    // Fresh each frame so a prior Media-tab shortcut does not suppress the
+    // global shortcut path after switching left tabs.
+    library::clear_library_keys_handled(ui.ctx());
     match assets::left_tab(ui.ctx()) {
         assets::LeftTab::Media => {
             assets::set_dock(ui.ctx(), None);
@@ -243,7 +246,7 @@ pub fn draw_editor(
     }
 }
 
-/// Tabs over the right-hand column: clip properties or the AI production dock.
+/// Tabs over the right-hand column: clip properties or the Agent dock.
 fn side_header(ui: &mut Ui, rect: Rect, tab: production::SideTab) {
     let painter = ui.painter_at(rect);
     painter.line_segment(
@@ -254,7 +257,7 @@ fn side_header(ui: &mut Ui, rect: Rect, tab: production::SideTab) {
     let badge = production::dock_badge(ui.ctx());
     for (label, target) in [
         ("属性", production::SideTab::Properties),
-        ("工作流", production::SideTab::Production),
+        ("Agent", production::SideTab::Production),
     ] {
         let galley =
             ui.painter()

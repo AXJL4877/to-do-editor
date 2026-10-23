@@ -1,6 +1,6 @@
 # AI 工作流控制面 v1
 
-更新：2026-10-22（刀5：`import_extension`）。与 UI 同源：外部 Agent / 内置 Agent / 成片面板共用 `Workspace::control` 与桌面 `ProductionHost`，禁止旁路改 `production.json`。
+更新：2026-10-22（刀5：`import_extension`）。与 UI 同源：外部 Agent（Bridge）与桌面 `ProductionHost` 共用 `Workspace::control`，禁止旁路改 `production.json`。
 
 权威相关文档：`agent-bridge.md`、`shared-control.md`、`production-pipeline.md`、`extension-spec.md`。
 

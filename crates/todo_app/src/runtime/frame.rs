@@ -42,6 +42,7 @@ impl eframe::App for App {
         BG.to_normalized_gamma_f32()
     }
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.sync_agent_bridge_token(ctx);
         self.poll_agent_bridge(ctx);
         self.poll_agent_render(ctx);
         self.poll_director(ctx);
@@ -113,10 +114,16 @@ impl eframe::App for App {
             let update = self.workspace.on_event(event);
             self.handle(update, ctx);
         }
+        let project = self
+            .workspace
+            .editor()
+            .map(|editor| editor.project().clone());
+        let placement_inflight = self.workspace.placement_inflight();
+        let placement_block = self.workspace.placement_gate_block_reason();
         let reports = self
             .production
             .as_mut()
-            .map(|host| host.poll())
+            .map(|host| host.poll(project.as_ref(), placement_inflight, placement_block))
             .unwrap_or_default();
         for report in reports {
             match self.ai_report(report) {
@@ -226,6 +233,7 @@ impl eframe::App for App {
         let production_view =
             (self.workspace.route() == Route::Editor).then(|| self.production_panel());
         let mut production_action = todo_ui::ProductionAction::None;
+        let mut agent_action = todo_ui::AgentAction::None;
         let mut assets_action = AssetsAction::None;
         let mut assets_tab = LeftTab::Media;
         egui::CentralPanel::default()
@@ -252,8 +260,12 @@ impl eframe::App for App {
                                     .max_rect(rect),
                             );
                             dock.set_clip_rect(rect);
-                            production_action =
-                                draw_production_dock(&mut dock, panel, &mut self.thumbs);
+                            agent_action = draw_production_dock(
+                                &mut dock,
+                                panel,
+                                &mut self.agent_view,
+                                &mut self.thumbs,
+                            );
                         }
                     }
                     if let Some((rect, tab)) = assets_dock(ui.ctx()) {
@@ -314,6 +326,7 @@ impl eframe::App for App {
             self.workspace.close_prompt(),
             self.workspace.saving(),
         ));
+        self.handle_agent_action(agent_action, ctx);
         if let Some(panel) = production_view.as_ref() {
             let open_id = workflow_open_id(ctx);
             let graph = open_id.as_ref().and_then(|id| {
@@ -347,8 +360,8 @@ impl eframe::App for App {
         }
         let settings = draw_ai_settings(ctx, &mut self.ai_settings);
         self.ai_settings_action(settings);
-        let agent_action = draw_agent(ctx, &mut self.agent_view);
-        self.handle_agent_action(agent_action, ctx);
+        // Modal Agent retired; chat lives in the right dock.
+        let _ = draw_agent(ctx, &mut self.agent_view);
         match production_action {
             todo_ui::ProductionAction::OpenSettings => todo_ui::set_ai_settings_open_ctx(ctx, true),
             todo_ui::ProductionAction::Start {
@@ -455,37 +468,44 @@ impl eframe::App for App {
                                         .find(|s| s.extension == extension)
                                         .map(|s| s.id)
                                         .unwrap_or_default();
-                                    let host = self.production.as_mut().unwrap();
                                     // Durable productions/.../work — never cache/workflow-runs.
-                                    match host.production_workdir(&project, &production_id) {
-                                        Err(e) => Err(e),
-                                        Ok(durable_rel) => {
-                                            match host.workdir_path(&project, &production_id) {
-                                                Err(e) => Err(e),
-                                                Ok(durable_abs) => {
-                                                    let _ =
-                                                        std::fs::create_dir_all(&durable_abs);
-                                                    if let Err(e) = self
-                                                        .workspace
-                                                        .set_production_workdir(
-                                                            &production_id,
-                                                            durable_rel,
-                                                        )
-                                                    {
-                                                        Err(e)
-                                                    } else {
-                                                        host.start_workflow(
-                                                            &extension,
-                                                            script,
-                                                            &edits,
-                                                            run_id,
-                                                            durable_abs,
-                                                        )
-                                                        .map(|()| {
-                                                            host.workflow_log_path(&extension)
-                                                        })
-                                                    }
-                                                }
+                                    let durable = self.production.as_ref().and_then(|host| {
+                                        let rel =
+                                            host.production_workdir(&project, &production_id).ok()?;
+                                        let abs =
+                                            host.workdir_path(&project, &production_id).ok()?;
+                                        Some((rel, abs))
+                                    });
+                                    match durable {
+                                        None => Err("AI 服务没有启动".into()),
+                                        Some((durable_rel, durable_abs)) => {
+                                            let _ = std::fs::create_dir_all(&durable_abs);
+                                            if let Err(e) = self.workspace.set_production_workdir(
+                                                &production_id,
+                                                durable_rel,
+                                            ) {
+                                                Err(e)
+                                            } else {
+                                                // Re-place items kept across bind
+                                                // before the graph runs; cached
+                                                // runs may never re-emit.
+                                                let placed =
+                                                    self.workspace.advance_productions();
+                                                self.handle(placed, ctx);
+                                                let host = self.production.as_mut().unwrap();
+                                                let project = self
+                                                    .workspace
+                                                    .editor()
+                                                    .map(|e| e.project().clone());
+                                                host.start_workflow(
+                                                    &extension,
+                                                    script,
+                                                    &edits,
+                                                    run_id,
+                                                    durable_abs,
+                                                    project.as_ref(),
+                                                )
+                                                .map(|()| host.workflow_log_path(&extension))
                                             }
                                         }
                                     }

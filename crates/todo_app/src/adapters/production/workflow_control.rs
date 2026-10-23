@@ -432,11 +432,12 @@ fn start_workflow_like_ui(
         return Err(ControlError::new("workflow_invalid", &validation.message));
     }
     let script = script_from_input(input);
-    let project = workspace
-        .editor()
-        .ok_or_else(|| ControlError::new("project_required", "请先打开一个工程"))?
-        .project_name()
-        .to_owned();
+    let (project, project_doc) = {
+        let editor = workspace
+            .editor()
+            .ok_or_else(|| ControlError::new("project_required", "请先打开一个工程"))?;
+        (editor.project_name().to_owned(), editor.project().clone())
+    };
     let edits = edits_from_params(params);
     let version = host
         .extension_version(extension_id)
@@ -465,8 +466,19 @@ fn start_workflow_like_ui(
     workspace
         .set_production_workdir(&production_id, durable_rel.clone())
         .map_err(|e| ControlError::new("workdir_failed", &e))?;
-    host.start_workflow(extension_id, script, &edits, run_id, durable_abs)
-        .map_err(|e| ControlError::new("start_failed", &e))?;
+    // Place items kept across bind before the graph runs (cached graphs may
+    // finish without re-emitting). Return adopt/place effects so the bridge
+    // host applies them.
+    let place = workspace.advance_productions();
+    host.start_workflow(
+        extension_id,
+        script,
+        &edits,
+        run_id,
+        durable_abs,
+        Some(&project_doc),
+    )
+    .map_err(|e| ControlError::new("start_failed", &e))?;
     let log_path = host
         .workflow_log_path(extension_id)
         .map(|p| p.to_string_lossy().into_owned());
@@ -478,7 +490,7 @@ fn start_workflow_like_ui(
             workdir: durable_rel,
             log_path,
         },
-        AppUpdate::default(),
+        place,
     ))
 }
 

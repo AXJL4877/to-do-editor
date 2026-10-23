@@ -227,6 +227,32 @@ pub fn visible_media_ids(nodes: &[ExplorerNode]) -> Vec<String> {
     out
 }
 
+/// Media ids Ctrl+A should select: every match under the current search, or
+/// every media in the project when not searching. Collapsed bins still count —
+/// otherwise SelectAll looks like a no-op when folders are closed.
+pub fn selectable_media_ids(project: &Project, query: &str) -> Vec<String> {
+    let query = query.trim().to_lowercase();
+    let mut media: Vec<&todo_core::MediaItem> = if query.is_empty() {
+        project.media.iter().collect()
+    } else {
+        project
+            .media
+            .iter()
+            .filter(|item| {
+                item.name.to_lowercase().contains(&query)
+                    || item
+                        .path
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&query)
+            })
+            .collect()
+    };
+    media.sort_by_key(|item| item.name.to_lowercase());
+    media.into_iter().map(|item| item.id.clone()).collect()
+}
+
 fn collect_visible_media_ids(nodes: &[ExplorerNode], out: &mut Vec<String>) {
     for node in nodes {
         match node {

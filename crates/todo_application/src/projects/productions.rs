@@ -84,6 +84,42 @@ impl Workspace {
             .collect()
     }
 
+    /// True while adopt is in flight, a place batch is still pending, or the
+    /// editor is mid-gesture (placement paused). Used by `placement_ready`.
+    pub fn placement_inflight(&self) -> bool {
+        if !self.productions.adopting.is_empty() {
+            return true;
+        }
+        if !self.productions.rejected.is_empty() {
+            // ApplyGenerated stuck — gate must not pass as "ready".
+            return true;
+        }
+        let Some(editor) = self.editor.as_ref() else {
+            return false;
+        };
+        if editor.transaction_active() {
+            return true;
+        }
+        for session in self.productions.sessions.values() {
+            if !session.placement_armed() {
+                continue;
+            }
+            let plan = session.placement_plan(editor.project());
+            if !plan.adopt.is_empty() || !plan.edits.is_empty() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Human reason when [`Self::placement_inflight`] is stuck on a reject.
+    pub fn placement_gate_block_reason(&self) -> Option<String> {
+        if self.productions.rejected.is_empty() {
+            return None;
+        }
+        Some("入轨已暂停（轨道锁定或上次 Place 失败），请解锁后点重试".into())
+    }
+
     pub fn production(&self, id: &str) -> Option<&Production> {
         self.productions
             .sessions
@@ -97,6 +133,10 @@ impl Workspace {
 
     /// Bind a canvas workflow run to a production session so emitted items
     /// reach placement. Returns the local run id the host must use.
+    ///
+    /// After the durable workdir is set, callers must [`Self::advance_productions`]
+    /// so items kept across the rerun are re-placed (cached graphs often finish
+    /// without re-emitting every item).
     pub fn bind_canvas_workflow(
         &mut self,
         extension: &str,
@@ -154,6 +194,12 @@ impl Workspace {
             );
             id
         };
+        // A new workflow run is an explicit retry of media adoption too. A
+        // previous run may have put paths in `unadoptable`; leaving them
+        // there makes the next placement pass silently skip every file even
+        // though the generated files are still present.
+        self.productions.unadoptable.clear();
+        self.productions.rejected.remove(&session_id);
         let session = self
             .productions
             .sessions
@@ -316,7 +362,7 @@ impl Workspace {
     }
 
     /// Start what can run and place what is ready.
-    pub(super) fn advance_productions(&mut self) -> AppUpdate {
+    pub fn advance_productions(&mut self) -> AppUpdate {
         let mut effects = Vec::new();
         for session in self.productions.sessions.values_mut() {
             effects.extend(
@@ -351,8 +397,30 @@ impl Workspace {
             if let Some(session) = self.productions.sessions.get_mut(&id) {
                 session.recover_stale_placement(editor.project());
             }
+            let armed = self
+                .productions
+                .sessions
+                .get(&id)
+                .is_some_and(|s| s.placement_armed());
             let session = &self.productions.sessions[&id];
-            let plan = session.placement_plan(editor.project());
+            let mut plan = session.placement_plan(editor.project());
+            if !armed {
+                // Library/timeline are independent of an idle workflow: never
+                // adopt or Place, only remember user deletions on the ledger.
+                plan.adopt.clear();
+                plan.edits.clear();
+                plan.placed.clear();
+                plan.positions.clear();
+                plan.transforms.clear();
+                plan.tombstones_cleared.clear();
+                if plan.is_empty() {
+                    continue;
+                }
+                if let Some(session) = self.productions.sessions.get_mut(&id) {
+                    session.placed(&plan);
+                }
+                continue;
+            }
             for file in &plan.adopt {
                 if !self.productions.adopting.contains(file)
                     && !self.productions.unadoptable.contains(file)
@@ -363,7 +431,18 @@ impl Workspace {
                     }
                 }
             }
+            let still_adopting = plan.adopt.iter().any(|file| {
+                self.productions.adopting.contains(file)
+                    || adopt.iter().any(|queued| queued == file)
+            }) || self
+                .productions
+                .adopting
+                .iter()
+                .any(|file| session.needs_media_path(file));
             if plan.is_empty() {
+                if let Some(session) = self.productions.sessions.get_mut(&id) {
+                    session.maybe_disarm_after_idle_place(still_adopting);
+                }
                 continue;
             }
             let signature = format!("{:?}", plan.edits);
@@ -414,6 +493,7 @@ impl Workspace {
                         .into_iter()
                         .map(Effect::Production),
                 );
+                session.maybe_disarm_after_idle_place(still_adopting);
             }
         }
         if !adopt.is_empty() {

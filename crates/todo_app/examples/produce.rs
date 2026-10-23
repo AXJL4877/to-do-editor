@@ -142,7 +142,7 @@ fn main() {
     // Extensions are self-checked in the background.
     let started = Instant::now();
     let (doc, setup) = loop {
-        let _ = run.host.poll();
+        let _ = run.host.poll(None, false, None);
         match run
             .host
             .create(&name, &style, &values, &script, canvas.clone())
@@ -163,7 +163,7 @@ fn main() {
     let mut finished: Option<Result<serde_json::Value, String>> = None;
     while finished.is_none() {
         run.drain();
-        for report in run.host.poll() {
+        for report in run.host.poll(None, false, None) {
             let HostReport::Output(output) = report else {
                 if let HostReport::Notice(message) = report {
                     eprintln!("notice: {message}");
@@ -196,7 +196,7 @@ fn main() {
     // Let the last placements and saves land.
     for _ in 0..40 {
         run.drain();
-        for report in run.host.poll() {
+        for report in run.host.poll(None, false, None) {
             if let HostReport::Output(output) = report {
                 run.pending.push(AppEvent::Production(output));
             }

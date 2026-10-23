@@ -1,5 +1,6 @@
 use super::*;
 use std::{
+    collections::{HashMap, VecDeque},
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -96,13 +97,40 @@ fn next_event(workers: &Workers) -> AppEvent {
         thread::sleep(Duration::from_millis(5));
     }
 }
-fn import_result(workers: &Workers, expected: Ticket) -> Result<MediaOutput, String> {
-    match next_event(workers) {
-        AppEvent::Media { ticket, result } => {
-            assert_eq!(ticket, expected);
-            result
+
+/// Parallel import workers may finish tickets out of submission order.
+struct MediaInbox {
+    pending: HashMap<(u64, u64), VecDeque<Result<MediaOutput, String>>>,
+}
+
+impl MediaInbox {
+    fn new() -> Self {
+        Self {
+            pending: HashMap::new(),
         }
-        event => panic!("expected media event: {event:?}"),
+    }
+
+    fn next(&mut self, workers: &Workers, expected: Ticket) -> Result<MediaOutput, String> {
+        let key = (expected.id, expected.session);
+        loop {
+            if let Some(queue) = self.pending.get_mut(&key) {
+                if let Some(result) = queue.pop_front() {
+                    if queue.is_empty() {
+                        self.pending.remove(&key);
+                    }
+                    return result;
+                }
+            }
+            match next_event(workers) {
+                AppEvent::Media { ticket, result } => {
+                    self.pending
+                        .entry((ticket.id, ticket.session))
+                        .or_default()
+                        .push_back(result);
+                }
+                event => panic!("expected media event: {event:?}"),
+            }
+        }
     }
 }
 
@@ -149,13 +177,16 @@ fn batch_failures_preserve_local_imports_completion_and_future_batches() {
             },
         )
         .unwrap();
-    assert!(import_result(&workers, first)
+    let mut inbox = MediaInbox::new();
+    assert!(inbox
+        .next(&workers, first)
         .unwrap_err()
         .contains(&missing.display().to_string()));
-    assert!(import_result(&workers, first)
+    assert!(inbox
+        .next(&workers, first)
         .unwrap_err()
         .contains(&corrupt.display().to_string()));
-    match import_result(&workers, first).unwrap() {
+    match inbox.next(&workers, first).unwrap() {
         MediaOutput::Imported(item) => {
             assert_eq!(item.name, "声音 一.wav");
             assert_eq!(item.has_audio, Some(true));
@@ -166,18 +197,18 @@ fn batch_failures_preserve_local_imports_completion_and_future_batches() {
         event => panic!("lost successful import: {event:?}"),
     }
     assert!(matches!(
-        import_result(&workers, first),
+        inbox.next(&workers, first),
         Ok(MediaOutput::ImportFinished)
     ));
     assert!(
-        matches!(import_result(&workers, second), Ok(MediaOutput::Imported(item)) if item.path.as_deref().unwrap().starts_with("data/future/media/"))
+        matches!(inbox.next(&workers, second), Ok(MediaOutput::Imported(item)) if item.path.as_deref().unwrap().starts_with("data/future/media/"))
     );
     assert!(matches!(
-        import_result(&workers, second),
+        inbox.next(&workers, second),
         Ok(MediaOutput::ImportFinished)
     ));
     assert!(matches!(
-        import_result(&workers, empty),
+        inbox.next(&workers, empty),
         Ok(MediaOutput::ImportFinished)
     ));
     assert_eq!(
@@ -186,6 +217,48 @@ fn batch_failures_preserve_local_imports_completion_and_future_batches() {
             .count(),
         1
     );
+}
+
+#[test]
+fn concurrent_adopts_complete_without_dropping_results() {
+    let directory = TestDirectory::new();
+    let workers = Workers::start(directory.path.clone());
+    let files: Vec<PathBuf> = (0..8)
+        .map(|i| {
+            let relative = format!("clip-{i}.wav");
+            directory.audio(&relative);
+            PathBuf::from(relative)
+        })
+        .collect();
+    let tickets: Vec<Ticket> = (0..files.len())
+        .map(|i| Ticket {
+            id: 100 + i as u64,
+            session: 1,
+        })
+        .collect();
+    for (ticket, file) in tickets.iter().zip(files.iter()) {
+        workers
+            .media(
+                *ticket,
+                MediaTask::Adopt {
+                    project: "reel".into(),
+                    files: vec![file.clone()],
+                },
+            )
+            .unwrap();
+    }
+    let mut inbox = MediaInbox::new();
+    let mut adopted = 0usize;
+    for ticket in &tickets {
+        match inbox.next(&workers, *ticket).unwrap() {
+            MediaOutput::Adopted(items) => {
+                assert_eq!(items.len(), 1);
+                adopted += 1;
+            }
+            other => panic!("expected Adopted: {other:?}"),
+        }
+    }
+    assert_eq!(adopted, files.len());
 }
 
 #[test]

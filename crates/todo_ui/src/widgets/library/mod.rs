@@ -91,8 +91,83 @@ pub(super) fn draw(ui: &mut Ui, vm: &EditorViewModel, thumbs: &mut ThumbCache) -
         .inner
 }
 
+fn library_keys_done_id() -> egui::Id {
+    egui::Id::new("todo_ui_library_keys_done")
+}
+
+/// Handle Ctrl+A / Delete before the search `TextEdit` is added — that widget
+/// swallows those keys while it holds egui keyboard focus.
+pub(super) fn clear_library_keys_handled(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(library_keys_done_id(), false));
+}
+
+fn library_shortcut_intents(ui: &Ui, vm: &EditorViewModel) -> Vec<Intent> {
+    let library_has_media =
+        !vm.library.selected_ids.is_empty() || vm.library.selected_id.is_some();
+    let library_panel = vm.focus == EditorFocus::Library;
+    if !library_panel && !library_has_media {
+        return Vec::new();
+    }
+    let intents = ui.input(|input| {
+        let mut intents = Vec::new();
+        let pointer_busy = input.pointer.any_pressed() || input.pointer.any_released();
+        let delete = !pointer_busy
+            && input.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::Key {
+                        key: egui::Key::Delete,
+                        pressed: true,
+                        ..
+                    }
+                )
+            });
+        let select_all = input.events.iter().any(|event| matches!(
+            event,
+            egui::Event::Key {
+                key: egui::Key::A,
+                pressed: true,
+                modifiers,
+                ..
+            } if (modifiers.ctrl || modifiers.command) && !modifiers.alt
+        ));
+        if library_has_media && delete {
+            let media_ids: Vec<String> = if !vm.library.selected_ids.is_empty() {
+                vm.library.selected_ids.clone()
+            } else if let Some(id) = &vm.library.selected_id {
+                vec![id.clone()]
+            } else {
+                Vec::new()
+            };
+            for media_id in media_ids {
+                intents.push(Intent::RemoveMedia {
+                    media_id,
+                    cascade: true,
+                });
+            }
+        } else if library_panel && delete {
+            if let Some(id) = &vm.library.selected_folder_id {
+                intents.push(Intent::LibraryDeleteFolder { id: id.clone() });
+            }
+        }
+        if library_panel && select_all {
+            intents.push(Intent::SelectAll);
+        }
+        intents
+    });
+    if !intents.is_empty() {
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(library_keys_done_id(), true));
+    }
+    intents
+}
+
+pub(super) fn library_keys_already_handled(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(library_keys_done_id()).unwrap_or(false))
+}
+
 fn draw_contents(ui: &mut Ui, vm: &EditorViewModel, thumbs: &mut ThumbCache) -> Vec<Intent> {
-    let mut intents = Vec::new();
+    let mut intents = library_shortcut_intents(ui, vm);
     let background = ui.interact(
         ui.max_rect(),
         ui.id().with("library_background"),
@@ -132,6 +207,7 @@ fn draw_contents(ui: &mut Ui, vm: &EditorViewModel, thumbs: &mut ThumbCache) -> 
     let search = crate::theme::with_input_radius(ui, |ui| {
         ui.add(
             egui::TextEdit::singleline(&mut query)
+                .id_salt("library_search")
                 .hint_text("搜索…")
                 .margin(egui::Margin::symmetric(6, 4))
                 .background_color(FIELD)
@@ -167,10 +243,25 @@ fn draw_contents(ui: &mut Ui, vm: &EditorViewModel, thumbs: &mut ThumbCache) -> 
             }
         });
 
-    if background.clicked() {
+    // Background is behind rows; still guard so a row click never also clears
+    // the media multi-selection via LibrarySelectFolder(None).
+    let row_changed_selection = intents.iter().any(|intent| {
+        matches!(
+            intent,
+            Intent::LibrarySelect { .. }
+                | Intent::LibrarySelectFolder(Some(_))
+                | Intent::LibraryToggleFolder(_)
+        )
+    });
+    if background.clicked() && !row_changed_selection {
         ui.ctx().data_mut(|d| d.remove::<RenameDraft>(rename_key()));
         intents.push(Intent::Focus(EditorFocus::Library));
         intents.push(Intent::LibrarySelectFolder(None));
+    }
+    // Row / blank clicks must release the search box, otherwise Delete and
+    // Ctrl+A stay swallowed by wants_keyboard_input().
+    if row_changed_selection || background.clicked() {
+        search.surrender_focus();
     }
 
     // F2 renames the selected media bin (same as Explorer).
@@ -207,6 +298,9 @@ fn draw_root(ui: &mut Ui, vm: &EditorViewModel) -> Vec<Intent> {
     icons::folder(ui.painter(), icon_rect(rect, x0 + 14.0), true);
     paint_name(ui, rect, x0 + 34.0, "项目根目录", MUTED, rect.right() - 6.0);
     if response.clicked() {
+        // Move egui focus away from the search field so Delete can act on
+        // the library selection on the following frame.
+        response.request_focus();
         intents.push(Intent::LibrarySelectFolder(None));
     }
     intents.extend(drop_on_folder(ui, &response, None));
@@ -358,6 +452,10 @@ fn draw_node(
             let preview = drop_preview(vm, &response, Some(id.as_str()));
 
             if !is_renaming && response.clicked() {
+                // Selecting a folder is an editor action, not text editing.
+                // Clear any lingering search/rename focus before shortcuts
+                // are collected for the next frame.
+                response.request_focus();
                 ui.ctx().data_mut(|d| d.remove::<RenameDraft>(rename_key()));
                 intents.push(Intent::Focus(EditorFocus::Library));
                 intents.push(Intent::LibrarySelectFolder(Some(id.clone())));
@@ -512,12 +610,21 @@ fn draw_media_leaf(
         entry.selected,
     ));
     if response.clicked() {
+        // A previous click in the search field must not suppress the Delete
+        // shortcut after selecting one or more media rows.
+        response.request_focus();
         intents.push(Intent::Focus(EditorFocus::Library));
         intents.push(select_media(item.id.clone(), ui));
     } else if response.drag_started() {
-        // Keep a multi-selection when dragging an already-selected row.
+        // Tiny mouse movement turns a Ctrl/Shift click into a drag; still
+        // honor multi-select modifiers. Plain drag of an unselected row
+        // selects it alone; drag of an already-selected row keeps the set.
+        response.request_focus();
         intents.push(Intent::Focus(EditorFocus::Library));
-        if !entry.selected {
+        let (additive, range) = click_modifiers(ui);
+        if additive || range {
+            intents.push(select_media(item.id.clone(), ui));
+        } else if !entry.selected {
             intents.push(Intent::LibrarySelect {
                 id: item.id.clone(),
                 additive: false,
@@ -531,6 +638,7 @@ fn draw_media_leaf(
         });
     }
     if response.secondary_clicked() {
+        response.request_focus();
         // Right-click keeps multi-selection if the row is already selected.
         intents.push(Intent::Focus(EditorFocus::Library));
         if !entry.selected {
@@ -564,27 +672,62 @@ fn draw_media_leaf(
             ui.close_menu();
         }
         ui.separator();
+        let multi = entry.selected && vm.library.selected_ids.len() > 1;
+        let targets: Vec<String> = if multi {
+            vm.library.selected_ids.clone()
+        } else {
+            vec![item.id.clone()]
+        };
+        let clear_label = if multi {
+            format!("从项目中清除选中的 {} 项", targets.len())
+        } else {
+            "从项目中清除".into()
+        };
+        let cascade_label = if multi {
+            format!("清除选中项并删除时间线引用…（{}）", targets.len())
+        } else {
+            "清除并删除时间线引用…".into()
+        };
+        let selected_views: Vec<_> = vm
+            .library
+            .items
+            .iter()
+            .filter(|item| targets.iter().any(|id| id == &item.item.id))
+            .collect();
+        let can_clear = if multi {
+            selected_views.is_empty() || selected_views.iter().any(|item| item.uses == 0)
+        } else {
+            entry.uses == 0
+        };
+        let can_cascade = if multi {
+            selected_views
+                .iter()
+                .any(|item| item.uses > 0 && !item.locked_references)
+        } else {
+            entry.uses > 0 && !entry.locked_references
+        };
         if ui
-            .add_enabled(entry.uses == 0, egui::Button::new("从项目中清除"))
+            .add_enabled(can_clear, egui::Button::new(clear_label))
             .clicked()
         {
-            intents.push(Intent::RemoveMedia {
-                media_id: item.id.clone(),
-                cascade: false,
-            });
+            for media_id in &targets {
+                intents.push(Intent::RemoveMedia {
+                    media_id: media_id.clone(),
+                    cascade: false,
+                });
+            }
             ui.close_menu();
         }
         if ui
-            .add_enabled(
-                entry.uses > 0 && !entry.locked_references,
-                egui::Button::new("清除并删除时间线引用…"),
-            )
+            .add_enabled(can_cascade, egui::Button::new(cascade_label))
             .clicked()
         {
-            intents.push(Intent::RemoveMedia {
-                media_id: item.id.clone(),
-                cascade: true,
-            });
+            for media_id in &targets {
+                intents.push(Intent::RemoveMedia {
+                    media_id: media_id.clone(),
+                    cascade: true,
+                });
+            }
             ui.close_menu();
         }
     });

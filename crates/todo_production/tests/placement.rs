@@ -270,3 +270,64 @@ fn a_clip_on_the_timeline_but_missing_from_the_record_is_adopted() {
     let (_, again) = round(p, &mut placement, &items(), false);
     assert!(again.is_empty(), "{again:?}");
 }
+
+#[test]
+fn emptying_the_timeline_does_not_auto_replace_without_rerun() {
+    let mut placement = Placement::default();
+    let (p, _) = round(project(), &mut placement, &items(), false);
+    let ids: Vec<_> = p
+        .tracks
+        .iter()
+        .flat_map(|track| track.clips.iter().map(|clip| clip.id.clone()))
+        .collect();
+    let p = execute_edit(
+        p,
+        EditCommand::DeleteClips {
+            clip_ids: ids,
+            ripple: false,
+        },
+    )
+    .unwrap();
+    let (p, planned) = round(p, &mut placement, &items(), false);
+    assert!(
+        planned.edits.is_empty(),
+        "deleting clips must not auto-place again without a workflow rerun: {planned:?}"
+    );
+    assert!(clip(&p, "plate").is_none());
+    assert!(!placement.tombstones.is_empty());
+}
+
+#[test]
+fn removing_library_media_does_not_auto_adopt_it_again() {
+    let mut placement = Placement::default();
+    let (p, _) = round(project(), &mut placement, &items(), false);
+    let p = todo_core::remove_media(p, "m-a.png", true).unwrap();
+    let (p, planned) = round(p, &mut placement, &items(), false);
+    assert!(planned.adopt.is_empty(), "{planned:?}");
+    assert!(planned.edits.is_empty(), "{planned:?}");
+    assert!(clip(&p, "b1/e1").is_none());
+    assert!(planned
+        .tombstones
+        .contains(&("b1/e1".to_string(), "r1".to_string())));
+
+    // A later placement tick keeps the library deletion stable.
+    let (_, again) = round(p, &mut placement, &items(), false);
+    assert!(again.adopt.is_empty() && again.edits.is_empty(), "{again:?}");
+}
+
+#[test]
+fn mismatched_start_updates_from_latest_workflow() {
+    let mut placement = Placement::default();
+    let (p, _) = round(project(), &mut placement, &items(), false);
+    let mut shifted = items();
+    shifted[0].start = 1.25;
+    let (p, planned) = round(p, &mut placement, &shifted, false);
+    assert!(
+        planned.edits.iter().any(|edit| matches!(
+            edit,
+            GeneratedEdit::Update { start, .. } if (*start - 1.25).abs() < 1e-6
+        )),
+        "start mismatch must follow the workflow: {planned:?}"
+    );
+    assert!((clip(&p, "plate").unwrap().start - 1.25).abs() < 1e-6);
+}

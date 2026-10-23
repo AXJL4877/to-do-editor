@@ -7,7 +7,7 @@ pub mod assets;
 mod library;
 mod messages;
 pub mod production;
-pub(crate) use library::{range_select, visible_media_ids, LibraryState};
+pub(crate) use library::{range_select, selectable_media_ids, visible_media_ids, LibraryState};
 pub use messages::status_text;
 use todo_core::{ClipTransform, MediaKind};
 

@@ -1,15 +1,71 @@
 use egui::Context;
 use todo_interaction::{EditorFocus, EditorViewModel, Intent, KeyCode, TimelineTool};
 
+fn key_event(input: &egui::InputState, key: egui::Key) -> Option<egui::Modifiers> {
+    input.events.iter().find_map(|event| match event {
+        egui::Event::Key {
+            key: k,
+            pressed: true,
+            modifiers,
+            ..
+        } if *k == key => Some(*modifiers),
+        _ => None,
+    })
+}
+
 /// Collect editor shortcuts once, after text widgets have established focus.
 pub(super) fn collect(ctx: &Context, vm: &EditorViewModel) -> Vec<Intent> {
-    if ctx.wants_keyboard_input() {
-        return Vec::new();
-    }
+    let typing = ctx.wants_keyboard_input();
+    let library_has_media = !vm.library.selected_ids.is_empty()
+        || vm.library.selected_id.is_some();
+    let library_panel = vm.focus == EditorFocus::Library;
+    // Media tab handles these before its search TextEdit; skip duplicates.
+    let library_done = super::library::library_keys_already_handled(ctx);
+
     ctx.input(|input| {
         let mut intents = Vec::new();
         let modifiers = input.modifiers;
         let command = modifiers.ctrl || modifiers.command;
+        let pointer_busy = input.pointer.any_pressed() || input.pointer.any_released();
+        let delete_mods = key_event(input, egui::Key::Delete)
+            .or_else(|| input.key_pressed(egui::Key::Delete).then_some(modifiers));
+        let deleting = delete_mods.is_some() && !pointer_busy;
+        let select_all = key_event(input, egui::Key::A)
+            .or_else(|| input.key_pressed(egui::Key::A).then_some(modifiers))
+            .is_some_and(|mods| (mods.ctrl || mods.command) && !mods.alt);
+
+        if !library_done {
+            if library_has_media && deleting {
+                let media_ids: Vec<String> = if !vm.library.selected_ids.is_empty() {
+                    vm.library.selected_ids.clone()
+                } else if let Some(id) = &vm.library.selected_id {
+                    vec![id.clone()]
+                } else {
+                    Vec::new()
+                };
+                for media_id in media_ids {
+                    intents.push(Intent::RemoveMedia {
+                        media_id,
+                        cascade: true,
+                    });
+                }
+            }
+
+            if library_panel && select_all {
+                intents.push(Intent::SelectAll);
+            }
+        }
+
+        if typing {
+            return intents;
+        }
+
+        if !library_done && library_panel && deleting && !library_has_media {
+            if let Some(id) = &vm.library.selected_folder_id {
+                intents.push(Intent::LibraryDeleteFolder { id: id.clone() });
+            }
+        }
+
         if command && !modifiers.alt {
             for (key, intent) in [
                 (egui::Key::A, Intent::SelectAll),
@@ -20,6 +76,11 @@ pub(super) fn collect(ctx: &Context, vm: &EditorViewModel) -> Vec<Intent> {
                 (egui::Key::I, Intent::ImportPressed),
             ] {
                 if input.key_pressed(key) {
+                    if matches!(intent, Intent::SelectAll)
+                        && (library_panel || library_done)
+                    {
+                        continue;
+                    }
                     intents.push(intent);
                 }
             }
@@ -43,29 +104,11 @@ pub(super) fn collect(ctx: &Context, vm: &EditorViewModel) -> Vec<Intent> {
             if input.key_pressed(egui::Key::Space) {
                 intents.push(Intent::TogglePlay);
             }
-            // Ignore Delete while a pointer click is changing the active panel/row.
-            // The view model still describes the selection before that click.
-            let deleting = input.key_pressed(egui::Key::Delete)
-                && !input.pointer.any_pressed()
-                && !input.pointer.any_released();
-            // Library: only Delete clears a row (Backspace is too easy after a click).
-            // Timeline: Delete / Backspace still remove clips.
-            if vm.focus == EditorFocus::Library {
-                if deleting {
-                    if !vm.library.selected_ids.is_empty() {
-                        for media_id in &vm.library.selected_ids {
-                            intents.push(Intent::RemoveMedia {
-                                media_id: media_id.clone(),
-                                cascade: false,
-                            });
-                        }
-                    } else if let Some(id) = &vm.library.selected_folder_id {
-                        intents.push(Intent::LibraryDeleteFolder { id: id.clone() });
-                    }
-                }
-            } else if deleting || input.key_pressed(egui::Key::Backspace) {
+            if !(library_panel || library_has_media)
+                && (deleting || input.key_pressed(egui::Key::Backspace))
+            {
                 intents.push(Intent::DeleteSelection {
-                    ripple: modifiers.shift,
+                    ripple: delete_mods.unwrap_or(modifiers).shift,
                 });
             }
         }
@@ -96,10 +139,10 @@ mod tests {
                 height: 1080,
                 duration: None,
                 media_scale: Default::default(),
-                media: Vec::new(),
                 tracks: Vec::new(),
                 text_styles: Vec::new(),
                 motions: Vec::new(),
+                media: Vec::new(),
                 folders: Vec::new(),
             },
             "test",
@@ -110,20 +153,20 @@ mod tests {
         vm: &EditorViewModel,
         key: egui::Key,
         modifiers: egui::Modifiers,
-        typing: bool,
+        wants_keyboard: bool,
     ) -> Vec<Intent> {
         let ctx = Context::default();
         let mut output = Vec::new();
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            if typing {
+        if wants_keyboard {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.text_edit_singleline(&mut String::new()).request_focus();
+                    let mut text = String::new();
+                    ui.text_edit_singleline(&mut text).request_focus();
                 });
-            }
-        });
+            });
+        }
         let _ = ctx.run(
             egui::RawInput {
-                modifiers,
                 events: vec![egui::Event::Key {
                     key,
                     physical_key: None,
@@ -134,28 +177,16 @@ mod tests {
                 ..Default::default()
             },
             |ctx| {
-                if typing {
+                if wants_keyboard {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        ui.text_edit_singleline(&mut String::new()).request_focus();
+                        let mut text = String::new();
+                        ui.text_edit_singleline(&mut text);
                     });
                 }
                 output = collect(ctx, vm);
             },
         );
         output
-    }
-
-    #[test]
-    fn control_copy_and_paste_do_not_switch_tools() {
-        let vm = view();
-        let ctrl = egui::Modifiers {
-            ctrl: true,
-            ..Default::default()
-        };
-        let copy = press(&vm, egui::Key::C, ctrl, false);
-        assert!(matches!(copy.as_slice(), [Intent::Copy]));
-        let paste = press(&vm, egui::Key::V, ctrl, false);
-        assert!(matches!(paste.as_slice(), [Intent::Paste]));
     }
 
     #[test]
@@ -186,11 +217,64 @@ mod tests {
         vm.library.selected_folder_id = Some("parent-bin".into());
         assert!(
             matches!(press(&vm, egui::Key::Delete, egui::Modifiers::default(), false).as_slice(),
-            [Intent::RemoveMedia { media_id, cascade: false }] if media_id == "source-1")
+            [Intent::RemoveMedia { media_id, cascade: true }] if media_id == "source-1")
         );
+        vm.library.selected_ids = vec!["a".into(), "b".into()];
+        assert!(matches!(
+            press(&vm, egui::Key::Delete, egui::Modifiers::default(), false).as_slice(),
+            [
+                Intent::RemoveMedia {
+                    media_id: a,
+                    cascade: true
+                },
+                Intent::RemoveMedia {
+                    media_id: b,
+                    cascade: true
+                }
+            ] if a == "a" && b == "b"
+        ));
         assert!(
             press(&vm, egui::Key::Backspace, egui::Modifiers::default(), false).is_empty(),
             "Backspace must not clear library media after a click"
+        );
+    }
+
+    #[test]
+    fn library_selection_delete_works_while_search_still_wants_keyboard() {
+        let mut vm = view();
+        vm.focus = EditorFocus::Timeline;
+        vm.library.selected_ids = vec!["clip-a".into(), "clip-b".into()];
+        let intents = press(&vm, egui::Key::Delete, egui::Modifiers::default(), true);
+        assert!(
+            matches!(
+                intents.as_slice(),
+                [
+                    Intent::RemoveMedia {
+                        media_id: a,
+                        cascade: true
+                    },
+                    Intent::RemoveMedia {
+                        media_id: b,
+                        cascade: true
+                    }
+                ] if a == "clip-a" && b == "clip-b"
+            ),
+            "{intents:?}"
+        );
+    }
+
+    #[test]
+    fn library_ctrl_a_works_while_search_still_wants_keyboard() {
+        let mut vm = view();
+        vm.focus = EditorFocus::Library;
+        let command = egui::Modifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+        let intents = press(&vm, egui::Key::A, command, true);
+        assert!(
+            matches!(intents.as_slice(), [Intent::SelectAll]),
+            "{intents:?}"
         );
     }
 

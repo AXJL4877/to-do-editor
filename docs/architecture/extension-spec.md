@@ -117,7 +117,7 @@ README.md
 
 宿主负责分段、配音、分镜、生图、排期（含换板过渡与留白）、字幕和入轨；烘焙操作只负责把一块黑板的元素图做成图层条目。
 
-工作流扩展可以在 `recipe.json` → `review` 里声明检查单（`checks`、`checked`、`lines`）和一个重画参数（`redraw`，在清单里声明为 text 参数）。导演会把这个参数设为 `key:variant,…`，扩展收到后，对这些 key 的画面用同一描述、以该 `variant` 重画，其它请求保持不变；重画后的文件名和 `rev` 必须变化，才会原位替换。详见 [director.md](director.md)。
+工作流扩展可以在 `recipe.json` → `review` 里声明检查单（`checks`、`checked`、`lines`）和一个重画参数（`redraw`，在清单里声明为 text 参数）。重画时对这些 key 的画面用同一描述、以该 `variant` 重画；重画后的文件名和 `rev` 必须变化，才会原位替换。
 
 口播配方识别以下约定参数名（声明了就由用户调整，没声明就用清单值）：`voice`（voice 类型）、`split`（`semantic`/`paragraph`/`length`）、`segmentChars`、`boardSec`、`variants`、`subtitles`（bool）、`subtitleChars`、`tail`。只有 `narration` 要求文案输入和 `chat` / `image` / `speech` 服务。
 

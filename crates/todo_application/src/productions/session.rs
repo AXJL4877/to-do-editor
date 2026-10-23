@@ -53,6 +53,10 @@ pub struct ProductionSession {
     run_failures: BTreeMap<String, String>,
     attention: Vec<String>,
     dirty: bool,
+    /// Media library and timeline stay independent of the workflow until the
+    /// user starts a run (or restore/retry). While false, placement only
+    /// records deletion tombstones — never adopt/Place.
+    placement_armed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,6 +187,9 @@ fn seed_of(id: &str) -> u64 {
 
 impl ProductionSession {
     pub fn new(project: impl Into<String>, doc: Production, setup: ProductionSetup) -> Self {
+        // Narration drives its own progressive place while tasks run.
+        // Canvas workflows stay disarmed until `attach_canvas_run`.
+        let placement_armed = matches!(setup.recipe, Recipe::Narration { .. });
         Self {
             doc,
             setup,
@@ -195,6 +202,47 @@ impl ProductionSession {
             run_failures: BTreeMap::new(),
             attention: Vec::new(),
             dirty: false,
+            placement_armed,
+        }
+    }
+
+    /// Whether this session may adopt files / place clips on the timeline.
+    pub fn placement_armed(&self) -> bool {
+        self.placement_armed
+            || self
+                .runs
+                .values()
+                .any(|(purpose, _)| matches!(purpose, RunPurpose::Workflow { .. }))
+    }
+
+    pub fn arm_placement(&mut self) {
+        self.placement_armed = true;
+    }
+
+    pub fn disarm_placement(&mut self) {
+        self.placement_armed = false;
+    }
+
+    /// After a workflow has finished and nothing is left to place or adopt,
+    /// stop auto-adopting on later editor commits / project opens.
+    pub fn maybe_disarm_after_idle_place(&mut self, still_adopting: bool) {
+        if still_adopting {
+            return;
+        }
+        let live = self
+            .runs
+            .values()
+            .any(|(purpose, _)| matches!(purpose, RunPurpose::Workflow { .. }));
+        if live {
+            return;
+        }
+        let finished = self
+            .doc
+            .workflow
+            .as_ref()
+            .is_some_and(|r| r.result.is_some() || r.error.is_some());
+        if finished {
+            self.placement_armed = false;
         }
     }
 
@@ -270,8 +318,21 @@ impl ProductionSession {
         &mut self,
         next_run: &mut LocalRunId,
     ) -> LocalRunId {
+        // Starting the workflow from the UI is an explicit regeneration. A
+        // previous run may have recorded deleted clips as tombstones and as
+        // `placed`; clear both records so the regenerated items can be put
+        // back even when their key/revision is unchanged (for example, a
+        // cached output path). While this run streams, normal placement logic
+        // records fresh deletion state again.
+        self.doc.placement.placed.clear();
+        self.doc.placement.tombstones.clear();
+        self.doc.placement.error = None;
+        self.attention
+            .retain(|line| !line.starts_with("入轨未成功："));
         self.runs
             .retain(|_, (purpose, _)| !matches!(purpose, RunPurpose::Workflow { .. }));
+        // Explicit start: one round of adopt + place is allowed until disarmed.
+        self.placement_armed = true;
         let fp = self.workflow_fingerprint(match &self.setup.recipe {
             Recipe::Workflow { input, .. } => input,
             _ => &serde_json::Value::Null,
@@ -583,8 +644,9 @@ impl ProductionSession {
                 };
                 if let RunPurpose::Workflow { .. } = purpose {
                     // Same-rev deletes stay deleted (production-pipeline §4).
-                    // A new rev may place again; explicit "放回" uses
-                    // restore_production. Do not clear tombstones on emit.
+                    // A new rev may place again; an explicit new workflow run
+                    // resets the placement ledger in attach_canvas_run. Do
+                    // not clear tombstones on an emit within the same run.
                     // Workflow items go on the timeline as they arrive.
                     if let Some(record) = self.doc.workflow.as_mut() {
                         for item in &items {
@@ -826,14 +888,18 @@ impl ProductionSession {
                 }
             }
             RunPurpose::Workflow { fingerprint } => {
-                let emitted: BTreeSet<&str> = buffer.items.iter().map(|i| i.key.as_str()).collect();
                 if let Some(record) = self
                     .doc
                     .workflow
                     .as_mut()
                     .filter(|r| r.fingerprint == fingerprint)
                 {
-                    record.items.retain(|i| emitted.contains(i.key.as_str()));
+                    // Items are updated only by RunItems (merge by key). Do not
+                    // shrink `record.items` to this run's emit buffer: a cached
+                    // / partial re-emit would drop kept keys, then complete
+                    // placement would Remove their clips — library keeps the
+                    // media, timeline goes sparse (delete + rerun symptom).
+                    let _ = buffer;
                     let ok = result
                         .get("ok")
                         .and_then(|v| v.as_bool())
@@ -957,6 +1023,7 @@ impl ProductionSession {
                 if !targets.is_empty() {
                     self.in_flight.insert(key.clone(), targets);
                 }
+                self.placement_armed = true;
                 vec![ProductionTask::Retry(key.clone())]
             }
             None => {
@@ -967,6 +1034,7 @@ impl ProductionSession {
                     // (placement / tombstones stay coherent — see onrail B6).
                     let _ = record.error.take();
                 }
+                self.placement_armed = true;
                 Vec::new()
             }
         }
@@ -1202,7 +1270,20 @@ impl ProductionSession {
         let placement_stuck = self
             .attention
             .iter()
-            .any(|line| line.starts_with("入轨未成功"));
+            .any(|line| line.starts_with("入轨未成功"))
+            || placement.error.is_some();
+        let live_workflow = self
+            .runs
+            .values()
+            .any(|(purpose, _)| matches!(purpose, RunPurpose::Workflow { .. }));
+        let generate_finished = matches!(
+            &self.setup.recipe,
+            Recipe::Workflow { .. }
+        ) && self
+            .doc
+            .workflow
+            .as_ref()
+            .is_some_and(|r| r.result.is_some() || r.error.is_some());
         let timeline: Vec<StatusState> = items
             .iter()
             .map(|i| {
@@ -1211,8 +1292,14 @@ impl ProductionSession {
                 } else if placement_stuck {
                     // Adopt/ApplyGenerated failed: not "still placing".
                     StatusState::Failed
-                } else {
+                } else if live_workflow {
                     StatusState::Running
+                } else if generate_finished {
+                    // Generate settled but the clip never landed — reopen used
+                    // to look like an endless "入轨中" here.
+                    StatusState::Failed
+                } else {
+                    StatusState::Queued
                 }
             })
             .collect();
@@ -1374,6 +1461,7 @@ impl ProductionSession {
             self.doc.placement.tombstones.clear();
             self.dirty = true;
         }
+        self.placement_armed = true;
     }
 
     /// Surface a placement / ApplyGenerated / adopt failure for UI + Bridge.

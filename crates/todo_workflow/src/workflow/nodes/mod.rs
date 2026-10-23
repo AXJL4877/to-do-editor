@@ -27,6 +27,8 @@ mod choose_motions;
 mod motion;
 mod ground_emit;
 mod picture_batch;
+mod timeline_strip;
+mod placement_ready;
 mod done;
 mod python;
 mod relay;
@@ -57,6 +59,8 @@ pub const CATALOG: &[NodeSpec] = &[
     motion::SPEC,
     ground_emit::SPEC,
     picture_batch::SPEC,
+    timeline_strip::SPEC,
+    placement_ready::SPEC,
     done::SPEC,
 ];
 

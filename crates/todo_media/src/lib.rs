@@ -21,6 +21,7 @@ pub use export::presets::ExportPreset;
 pub use export::quality::{
     inspect as inspect_quality, write_report, QualityReport, QualityTargets,
 };
+pub use export::contact_sheet::stitch_contact_sheet;
 pub use export::{export_frames, ExportRequest, ExportResult};
 pub use metadata::{AlphaPacking, MediaMetadata};
 pub use proxies::EditProxy;

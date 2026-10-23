@@ -20,7 +20,6 @@
 | `crates/todo_application/src/editor/` | 编辑会话、事务、dirty 状态、保存快照、预览更新计划 | 一次拖动一次撤销等会话规则放这里 |
 | `crates/todo_application/src/control/`、`projects/control.rs` | 共用编辑协议、批次、回执、去重和导入状态 | 供内置/外部 AI 共用；不含模型、HTTP/MCP、UI 或 I/O，规则仍由 core 执行 |
 | `crates/todo_application/src/control/review.rs` | 规则审片：空画面、出安全区、遮挡、字幕长度与位置、转场未生效 | 阈值来自风格配方 `recipe.json → review` |
-| `crates/todo_application/src/director/` | 内置 Agent 导演状态机：理解 → 成片/编辑 → 规则审片 → 多模态看帧 → 有限轮修改 → 审批；提示词与严格解析 | 不联网、不读写文件；以 `Call`/`Input` 与宿主交换，见 [导演](director.md) |
 | `crates/todo_application/src/history/`、`clipboard/` | 历史快照、剪贴板内容 | 不持有控件和鼠标状态 |
 | `crates/todo_application/src/playback/` | 播放状态、播放头推进和音频时钟协调 | 只计算命令，不调用原生进程 |
 | `crates/todo_application/src/media_jobs/` | 任务归属、请求去重、并发上限、失败退避、原始波形缓存 | 不包含 HTTP、线程或 GPU 纹理 |

@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod contact_sheet;
 pub mod presets;
 pub mod quality;
 pub mod timeline;

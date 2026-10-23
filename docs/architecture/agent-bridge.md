@@ -1,20 +1,50 @@
 # Agent Bridge v1
 
-TO DO 启动后会在本机回环地址打开一个 JSONL bridge。端口是动态分配的，发现文件写在工程仓库的 `cache/agent-bridge.json`：
+TO DO 启动后会在本机回环地址打开一个 JSONL bridge。外部 Agent 用**短令牌**定位窗口与工程，无需口述软件路径。
+
+## 令牌（推荐）
+
+工具栏点「令牌」复制一段以 `TODO_BRIDGE todo_…` 开头的**接管指令**（含令牌与步骤），整段粘贴给 Cursor / 外部 Agent 即可。单独的 `todo_<hex>` 也是 Bridge 令牌，**不是**待办 ID。
+
+登记文件（打开工程后带上 session / 工程名）：
+
+- `%LOCALAPPDATA%\TO_DO\bridges\<token>.json`
+- `%LOCALAPPDATA%\TO_DO\bridges\current.json`（当前窗口）
+- 仓库 `cache/agent-bridge.json`（兼容冒烟脚本）
 
 ```json
 {
   "apiVersion": 1,
+  "token": "todo_…",
   "transport": "tcp",
   "host": "127.0.0.1",
   "port": 43127,
-  "protocol": "jsonl"
+  "protocol": "jsonl",
+  "sessionId": 7,
+  "revision": 12,
+  "projectName": "未命名",
+  "projectPath": "D:/…/data/未命名"
 }
 ```
 
-Agent 每行发送一个 JSON 请求，应用每行返回一个 JSON 响应。连接只绑定 `127.0.0.1`，请求仍在 eframe 所属线程执行，避免 Agent 持有一份会和界面分叉的工程副本。
+Agent：解析 `todo_*` → 读登记 JSON → TCP 连接 → `get_context` 核对 `sessionId` / `projectName` → 再编辑。
 
-桌面内置的「Agent」按钮复用同一套协议：它把对话模型的结构化计划先做 `dryRun`，再提交到 `Workspace::control`，因此内置 Agent 和外部 Agent 的编辑结果走同一条校验、撤销和预览更新路径。
+### 分层入轨（硬规则）
+
+- 时间轴上必须是**多层**：背景、元素、花字、配音等各自为 clip（扩展 `emit` 多条 `todo-items/1`，再由宿主 adopt 入轨）。
+- **禁止**把背景和元素烤成一条视频/一张整图后 `import_media` + `place_media`。
+- 推荐：`start_workflow` 使用会分层 emit 的扩展（如 `studio.spongebob-koubo`）。见 [extension-spec](extension-spec.md)「可编辑优先」。
+
+冒烟：
+
+```text
+cargo run -p todo_app --example bridge_smoke -- todo_<粘贴的令牌> get_context
+cargo run -p todo_app --example bridge_smoke -- current get_context
+```
+
+## 传输
+
+Agent 每行发送一个 JSON 请求，应用每行返回一个 JSON 响应。连接只绑定 `127.0.0.1`，请求仍在 eframe 所属线程执行，避免 Agent 持有一份会和界面分叉的工程副本。
 
 ## 工程上下文与编辑
 

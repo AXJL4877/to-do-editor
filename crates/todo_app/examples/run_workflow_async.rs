@@ -259,6 +259,14 @@ fn main() {
                             vision.insert(key, call_id.clone());
                             true
                         }
+                        RequestedCall::TimelineStrip { .. } => {
+                            eprintln!("timeline_strip 需桌面宿主，本示例跳过");
+                            false
+                        }
+                        RequestedCall::WaitPlacement => {
+                            eprintln!("placement_ready 需桌面宿主，本示例跳过");
+                            false
+                        }
                     };
                     calls.insert(call_id, (node, via_router, Instant::now()));
                 }

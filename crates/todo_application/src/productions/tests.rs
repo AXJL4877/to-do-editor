@@ -643,6 +643,382 @@ fn workflow_emit_places_on_timeline_offline() {
     );
 }
 
+#[test]
+fn adopt_finishing_after_run_done_still_places_all_items() {
+    // Progressive place: RunDone can arrive while files are still adopting.
+    // Disarming too early left those items in the library but off the timeline.
+    let mut ws = workspace();
+    let mut fake = Fake::default();
+    let run = ws
+        .bind_canvas_workflow("test.workflow", "1.0.0", "hello", WORK.into(), setup().canvas)
+        .unwrap();
+    let items = serde_json::from_value(json!([
+        {"key":"voice/s1", "rev":"1", "role":"voice", "lane":0, "start":0, "duration":2,
+         "source":{"type":"file", "file":"out/s1.wav"}},
+        {"key":"voice/s2", "rev":"1", "role":"voice", "lane":0, "start":2, "duration":2,
+         "source":{"type":"file", "file":"out/s2.wav"}},
+        {"key":"visual/s1", "rev":"1", "role":"visual", "lane":0, "start":0, "duration":2,
+         "source":{"type":"file", "file":"out/s1.png"}}
+    ]))
+    .unwrap();
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunItems {
+        run,
+        items,
+    }));
+    // Queue adopts but do not complete them yet.
+    for effect in update.effects {
+        if matches!(
+            &effect,
+            Effect::Media {
+                task: MediaTask::Adopt { .. },
+                ..
+            }
+        ) {
+            fake.answer(effect);
+        }
+    }
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunDone {
+        run,
+        result: json!({ "ok": true }),
+    }));
+    fake.pump(&mut ws, update);
+    // Drain the deferred Adopted events.
+    fake.pump(&mut ws, AppUpdate::default());
+    let placed = clips(ws.editor().unwrap().project());
+    assert!(
+        placed.iter().any(|(key, _)| key == "voice/s1"),
+        "s1 voice missing after late adopt: {placed:?}"
+    );
+    assert!(
+        placed.iter().any(|(key, _)| key == "voice/s2"),
+        "s2 voice missing after late adopt: {placed:?}"
+    );
+    assert!(
+        placed.iter().any(|(key, _)| key == "visual/s1"),
+        "visual missing after late adopt: {placed:?}"
+    );
+}
+
+#[test]
+fn idle_delete_does_not_replace_without_starting_workflow() {
+    let mut ws = workspace();
+    let mut fake = Fake::default();
+    let item = || {
+        serde_json::from_value(json!([
+            {"key":"visual/s1", "rev":"cached-v1", "role":"visual", "lane":0, "start":0, "duration":2,
+             "source":{"type":"file", "file":"out/s1.png"}}
+        ])).unwrap()
+    };
+    let run = ws
+        .bind_canvas_workflow("test.workflow", "1.0.0", "hello", WORK.into(), setup().canvas)
+        .unwrap();
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunItems {
+        run,
+        items: item(),
+    }));
+    fake.pump(&mut ws, update);
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunDone {
+        run,
+        result: json!({ "ok": true }),
+    }));
+    fake.pump(&mut ws, update);
+    let clip_id = ws
+        .editor()
+        .unwrap()
+        .project()
+        .tracks
+        .iter()
+        .flat_map(|track| &track.clips)
+        .find(|clip| clip.origin.as_ref().is_some_and(|origin| origin.key == "visual/s1"))
+        .map(|clip| clip.id.clone())
+        .expect("placed");
+    let update = ws.dispatch(AppAction::Editor(EditorCommand::Edit(
+        todo_core::EditCommand::DeleteClips {
+            clip_ids: vec![clip_id],
+            ripple: false,
+        },
+    )));
+    fake.pump(&mut ws, update);
+    // Commit so idle placement sync runs — must not Place again.
+    let update = ws.dispatch(AppAction::Editor(EditorCommand::CommitEdit));
+    fake.pump(&mut ws, update);
+    assert!(
+        clips(ws.editor().unwrap().project())
+            .iter()
+            .all(|(key, _)| key != "visual/s1"),
+        "deleting after the workflow finished must not auto-place"
+    );
+}
+
+#[test]
+fn workflow_done_without_reemit_keeps_items_and_replaces_after_bind() {
+    let mut ws = workspace();
+    let mut fake = Fake::default();
+    let item = || {
+        serde_json::from_value(json!([
+            {"key":"visual/s1", "rev":"cached-v1", "role":"visual", "lane":0, "start":0, "duration":2,
+             "source":{"type":"file", "file":"out/s1.png"}}
+        ])).unwrap()
+    };
+
+    let first_run = ws
+        .bind_canvas_workflow("test.workflow", "1.0.0", "hello", WORK.into(), setup().canvas)
+        .unwrap();
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunItems {
+        run: first_run,
+        items: item(),
+    }));
+    fake.pump(&mut ws, update);
+    assert!(
+        clips(ws.editor().unwrap().project())
+            .iter()
+            .any(|(key, _)| key == "visual/s1")
+    );
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunDone {
+        run: first_run,
+        result: json!({ "ok": true }),
+    }));
+    fake.pump(&mut ws, update);
+
+    let clip_id = ws
+        .editor()
+        .unwrap()
+        .project()
+        .tracks
+        .iter()
+        .flat_map(|track| &track.clips)
+        .find(|clip| clip.origin.as_ref().is_some_and(|origin| origin.key == "visual/s1"))
+        .map(|clip| clip.id.clone())
+        .expect("placed");
+    let update = ws.dispatch(AppAction::Editor(EditorCommand::Edit(
+        todo_core::EditCommand::DeleteClips {
+            clip_ids: vec![clip_id],
+            ripple: false,
+        },
+    )));
+    fake.pump(&mut ws, update);
+
+    // Second run: bind clears placement ledger but keeps items. A cached graph
+    // may RunDone with an empty emit buffer — items must survive, and advance
+    // after bind must put them back on the timeline.
+    let second_run = ws
+        .bind_canvas_workflow("test.workflow", "1.0.0", "hello", WORK.into(), setup().canvas)
+        .unwrap();
+    let update = ws.advance_productions();
+    fake.pump(&mut ws, update);
+    assert!(
+        clips(ws.editor().unwrap().project())
+            .iter()
+            .any(|(key, _)| key == "visual/s1"),
+        "bind+advance must re-place kept items before any new emit"
+    );
+
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunDone {
+        run: second_run,
+        result: json!({ "ok": true }),
+    }));
+    fake.pump(&mut ws, update);
+    assert!(
+        clips(ws.editor().unwrap().project())
+            .iter()
+            .any(|(key, _)| key == "visual/s1"),
+        "empty-buffer RunDone must not wipe kept workflow items"
+    );
+}
+
+#[test]
+fn partial_reemit_after_rerun_does_not_strip_kept_timeline_clips() {
+    // Delete + rerun: attach keeps all prior items. A cached graph may only
+    // re-emit a subset. RunDone must not drop the rest or complete placement
+    // removes them — media stays in the library, timeline looks half-empty.
+    let mut ws = workspace();
+    let mut fake = Fake::default();
+    let all = || {
+        serde_json::from_value(json!([
+            {"key":"voice/s1", "rev":"1", "role":"voice", "lane":0, "start":0, "duration":2,
+             "source":{"type":"file", "file":"out/s1.wav"}},
+            {"key":"voice/s2", "rev":"1", "role":"voice", "lane":0, "start":2, "duration":2,
+             "source":{"type":"file", "file":"out/s2.wav"}},
+            {"key":"voice/s3", "rev":"1", "role":"voice", "lane":0, "start":4, "duration":2,
+             "source":{"type":"file", "file":"out/s3.wav"}},
+            {"key":"visual/s1", "rev":"1", "role":"visual", "lane":0, "start":0, "duration":2,
+             "source":{"type":"file", "file":"out/s1.png"}},
+            {"key":"visual/s2", "rev":"1", "role":"visual", "lane":0, "start":2, "duration":2,
+             "source":{"type":"file", "file":"out/s2.png"}}
+        ]))
+        .unwrap()
+    };
+    let first = ws
+        .bind_canvas_workflow("test.workflow", "1.0.0", "hello", WORK.into(), setup().canvas)
+        .unwrap();
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunItems {
+        run: first,
+        items: all(),
+    }));
+    fake.pump(&mut ws, update);
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunDone {
+        run: first,
+        result: json!({ "ok": true }),
+    }));
+    fake.pump(&mut ws, update);
+
+    let kill: Vec<String> = ws
+        .editor()
+        .unwrap()
+        .project()
+        .tracks
+        .iter()
+        .flat_map(|t| &t.clips)
+        .filter(|c| {
+            c.origin
+                .as_ref()
+                .is_some_and(|o| o.key == "voice/s3" || o.key.starts_with("visual/"))
+        })
+        .map(|c| c.id.clone())
+        .collect();
+    let update = ws.dispatch(AppAction::Editor(EditorCommand::Edit(
+        todo_core::EditCommand::DeleteClips {
+            clip_ids: kill,
+            ripple: false,
+        },
+    )));
+    fake.pump(&mut ws, update);
+
+    let second = ws
+        .bind_canvas_workflow("test.workflow", "1.0.0", "hello", WORK.into(), setup().canvas)
+        .unwrap();
+    let update = ws.advance_productions();
+    fake.pump(&mut ws, update);
+    // Cached path: only a couple of keys come back.
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunItems {
+        run: second,
+        items: serde_json::from_value(json!([
+            {"key":"voice/s1", "rev":"1", "role":"voice", "lane":0, "start":0, "duration":2,
+             "source":{"type":"file", "file":"out/s1.wav"}},
+            {"key":"voice/s2", "rev":"1", "role":"voice", "lane":0, "start":2, "duration":2,
+             "source":{"type":"file", "file":"out/s2.wav"}}
+        ]))
+        .unwrap(),
+    }));
+    fake.pump(&mut ws, update);
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunDone {
+        run: second,
+        result: json!({ "ok": true }),
+    }));
+    fake.pump(&mut ws, update);
+
+    let placed = clips(ws.editor().unwrap().project());
+    for key in ["voice/s1", "voice/s2", "voice/s3", "visual/s1", "visual/s2"] {
+        assert!(
+            placed.iter().any(|(k, _)| k == key),
+            "partial re-emit must not strip kept item {key}: {placed:?}"
+        );
+    }
+}
+
+#[test]
+fn rerunning_workflow_restores_a_deleted_clip_with_same_revision() {
+    let mut ws = workspace();
+    let mut fake = Fake::default();
+    let item = || {
+        serde_json::from_value(json!([
+            {"key":"visual/s1", "rev":"cached-v1", "role":"visual", "lane":0, "start":0, "duration":2,
+             "source":{"type":"file", "file":"out/s1.png"}}
+        ])).unwrap()
+    };
+
+    let first_run = ws
+        .bind_canvas_workflow("test.workflow", "1.0.0", "hello", WORK.into(), setup().canvas)
+        .unwrap();
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunItems {
+        run: first_run,
+        items: item(),
+    }));
+    fake.pump(&mut ws, update);
+    let clip_id = ws
+        .editor()
+        .unwrap()
+        .project()
+        .tracks
+        .iter()
+        .flat_map(|track| &track.clips)
+        .find(|clip| clip.origin.as_ref().is_some_and(|origin| origin.key == "visual/s1"))
+        .map(|clip| clip.id.clone())
+        .expect("first run should place the clip");
+
+    let update = ws.dispatch(AppAction::Editor(EditorCommand::Edit(
+        todo_core::EditCommand::DeleteClips {
+            clip_ids: vec![clip_id],
+            ripple: false,
+        },
+    )));
+    fake.pump(&mut ws, update);
+    assert!(
+        clips(ws.editor().unwrap().project())
+            .iter()
+            .all(|(key, _)| key != "visual/s1")
+    );
+
+    // The workflow emits the same cached file and revision on the second run.
+    // An explicit rerun must still restore the deleted timeline item.
+    let second_run = ws
+        .bind_canvas_workflow("test.workflow", "1.0.0", "hello", WORK.into(), setup().canvas)
+        .unwrap();
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunItems {
+        run: second_run,
+        items: item(),
+    }));
+    fake.pump(&mut ws, update);
+    assert!(
+        clips(ws.editor().unwrap().project())
+            .iter()
+            .any(|(key, _)| key == "visual/s1"),
+        "explicit rerun should restore a deleted clip"
+    );
+}
+
+#[test]
+fn rerunning_workflow_retries_failed_media_adoption() {
+    let mut ws = workspace();
+    let mut fake = Fake {
+        fail_adopts: 1,
+        ..Fake::default()
+    };
+    let item = || {
+        serde_json::from_value(json!([
+            {"key":"visual/s1", "rev":"cached-v1", "role":"visual", "lane":0, "start":0, "duration":2,
+             "source":{"type":"file", "file":"out/s1.png"}}
+        ])).unwrap()
+    };
+
+    let first_run = ws
+        .bind_canvas_workflow("test.workflow", "1.0.0", "hello", WORK.into(), setup().canvas)
+        .unwrap();
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunItems {
+        run: first_run,
+        items: item(),
+    }));
+    fake.pump(&mut ws, update);
+    assert!(clips(ws.editor().unwrap().project()).is_empty());
+
+    // The first adopt failed. The next explicit run must clear that path's
+    // in-memory block and submit it again.
+    let second_run = ws
+        .bind_canvas_workflow("test.workflow", "1.0.0", "hello", WORK.into(), setup().canvas)
+        .unwrap();
+    let update = ws.on_event(AppEvent::Production(ProductionOutput::RunItems {
+        run: second_run,
+        items: item(),
+    }));
+    fake.pump(&mut ws, update);
+    assert!(
+        clips(ws.editor().unwrap().project())
+            .iter()
+            .any(|(key, _)| key == "visual/s1"),
+        "explicit rerun should retry failed media adoption"
+    );
+}
+
 /// B7: ApplyGenerated rejection is observable via attention; retry clears it.
 #[test]
 fn placement_reject_surfaces_attention_and_clears_on_retry() {
